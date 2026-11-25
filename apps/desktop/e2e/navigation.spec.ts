@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { openChat, openSettingsTab, openVoiceInput } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 /** 设置重排的截图（交接第十一节第 8 条）放在仓库的 target/plugin-shots/round7/。 */
 const round7 = (name: string) => fileURLToPath(new URL(`../../../target/plugin-shots/round7/${name}.png`, import.meta.url));
@@ -47,7 +48,7 @@ test("chat is home; sidebar groups; companion settings live on her page; one con
   const listBox = await sidebar.getByTestId("sidebar-conversations").boundingBox();
   const groupBox = await sidebar.getByTestId("sidebar-group-0").boundingBox();
   expect(listBox!.y).toBeLessThan(groupBox!.y);
-  await page.screenshot({ path: testInfo.outputPath("home.png") });
+  await screenshot(page, { path: testInfo.outputPath("home.png") });
 
   // 角色页的分页：角色 · 记忆 · 技能 · 唤醒 · 交互 · 权限 · 用量（玩家原话：“现在这个页面有角色、记忆、技能，再加上唤醒、交互、权限、用量”）
   await sidebar.getByTestId("settings-nav-assistant").click();
@@ -73,7 +74,7 @@ test("chat is home; sidebar groups; companion settings live on her page; one con
   for (const tab of ["identity", "memory", "skills", "call", "reply", "permissions", "usage"] as const) {
     await page.getByTestId(`assistant-nav-${tab}`).click();
     await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
-    await page.screenshot({ path: round7(`role-${tab}`), animations: "disabled" });
+    await screenshot(page, { path: round7(`role-${tab}`), animations: "disabled" });
   }
 
   // 「设置」只剩一排（不写组名），说明下面一行指向她的页面
@@ -82,7 +83,7 @@ test("chat is home; sidebar groups; companion settings live on her page; one con
   await expect(page.getByTestId("advanced-group-陪玩")).toHaveCount(0);
   await expect(page.getByTestId("advanced-group-通用")).toHaveCount(0);
   await expect(page.getByTestId("advanced-companion-moved")).toContainText("唤醒、交互、权限和用量在琴音自己的页面里");
-  await page.screenshot({ path: round7("settings"), animations: "disabled" });
+  await screenshot(page, { path: round7("settings"), animations: "disabled" });
   await page.getByTestId("advanced-open-companion").click();
   await expect(page.getByTestId("assistant-nav-call")).toHaveAttribute("aria-current", "page");
 
@@ -101,9 +102,9 @@ test("chat is home; sidebar groups; companion settings live on her page; one con
     // 唤醒、交互在角色页：量那一页的内容列（聊天藏着也挂在页面里）
     const column = tab === "call" || tab === "reply" ? page.getByTestId(`assistant-${tab}-tab`) : page.locator("main .ui-scope").first();
     widths.push(await column.evaluate((el) => el.getBoundingClientRect().width));
-    if (tab === "models" || tab === "connections") await page.screenshot({ path: testInfo.outputPath(`settings-${tab}.png`) });
+    if (tab === "models" || tab === "connections") await screenshot(page, { path: testInfo.outputPath(`settings-${tab}.png`) });
   }
-  await page.screenshot({ path: testInfo.outputPath("settings-appearance.png") });
+  await screenshot(page, { path: testInfo.outputPath("settings-appearance.png") });
   expect(new Set(widths.map((w) => Math.round(w))).size).toBe(1);
 });
 

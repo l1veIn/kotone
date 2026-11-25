@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openSettingsTab } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 test("autostart toggle reflects state and toggles", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
@@ -18,7 +19,7 @@ test("autostart toggle reflects state and toggles", async ({ page }) => {
   await expect(toggle).toBeChecked();
 
   // 截图：开启态（供维护者确认 UI）
-  await page.screenshot({
+  await screenshot(page, {
     path: "test-results/autostart-on.png",
     clip: { x: 180, y: 0, width: 720, height: 700 },
   });

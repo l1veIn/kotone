@@ -6,6 +6,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openPlugin } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 const SHOTS = process.env.KOTONE_MUSIC_SHOTS;
 const shot = (testInfo: TestInfo, name: string) => (SHOTS ? `${SHOTS}/${name}.png` : testInfo.outputPath(`${name}.png`));
@@ -51,7 +52,7 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   await row(page, "game").getByTestId("sidebar-page-toggle").click();
   await expect(row(page, "game")).toHaveAttribute("data-hidden", "true");
   await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "plugins"]);
-  await page.screenshot({ path: shot(testInfo, "sidebar-pages") });
+  await screenshot(page, { path: shot(testInfo, "sidebar-pages") });
   await dialog.getByTestId("sidebar-pages-done").click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByTestId("sidebar-hidden-count")).toHaveText("1");
@@ -80,7 +81,7 @@ test("sidebar pages: right-click a page to move or hide it; the rail has 全部�
   await page.getByTestId("settings-nav-game").click({ button: "right" });
   const menu = page.getByTestId("sidebar-context-menu");
   await expect(menu).toBeVisible();
-  await page.screenshot({ path: shot(testInfo, "sidebar-context-menu") });
+  await screenshot(page, { path: shot(testInfo, "sidebar-context-menu") });
   await menu.getByTestId("sidebar-menu-down").click();
   await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game", "plugins"]);
   // 每组最后一项不能再下移（「插件」也和别的页面一样能排、能藏）
@@ -150,7 +151,7 @@ test("the sidebar has one 插件 page of app cards, even with an old saved order
   // 游戏语音默认关：卡片变淡、有“已关闭”
   await expect(grid.getByTestId("plugins-card-game-voice")).toHaveAttribute("data-enabled", "false");
   await expect(grid.getByTestId("plugins-card-game-voice-off")).toBeVisible();
-  await page.screenshot({ path: apps(testInfo, "plugins-page") });
+  await screenshot(page, { path: apps(testInfo, "plugins-page") });
 
   // 卡片上的开关：只开关，不进 App
   await grid.getByTestId("plugins-card-game-voice-enabled").click();
@@ -166,7 +167,7 @@ test("the sidebar has one 插件 page of app cards, even with an old saved order
   const lol = await openPlugin(page, "lol");
   await expect(lol.getByTestId("plugin-app-bar")).toContainText("英雄联盟");
   await expect(lol.getByTestId("plugin-page-lol")).toBeVisible();
-  await page.screenshot({ path: apps(testInfo, "lol-app") });
+  await screenshot(page, { path: apps(testInfo, "lol-app") });
   await lol.getByTestId("plugin-page-back").click();
   await expect(page.getByTestId("plugins-page")).toBeVisible();
   await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
@@ -229,6 +230,6 @@ test("every plugin card shows its own logo (plugins/<id>/logo.svg), greyed when 
   // 亮暗两种主题下的样子（logo 自带底色方块，两种主题一样）
   for (const theme of ["light", "dark"] as const) {
     await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
-    await page.screenshot({ path: round7(`plugins-logos-${theme}`), animations: "disabled" });
+    await screenshot(page, { path: round7(`plugins-logos-${theme}`), animations: "disabled" });
   }
 });

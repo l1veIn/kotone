@@ -3,6 +3,7 @@
 // （照 kotone_core::hotkey_table / hotkey_table_cmd.rs 写）；真正的规矩在 Rust 里有单元测试。
 import { expect, test, type Page } from "@playwright/test";
 import { openSettingsTab, openVoiceInput } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 const mockSettings = (page: Page) => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings());
 
@@ -87,7 +88,7 @@ test("设置 → 热键 lists every hotkey with its source and edits them in pla
   await expect(page.locator("[data-testid^='hotkeys-row-game.']")).toHaveCount(0);
   await expect(page.getByTestId("hotkeys-row-legacy-reminder")).toHaveCount(0);
   await expect(list.locator("[data-conflict='true']")).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("hotkeys-page.png"), fullPage: true, animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("hotkeys-page.png"), fullPage: true, animations: "disabled" });
 
   // 在表里改：快捷指令的键（预览把快捷指令的旧字段当存放处），唤醒页跟着显示
   const quick = page.getByTestId("hotkey-input-custom.qm-1");
@@ -158,7 +159,7 @@ test("英雄联盟的一键喊话：四行列在表里、没设键，录一个�
   await flash.press("Enter");
   await expect(page.getByTestId("hotkey-status-lol.shout-enemy-flash")).toHaveText("当前生效：Alt+F1");
   expect((await mockSettings(page)).hotkeys.bindings).toContainEqual({ key: "Alt+F1", command: "lol.shout-enemy-flash" });
-  await page.getByTestId("hotkeys-row-lol.shout-enemy-flash").screenshot({ path: testInfo.outputPath("lol-shout-row.png"), animations: "disabled" });
+  await screenshot(page.getByTestId("hotkeys-row-lol.shout-enemy-flash"), { path: testInfo.outputPath("lol-shout-row.png"), animations: "disabled" });
 
   // “读客户端数据”关着：工具不在，写要打开哪个开关，不登记
   await patchMock(page, { plugins: { lol: { sources: { client: false } } } });
@@ -183,7 +184,7 @@ test("conflicts are marked red, including a game's chat key and Esc", async ({ p
   await expect(page.getByTestId("hotkeys-conflict-kotone.speech-toggle")).toHaveText("和Esc冲突");
   await expect(page.getByTestId("hotkeys-conflict-escape")).toHaveText("和启动 / 停止本地语音识别热键冲突");
   await expect(page.getByTestId("hotkeys-conflict-voice-input.post-process-toggle")).toHaveText("和《Dota 2》的控制台触发键冲突");
-  await page.screenshot({ path: testInfo.outputPath("hotkeys-conflicts.png"), fullPage: true, animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("hotkeys-conflicts.png"), fullPage: true, animations: "disabled" });
   // 在表里改掉：标红跟着消失
   const resend = page.getByTestId("hotkey-input-voice-input.resend-last");
   await resend.fill("Ctrl+F7");

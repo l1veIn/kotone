@@ -5,6 +5,7 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片；左侧栏亮的是「插件」。
  * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
@@ -54,7 +55,7 @@ test("logged out: log in through NetEase's login window, then play daily picks a
 
   const card = page.getByTestId("music-login-card");
   await expect(card).toHaveAttribute("data-stage", "idle");
-  await page.screenshot({ path: shot(testInfo, "music-logged-out") });
+  await screenshot(page, { path: shot(testInfo, "music-logged-out") });
   await expect(card.getByTestId("music-login-start")).toHaveText("登录网易云音乐");
   await card.getByTestId("music-login-start").click();
   // 登录在弹出的网易云官方登录页里做：卡片上没有二维码，只有提示、重新打开窗口和取消
@@ -83,7 +84,7 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await expect(title).toHaveText("晴天（翻唱）");
   const mini = page.getByTestId("sidebar-mini-player");
   await expect(mini.getByTestId("sidebar-mini-title")).toHaveText("晴天（翻唱）");
-  await page.screenshot({ path: shot(testInfo, "music-page") });
+  await screenshot(page, { path: shot(testInfo, "music-page") });
 
   await bar.getByTestId("music-player-toggle").click();
   await expect(bar).toHaveAttribute("data-status", "paused");
@@ -115,7 +116,7 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await page.getByTestId("settings-nav-automation").click();
   await expect(page.getByTestId("music-page")).toHaveCount(0);
   await mini.getByTestId("sidebar-mini-toggle").click();
-  await page.screenshot({ path: shot(testInfo, "sidebar") });
+  await screenshot(page, { path: shot(testInfo, "sidebar") });
   await mini.getByTestId("sidebar-mini-open").click();
   await expect(page.getByTestId("music-page")).toBeVisible();
   await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
@@ -128,7 +129,7 @@ test("search: VIP originals are greyed and labelled; a full version plays", asyn
   await openMusic(page, "&mockMusic=loggedIn");
   // 网易云音乐的 App：占满内容区，宿主只有顶上一条“← 插件 / 网易云音乐”（显示名改了，id 还是 music）
   await expect(page.getByTestId("plugin-app-bar")).toContainText("网易云音乐");
-  await page.screenshot({ path: appShot(testInfo, "music-app") });
+  await screenshot(page, { path: appShot(testInfo, "music-app") });
   await page.getByTestId("music-search-input").fill("孤勇者");
   await page.getByTestId("music-search-input").press("Enter");
   await expect(page.getByTestId("music-search-title")).toContainText("孤勇者");
@@ -143,7 +144,7 @@ test("search: VIP originals are greyed and labelled; a full version plays", asyn
   await piano.getByTestId("music-track-play").click();
   await expect(page.getByTestId("music-player-title")).toHaveText("孤勇者（钢琴版）");
   await expect(piano).toHaveAttribute("data-current", "true");
-  if (SHOTS) await page.screenshot({ path: shot(testInfo, "music-search") });
+  if (SHOTS) await screenshot(page, { path: shot(testInfo, "music-search") });
   await page.getByTestId("music-back").click();
   await expect(page.getByTestId("music-daily-card")).toBeVisible();
 });
@@ -158,7 +159,7 @@ test("playlist: open it, play all, then go back", async ({ page }, testInfo) => 
   await page.getByTestId("music-list-play").click();
   await expect(page.getByTestId("music-player-title")).toHaveText("Legends Never Die");
   await expect(page.getByTestId("music-player-title").locator("..")).toContainText("开黑歌单");
-  if (SHOTS) await page.screenshot({ path: shot(testInfo, "music-playlist") });
+  if (SHOTS) await screenshot(page, { path: shot(testInfo, "music-playlist") });
   await page.getByTestId("music-back").click();
   await expect(page.getByTestId("music-playlists")).toBeVisible();
 });
@@ -179,7 +180,7 @@ test("quality and logout from the header; when she wants to play and you're logg
   await preview(page, "needed");
   await expect(compact).toHaveAttribute("data-stage", "needed");
   await expect(compact.getByTestId("music-login-stage")).toHaveText("她要放歌：先登录一下网易云（只要一次）");
-  if (SHOTS) await page.screenshot({ path: shot(testInfo, "music-chat-needed") });
+  if (SHOTS) await screenshot(page, { path: shot(testInfo, "music-chat-needed") });
   await compact.getByTestId("music-login-start").click();
   await expect(compact).toHaveAttribute("data-stage", "waiting");
   await expect(compact.getByTestId("music-login-stage")).toHaveText("在弹出的网易云音乐窗口里扫码登录（用网易云音乐 App 扫）");
@@ -216,8 +217,8 @@ test("turning the music plugin off stops playback and hides the mini player and 
   await page.getByTestId("settings-nav-plugins").click();
   const card = page.getByTestId("plugins-card-music");
   await expect(card).toContainText("网易云音乐");
-  await card.screenshot({ path: round7Shot(testInfo, "plugins-card-netease-music") });
-  await page.screenshot({ path: round7Shot(testInfo, "plugins-page") });
+  await screenshot(card, { path: round7Shot(testInfo, "plugins-card-netease-music") });
+  await screenshot(page, { path: round7Shot(testInfo, "plugins-page") });
   await expect(card.getByTestId("plugins-card-music-enabled")).toHaveAttribute("aria-checked", "true");
   await card.getByTestId("plugins-card-music-enabled").click();
   await expect(card.getByTestId("plugins-card-music-enabled")).toHaveAttribute("aria-checked", "false");

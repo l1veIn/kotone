@@ -4,6 +4,7 @@
 // 卡片上的判断、评级和依据）。数据是浏览器预览的示例（apps/desktop/src/lib/ipc/lolStatsMock.ts）。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type FrameLocator, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片；左侧栏亮的是「插件」。
  * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
@@ -57,7 +58,7 @@ test("the 英雄 tab searches a champion: rift counters, builds, runes and the T
   await expect(lol.getByTestId("lol-champion-sources")).toContainText("腾讯 101");
   // OP.GG 默认关：没有那一块
   await expect(lol.getByTestId("lol-champion-opgg")).toHaveCount(0);
-  await page.screenshot({ path: shot(testInfo, "kotone-champion-rift") });
+  await screenshot(page, { path: shot(testInfo, "kotone-champion-rift") });
 
   // 换分路
   await lol.getByTestId("lol-champion-lane-MIDDLE").click();
@@ -80,7 +81,7 @@ test("the 英雄 tab searches a champion: rift counters, builds, runes and the T
   await expect(attribution).toContainText("github.com/czgreat/aramhex-data");
   await expect(attribution).toContainText("CC BY-NC 4.0");
   await expect(lol.getByTestId("lol-champion-sources")).toContainText("aramhex-data");
-  await page.screenshot({ path: shot(testInfo, "kotone-champion-mayhem") });
+  await screenshot(page, { path: shot(testInfo, "kotone-champion-mayhem") });
 
   // 找不到的英雄：翻译好的一句，不清掉
   await lol.getByTestId("lol-champion-search").fill("没有这个英雄");
@@ -98,7 +99,7 @@ test("强度榜 in the App: rows open the champion's page in the same lane", asy
   await expect(lol.getByTestId("lol-app-tier-row")).toHaveCount(12);
   await expect(lol.getByTestId("lol-app-tier-row").first()).toContainText("T0");
   await expect(lol.getByTestId("lol-app-sources")).toContainText("腾讯 101");
-  await page.screenshot({ path: shot(testInfo, "kotone-tier") });
+  await screenshot(page, { path: shot(testInfo, "kotone-tier") });
   const name = ((await lol.getByTestId("lol-app-tier-row").first().locator(".champ b").textContent()) ?? "").trim();
   await lol.getByTestId("lol-app-tier-row").first().click();
   await expect(lol.getByTestId("lol-app-champion")).toBeVisible();
@@ -137,7 +138,7 @@ test("the three data sources: online stats on, OP.GG off by default with the per
   const link = settings.getByTestId("plugin-lol-source-opgg-link");
   await expect(link).toHaveText("github.com/opgginc/opgg-mcp/issues/26");
   await settings.getByTestId("plugin-lol-source-opgg-row").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: shot(testInfo, "kotone-settings-three-sources") });
+  await screenshot(page, { path: shot(testInfo, "kotone-settings-three-sources") });
 
   // 关掉“用网上的统计”：App 里的英雄页说一句、给“去设置”，点了回到设置
   await settings.getByTestId("plugin-lol-source-stats").click();
@@ -204,7 +205,7 @@ test("the overlay labels the three augment cards like AramHex (verdict, grade, b
     expect(await chips.nth(i).evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
     expect(await chips.nth(i).getByTestId("lol-overlay-verdict").evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   }
-  await page.screenshot({ path: shot(testInfo, "overlay-augment-scores") });
+  await screenshot(page, { path: shot(testInfo, "overlay-augment-scores") });
 });
 
 test("the champ-select overlay grades the team and the bench like AramHex and rings the best swap", async ({ page }, testInfo) => {
@@ -248,7 +249,7 @@ test("the champ-select overlay grades the team and the bench like AramHex and ri
   const source = panel.locator(".source");
   const [panelBox, sourceBox] = [await panel.boundingBox(), await source.boundingBox()];
   expect(sourceBox!.y + sourceBox!.height).toBeLessThanOrEqual(panelBox!.y + panelBox!.height);
-  await page.screenshot({ path: shot(testInfo, "overlay-champ-select") });
+  await screenshot(page, { path: shot(testInfo, "overlay-champ-select") });
 
   // 清空：覆盖层收起
   await page.evaluate(() => (window as unknown as { kotonePluginOverlay: (p: unknown) => void }).kotonePluginOverlay({ items: [] }));

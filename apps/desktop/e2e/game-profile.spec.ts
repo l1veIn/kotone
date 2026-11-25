@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 「游戏适配」：允许自动化输入（allowAutomationInput，缺省开）与启动路径（launchPath）。
 // 保存时整份 profile 原样带回：新字段和原有字段都不能丢。
@@ -24,7 +25,7 @@ test("game profile saves the automation-input switch and launch path without dro
   await expect(editor.getByTestId("profile-allow-automation-input")).toHaveAttribute("aria-checked", "false");
   await editor.getByTestId("profile-launch-path").fill("steam://rungameid/570");
   await editor.getByTestId("profile-companion-notes").fill("聊天在左下角");
-  await editor.screenshot({ path: testInfo.outputPath("game-profile-editor.png") });
+  await screenshot(editor, { path: testInfo.outputPath("game-profile-editor.png") });
   await editor.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByTestId("game-profile-editor")).toHaveCount(0);
   await expect(lol).toContainText("不允许自动化输入");
@@ -61,7 +62,7 @@ test("auto-detect lists installed games, matching ones first, and fills the laun
   // 英雄联盟的配置：进程名对得上的国服排第一
   await expect(list.locator("button").first()).toContainText("英雄联盟（国服）");
   await expect(list).toContainText("原神");
-  await editor.screenshot({ path: testInfo.outputPath("game-profile-detect.png") });
+  await screenshot(editor, { path: testInfo.outputPath("game-profile-detect.png") });
   await editor.getByTestId("profile-detected-tencent:lol").click();
   await expect(editor.getByTestId("profile-launch-path")).toHaveValue('"C:\\WeGameApps\\英雄联盟\\WeGameLauncher\\launcher.exe"');
   await expect(list).toHaveCount(0);
@@ -80,7 +81,7 @@ test("game profile saves who may operate the game (computer use)", async ({ page
   await select.click();
   await page.getByRole("option", { name: /一直允许/ }).click();
   await expect(select).toHaveAttribute("data-value", "allow");
-  await editor.screenshot({ path: testInfo.outputPath("game-profile-computer-use.png") });
+  await screenshot(editor, { path: testInfo.outputPath("game-profile-computer-use.png") });
   await editor.getByRole("button", { name: "保存", exact: true }).click();
   await expect(lol).toContainText("可直接操作");
   const saved = await page.evaluate(async () =>
@@ -143,7 +144,7 @@ test("console chat switch shows only for profiles that declare it and reports th
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(section.getByTestId("profile-console-chat-status")).toContainText("已打开");
   await expect(section.getByTestId("profile-console-chat-status")).toContainText("F23");
-  await section.screenshot({ path: testInfo.outputPath("console-chat.png") });
+  await screenshot(section, { path: testInfo.outputPath("console-chat.png") });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   // 开关不改 profile：保存的配置里没有多出别的东西
@@ -174,7 +175,7 @@ test("the League profile shows the plugin's client-data switch with its risk not
   await expect(box).toContainText("可能违反腾讯的用户协议");
   const toggle = box.getByTestId("profile-lol-data");
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await box.screenshot({ path: testInfo.outputPath("lol-data-switch.png") });
+  await screenshot(box, { path: testInfo.outputPath("lol-data-switch.png") });
 
   // 游戏事件（ADR 036）：通用的加英雄联盟局内的；浏览器预览里没有游戏在跑
   const events = lol.getByTestId("game-profile-events");

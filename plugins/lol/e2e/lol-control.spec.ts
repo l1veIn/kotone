@@ -3,6 +3,7 @@
 // 浏览器预览的英雄列表来自 apps/desktop/src/lib/ipc/lolStatsMock.ts。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片；左侧栏亮的是「插件」。
  * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
@@ -127,7 +128,7 @@ test("auto-accept, an ordered pick list with lock-in, and a ban list are written
   expect(final?.ban).toMatchObject({ enabled: true, champions: [64] });
 
   await page.getByTestId("plugin-lol-control-section").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: shot(testInfo, "lol-control-settings"), fullPage: true });
+  await screenshot(page, { path: shot(testInfo, "lol-control-settings"), fullPage: true });
 });
 
 // 在客户端里发聊天（ADR 041 第 2 期）：选英雄、房间里经客户端的聊天接口发，不按键。默认开（只在有人要发时发），

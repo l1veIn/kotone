@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { openSettingsTab } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 // 聊天页右侧栏（ADR 031，照 DeepSeek Harness 桌面版与 Codex 内置浏览器）：标签“卡片”（网页卡片 + 后台在做的事，
 // 按宽度 1–3 列）/“网页”（标签页、地址栏、网页）；左边缘拖动调宽、双击恢复；网页可全屏；网页的位置报给后端
@@ -182,7 +183,7 @@ test("the sidebar opens and closes and remembers it; task and browser cards foll
 
   for (const theme of ["light", "dark"] as const) {
     await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
-    await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-${theme}.png` : testInfo.outputPath(`right-sidebar-${theme}.png`), animations: "disabled" });
+    await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-${theme}.png` : testInfo.outputPath(`right-sidebar-${theme}.png`), animations: "disabled" });
   }
 });
 
@@ -213,7 +214,7 @@ test("the web tab reports where the page goes; the cards tab, dialogs and leavin
   expect(reported.y + reported.height).toBeLessThanOrEqual(860);
   for (const theme of ["light", "dark"] as const) {
     await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
-    await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-expanded-${theme}.png` : testInfo.outputPath(`right-sidebar-expanded-${theme}.png`), animations: "disabled" });
+    await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-expanded-${theme}.png` : testInfo.outputPath(`right-sidebar-expanded-${theme}.png`), animations: "disabled" });
   }
 
   // 界面缩放（外观 → 缩放，body 上的 CSS zoom）：报的仍是窗口里的实际位置
@@ -290,7 +291,7 @@ test("a task in the sidebar opens in place to show its result and steps; a small
   // 做完：先看结果再看过程
   await page.evaluate(() => window.sidebarTest.subagent({ name: "song", status: "done", summary: "放上了《雨爱》- 杨丞琳。" }));
   await expect(body.getByTestId("task-card-summary-full")).toHaveText("放上了《雨爱》- 杨丞琳。");
-  await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-task-open.png` : testInfo.outputPath("right-sidebar-task-open.png"), animations: "disabled" });
+  await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-task-open.png` : testInfo.outputPath("right-sidebar-task-open.png"), animations: "disabled" });
   await expect(task.getByTestId("sidebar-task-reveal")).toHaveAttribute("title", "在聊天里看");
   // 点开的任务在卡片网格里占满一行；收起后回到一格
   await expect(task).toHaveAttribute("data-open", "true");
@@ -309,7 +310,7 @@ test("a browser that could not open says why and offers a retry", async ({ page 
   await expect(card).toHaveAttribute("data-browser-state", "error");
   await expect(card.getByTestId("browser-error-text")).toHaveText(reason);
   await expect(card.getByTestId("sidebar-browser-hint")).toHaveCount(0);
-  await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-error.png` : testInfo.outputPath("right-sidebar-error.png"), animations: "disabled" });
+  await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-error.png` : testInfo.outputPath("right-sidebar-error.png"), animations: "disabled" });
   await card.getByTestId("browser-error-retry").click();
   expect(await calls(page, "browser_control")).toEqual([{ action: "reload" }]);
   // 打开过的网页后来坏了：卡片和展开的网页顶上都说
@@ -339,7 +340,7 @@ test("a handover opens the sidebar, expands the page and asks the player to log 
   const bannerBox = (await banner.boundingBox())!;
   const b = (await lastBounds(page))!;
   expect(bannerBox.y + bannerBox.height).toBeLessThanOrEqual(b.y + 1);
-  await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-handover.png` : testInfo.outputPath("right-sidebar-handover.png"), animations: "disabled" });
+  await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-handover.png` : testInfo.outputPath("right-sidebar-handover.png"), animations: "disabled" });
   await page.getByTestId("browser-handover-done").click();
   expect(await calls(page, "browser_handover_done")).toEqual([{}]);
   await page.evaluate(() => window.sidebarTest.browser({ handover: null }));
@@ -406,7 +407,7 @@ test("drag the divider to resize the sidebar (remembered), double-click to reset
   expect(Number(await page.evaluate(() => localStorage.getItem("kotone.chat.rightSidebarWidth")))).toBe(wide);
   for (const theme of ["light", "dark"] as const) {
     await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
-    await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-cards-wide-${theme}.png` : testInfo.outputPath(`right-sidebar-cards-wide-${theme}.png`), animations: "disabled" });
+    await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-cards-wide-${theme}.png` : testInfo.outputPath(`right-sidebar-cards-wide-${theme}.png`), animations: "disabled" });
   }
   // 聊天区至少留 400：拖不过头
   await drag(-2000);
@@ -478,7 +479,7 @@ test("browser tabs and address bar: select, close, new tab, navigate, stop; dism
   await expect(guide.getByTestId("browser-tab-agent")).toHaveCount(0);
   for (const theme of ["light", "dark"] as const) {
     await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
-    await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-web-${theme}.png` : testInfo.outputPath(`right-sidebar-web-${theme}.png`), animations: "disabled" });
+    await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-web-${theme}.png` : testInfo.outputPath(`right-sidebar-web-${theme}.png`), animations: "disabled" });
   }
 
   // 选另一个标签页、关掉它、新开一个
@@ -536,7 +537,7 @@ test("fullscreen fills the window (button, Esc) and follows the page's own fulls
   expect(fb.y).toBeLessThan(50);
   expect(fb.y + fb.height).toBeGreaterThanOrEqual(859);
   await expect(full.getByTestId("browser-fullscreen-site")).toHaveText("网易云音乐");
-  await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-fullscreen.png` : testInfo.outputPath("right-sidebar-fullscreen.png"), animations: "disabled" });
+  await screenshot(page, { path: SHOTS ? `${SHOTS}/right-sidebar-fullscreen.png` : testInfo.outputPath("right-sidebar-fullscreen.png"), animations: "disabled" });
   // Esc 退出，回到侧栏里的位置
   await page.keyboard.press("Escape");
   await expect(full).toHaveCount(0);
@@ -622,7 +623,7 @@ test("settings: the browser has its own section; switching it off hides the web 
   await expect(settings.getByTestId("browser-extensions-settings").getByRole("heading")).toHaveText("扩展");
   await expect(settings).not.toContainText("插件");
   await page.mouse.move(0, 0);
-  await page.screenshot({ path: step7(testInfo, "browser-settings"), animations: "disabled" });
+  await screenshot(page, { path: step7(testInfo, "browser-settings"), animations: "disabled" });
 
   // 关掉：存成 browser.enabled = false
   await toggle.click();

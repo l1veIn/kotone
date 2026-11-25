@@ -333,7 +333,7 @@ fn decode_rgba(path: &Path) -> (u32, u32, Vec<u8>) {
 /// ```powershell
 /// kotone-cli ocr install --model-dir <隔离目录>
 /// $env:KOTONE_OCR_SMOKE_MODEL_DIR = "<隔离目录>"; $env:KOTONE_OCR_SMOKE_IMAGE = "<png>"
-/// cargo test -p kotone-cli --test tools_cli_m2 -- --ignored --nocapture
+/// cargo test -p kotone-cli --test it tools_cli_m2:: -- --ignored --nocapture
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "需要显式隔离的已安装模型与输入图像"]

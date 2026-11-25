@@ -3,6 +3,7 @@
 // 「插件」里有它的卡片（卡片上的开关只开关插件），插件整个关掉时 App 里的数据开关变灰。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片；左侧栏亮的是「插件」。
  * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
@@ -42,7 +43,7 @@ test("the League of Legends plugin opens from 插件 with the client-data switch
   await expect(client).toHaveAttribute("aria-checked", "true");
   await expect(pluginPage.getByTestId("plugin-lol-source-client-risk")).toContainText("可能违反腾讯的用户协议");
   await expect(pluginPage).toContainText("读客户端数据");
-  await page.screenshot({ path: shot(testInfo, "lol-plugin-page") });
+  await screenshot(page, { path: shot(testInfo, "lol-plugin-page") });
 
   // 关掉“读客户端数据”：写进插件的设置
   await client.click();
@@ -74,7 +75,7 @@ test("插件 lists the plugin as a card; turning the whole plugin off greys out 
   await page.getByTestId("settings-nav-plugins").click();
   const card = page.getByTestId("plugins-card-lol");
   await expect(card).toContainText("英雄联盟");
-  await page.screenshot({ path: shot(testInfo, "settings-plugins") });
+  await screenshot(page, { path: shot(testInfo, "settings-plugins") });
 
   // 卡片上的开关：只关插件，不进 App
   await card.getByTestId("plugins-card-lol-enabled").click();

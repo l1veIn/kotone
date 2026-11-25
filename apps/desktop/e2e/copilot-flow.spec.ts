@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openSettingsTab, openVoiceInput } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 const here = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -20,7 +21,7 @@ test("1 · new user: one DeepSeek key → five things on DeepSeek → call key �
   const onboarding = page.getByTestId("onboarding");
   await expect(onboarding.getByTestId("onboarding-welcome")).toBeVisible();
   await expect(onboarding).toContainText("陪你打游戏的 AI 陪玩");
-  await page.screenshot({ path: testInfo.outputPath("w1-welcome.png") });
+  await screenshot(page, { path: testInfo.outputPath("w1-welcome.png") });
   await page.getByTestId("onboarding-add-key").click();
 
   // 本地格式检查（照 DeepSeek Harness）：带引号 / NAME=value 当场拦下
@@ -29,7 +30,7 @@ test("1 · new user: one DeepSeek key → five things on DeepSeek → call key �
   await page.getByTestId("onboarding-key-submit").click();
   await expect(page.getByTestId("onboarding-key-error")).toContainText("不要带引号、空格或 DEEPSEEK_API_KEY=");
   await input.fill("sk-test-123");
-  await page.screenshot({ path: testInfo.outputPath("w2-key.png") });
+  await screenshot(page, { path: testInfo.outputPath("w2-key.png") });
   await page.getByTestId("onboarding-key-submit").click();
 
   // 已连接：五项都换成 DeepSeek；新用户的呼叫键默认 Ctrl + ~
@@ -37,7 +38,7 @@ test("1 · new user: one DeepSeek key → five things on DeepSeek → call key �
   await expect(switched).toContainText("对话");
   for (const item of ["语音识别", "文字识别", "语音合成", "联网搜索"]) await expect(switched).toContainText(item);
   await expect(page.getByTestId("onboarding-call-key-value")).toHaveText("Ctrl + ~");
-  await page.screenshot({ path: testInfo.outputPath("w3-connected.png") });
+  await screenshot(page, { path: testInfo.outputPath("w3-connected.png") });
   const saved = await settingsOf(page);
   expect(saved.activeModelId).toBe("deepseek-asr");
   expect(saved.ocr.activeModelId).toBe("deepseek-ocr");
@@ -55,7 +56,7 @@ test("1 · new user: one DeepSeek key → five things on DeepSeek → call key �
   await expect(page.getByTestId("agent-starter").first()).toHaveText("你能做什么？");
   await expect(page.getByTestId("chat-call-block")).toBeVisible();
   await expect(page.getByTestId("chat-local-asr")).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("w6-chat.png") });
+  await screenshot(page, { path: testInfo.outputPath("w6-chat.png") });
 
   // 在线识别：标题栏、聊天页、语音输入、设置里都没有启动按钮
   await expect(page.getByTestId("titlebar-asr")).toHaveCount(0);
@@ -82,7 +83,7 @@ test("2 · “只想用语音输入？” → the four-step guide in the voice i
   await expect(page.getByTestId("voice-guide-next")).toBeDisabled();
   await page.getByTestId("voice-guide-download").click();
   await expect(page.getByTestId("voice-guide-next")).toBeEnabled();
-  await page.screenshot({ path: testInfo.outputPath("w10-guide-model.png") });
+  await screenshot(page, { path: testInfo.outputPath("w10-guide-model.png") });
   await page.getByTestId("voice-guide-next").click();
   await expect(page.getByTestId("input-environment-ready")).toBeVisible();
   await page.getByTestId("mode-push-to-talk").click();
@@ -116,7 +117,7 @@ test("3 · 0.1.x config → upgrade welcome → 继续使用语音输入法 chan
   await expect(page.getByTestId("onboarding-upgrade-summary")).toContainText("提醒助手照旧");
   // “继续使用语音输入法”是第一个、最醒目的按钮
   await expect(upgrade.getByRole("button").first()).toHaveText("继续使用语音输入法");
-  await page.screenshot({ path: testInfo.outputPath("w4-upgrade.png") });
+  await screenshot(page, { path: testInfo.outputPath("w4-upgrade.png") });
   await page.getByTestId("onboarding-keep-voice").click();
 
   await expect(page.getByTestId("voice-input")).toBeVisible();
@@ -213,7 +214,7 @@ test("6 · local recognition not started: chat shows the state and starts it fro
   await expect(state).toContainText("本地语音识别 · 未启动");
   await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-stopped");
   // “点一下呼叫按钮会先启动本地识别再听”需要桌面版：见 agent-chat.spec.ts 里的同名场景。
-  await page.screenshot({ path: testInfo.outputPath("w7-local-stopped.png") });
+  await screenshot(page, { path: testInfo.outputPath("w7-local-stopped.png") });
   await page.getByTestId("chat-local-asr-start").click();
   await expect(state).toHaveCount(0);
   await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-running");
@@ -239,7 +240,7 @@ test("7 · online ↔ local in 设置 → 模型 → 语音识别: the start UI 
   await expect(card).toContainText("DeepSeek 语音识别 · 在线");
   await expect(page.getByTestId("asr-toggle-hotkey")).toHaveCount(0);
   await expect(startButtons(page)).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("w8-online.png") });
+  await screenshot(page, { path: testInfo.outputPath("w8-online.png") });
   // 下载 X-ASR 再选中：从在线换成本地，立即启动一次，“打开时自动启动”默认勾上（D9）
   const xAsr = "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05";
   await page.getByTestId(`model-download-${xAsr}`).click();
@@ -254,7 +255,7 @@ test("7 · online ↔ local in 设置 → 模型 → 语音识别: the start UI 
   });
   await expect.poll(async () => (await settingsOf(page)).runtimeToggleHotkey).toBe("Ctrl+Alt+K");
   await expect(page.getByTestId("hotkey-link-key-kotone.speech-toggle")).toHaveText("Ctrl + Alt + K");
-  await page.screenshot({ path: testInfo.outputPath("w9-local.png") });
+  await screenshot(page, { path: testInfo.outputPath("w9-local.png") });
 
   for (let round = 0; round < 2; round++) {
     await page.getByTestId("model-row-deepseek-asr").click();

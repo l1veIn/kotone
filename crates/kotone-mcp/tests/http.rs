@@ -159,13 +159,14 @@ async fn resources_are_listed_and_read() {
 
 #[tokio::test]
 async fn nobody_listening_is_a_connect_error() {
-    // 先占一个端口再放掉：大概率没人在听
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
+    // 占着一个端口但不 listen：连过去是“拒绝连接”，测试期间别的测试也绑不上它。不能绑了再放掉：
+    // Windows 连一个没人听的端口要重试约 2 秒，这期间谁在这个端口上 listen 就连上了（错误就成了 Http 之类）
+    let held = tokio::net::TcpSocket::new_v4().unwrap();
+    held.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let port = held.local_addr().unwrap().port();
     let config = ServerConfig::http(format!("http://127.0.0.1:{port}/mcp"))
         .startup_timeout(Duration::from_secs(10));
     let error = McpClient::connect(&config).await.unwrap_err();
     assert!(matches!(error, McpError::Connect(_)), "{error:?} / {error}");
+    drop(held);
 }

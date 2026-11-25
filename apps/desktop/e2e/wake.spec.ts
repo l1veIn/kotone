@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openSettingsTab } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 // 设置 → 怎么叫她 → 语音唤醒（ADR 017 / 028）：开关、模型下载、唤醒词；设置写进 assistant.wake。
 test("voice wake can be enabled, its model downloaded and the phrase changed", async ({ page }, testInfo) => {
@@ -21,7 +22,7 @@ test("voice wake can be enabled, its model downloaded and the phrase changed", a
   await page.getByRole("option", { name: "你好琴音" }).click();
   await expect(page.getByTestId("settings-call")).toContainText("说“你好琴音”叫醒琴音，接着说要做的事。");
   await page.getByTestId("wake-enabled").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("wake-settings.png") });
+  await screenshot(page, { path: testInfo.outputPath("wake-settings.png") });
 
   const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(settings.assistant.wake).toMatchObject({ enabled: true, phrase: "nihao-qinyin", sensitivity: "normal", ack: "voice" });

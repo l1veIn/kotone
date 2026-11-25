@@ -5,6 +5,13 @@ description = "Kotone 命令行前端：send 注入 / listen 全链路（wav 直
 edition = "2021"
 rust-version = "1.77.2"
 
+# test = false：main.rs 只做入口、没有测试，不再为它链接一个空的测试程序（测试写在 lib 和 tests/it 里；
+# 集成测试用的 kotone-cli.exe 照样会编）
+[[bin]]
+name = "kotone-cli"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 kotone-core.workspace = true
 kotone-postprocess.workspace = true

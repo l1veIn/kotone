@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { openSettingsTab } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 // 聊天页（ADR 028：打开 Kotone 先看到它）：用 @tauri-apps/api/mocks 模拟 agent_* 命令与 kotone://agent-* 事件，不接任何 AI。
 
@@ -169,7 +170,7 @@ test("empty conversation shows starter prompts; a starter sends or fills the com
   await openChat(page, { empty: true });
   const starters = page.getByTestId("agent-starter");
   await expect(starters).toHaveText(["你能做什么？", "帮我配置 Kotone", "这个版本什么英雄强？", "来首歌", "做一个自动化", "5 分钟后提醒我"]);
-  await page.screenshot({ path: testInfo.outputPath("agent-chat-empty.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("agent-chat-empty.png"), animations: "disabled" });
   // 以冒号结尾的提示只放进输入框
   await starters.filter({ hasText: "做一个自动化" }).click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("帮我做一个自动化：");
@@ -226,7 +227,7 @@ test("streams text and thinking, tracks tool card states, asks for permission an
   await expect(send).toHaveAttribute("data-tool-status", "in_progress");
   await expect(send.getByTestId("agent-tool-status")).toHaveText("执行中");
   await expect(send.getByTestId("agent-ask")).toContainText("需要你确认：发到游戏聊天");
-  await page.screenshot({ path: testInfo.outputPath("agent-chat-ask.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("agent-chat-ask.png"), animations: "disabled" });
   await send.getByTestId("agent-ask-allow-conversation").click();
   expect(await agentCalls(page, "agent_answer")).toEqual([{ askId: "ask-1", answer: "allow-for-conversation" }]);
   await page.evaluate(() => window.agentTest.resolved("ask-1", "c-old"));
@@ -263,7 +264,7 @@ test("streams text and thinking, tracks tool card states, asks for permission an
   await expect(footer).toHaveText("输入 2,600（命中缓存 38%） · 输出 38 tokens · 约 ¥0.0012");
   // 旧的一轮没有用量：不显示、不估算
   await expect(page.getByTestId("agent-turn").first().getByTestId("agent-turn-usage")).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("agent-chat-done.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("agent-chat-done.png"), animations: "disabled" });
 });
 
 test("stop, steering while answering, notices and automation results", async ({ page }) => {
@@ -335,7 +336,7 @@ test("conversation list: new, switch and delete", async ({ page }, testInfo) => 
   await list.getByTestId("agent-conversation").first().hover();
   await list.getByTestId("agent-conversation-delete").first().click();
   await expect(page.getByTestId("agent-delete-dialog")).toContainText("上次的对话");
-  await page.screenshot({ path: testInfo.outputPath("agent-chat-delete.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("agent-chat-delete.png"), animations: "disabled" });
   await page.getByTestId("agent-delete-confirm").click();
   expect(await agentCalls(page, "agent_delete_conversation")).toEqual([{ id: "c-old" }]);
   await expect(list.getByTestId("agent-conversation")).toHaveCount(0);
@@ -417,7 +418,7 @@ test("composer bar: usage inside; her model, permission and call sit next to sen
   const permission = composer.getByTestId("composer-permission");
   await expect(permission).toHaveAttribute("title", "权限：先问我");
   expect((await permission.boundingBox())!.width).toBeLessThan(40);
-  await page.screenshot({ path: fileURLToPath(new URL("../../../target/plugin-shots/round7/chat-composer.png", import.meta.url)), animations: "disabled" });
+  await screenshot(page, { path: fileURLToPath(new URL("../../../target/plugin-shots/round7/chat-composer.png", import.meta.url)), animations: "disabled" });
   await permission.click();
   await page.getByTestId("composer-permission-allow-all").click();
   await expect(permission).toHaveAttribute("title", "权限：完全权限");
@@ -430,7 +431,7 @@ test("composer bar: usage inside; her model, permission and call sit next to sen
   await expect(menu.getByTestId("composer-model-test-ai-test-listed")).toBeVisible();
   await expect(menu.getByTestId("composer-model-test-ai-test")).toContainText("test");
   // 截图放在仓库的 target/plugin-shots/round7/（设置重排，交接第十一节第 8 条）
-  await page.screenshot({ path: fileURLToPath(new URL("../../../target/plugin-shots/round7/chat-model-menu.png", import.meta.url)), animations: "disabled" });
+  await screenshot(page, { path: fileURLToPath(new URL("../../../target/plugin-shots/round7/chat-model-menu.png", import.meta.url)), animations: "disabled" });
   await menu.getByTestId("composer-model-test-ai-test-pro").click();
   await expect(model).toHaveText("test-pro");
   const calls = await page.evaluate(() => window.agentTest.calls.filter((c) => c.command === "upsert_connection" || c.command === "connection_self_check"));
@@ -539,7 +540,7 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   await usage.getByLabel("整理阈值（token）").fill("32000");
   await usage.getByLabel("整理阈值（token）").press("Tab");
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.compactAtTokens))).toBe(32000);
-  await usage.screenshot({ path: testInfo.outputPath("usage.png"), animations: "disabled" });
+  await screenshot(usage, { path: testInfo.outputPath("usage.png"), animations: "disabled" });
 });
 
 test("the chat shows today's and this conversation's usage; details by day and by call", async ({ page }, testInfo) => {
@@ -563,13 +564,13 @@ test("the chat shows today's and this conversation's usage; details by day and b
   await dialog.getByTestId("usage-day").first().click();
   await expect(dialog.getByTestId("usage-day-detail")).toContainText("语音合成");
   await expect(dialog.getByTestId("usage-day-detail")).toContainText("deepseek/deepseek-flash");
-  await page.screenshot({ path: testInfo.outputPath("usage-days.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("usage-days.png"), animations: "disabled" });
   await dialog.getByTestId("usage-tab-conversation").click();
   await expect(dialog.getByTestId("usage-call")).toHaveCount(2);
   // 新的在前；没命中的那次标出来
   await expect(dialog.getByTestId("usage-call").first()).toContainText("1%");
   await expect(dialog.getByTestId("usage-call").first().locator("td.text-warning")).toHaveCount(1);
-  await page.screenshot({ path: testInfo.outputPath("usage-calls.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("usage-calls.png"), animations: "disabled" });
 });
 
 test("web search lists its sources under the tool card", async ({ page }) => {
@@ -600,7 +601,7 @@ test("local recognition not started: the chat says so, and the call button start
   await expect(page.getByTestId("chat-local-asr")).toContainText("本地语音识别 · 未启动");
   await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-stopped");
   await expect(page.getByTestId("chat-call-hint")).toContainText("点一下会先启动本地识别");
-  await page.screenshot({ path: testInfo.outputPath("chat-local-stopped.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("chat-local-stopped.png"), animations: "disabled" });
   await page.getByTestId("chat-call").click();
   await expect.poll(() => page.evaluate(() => window.agentTest.calls
     .filter((call) => call.command === "start_runtime" || call.command === "assistant_call").map((call) => call.command)))
@@ -651,14 +652,14 @@ test("voice, screen-reading and search costs are listed separately per turn and 
   await expect(footer).toHaveText("输入 2,000（命中缓存 95%） · 输出 12 tokens · 对话 ¥0.0020 · 语音 ¥0.0050 · 读屏 ¥0.0015");
   // 没有这些费用的旧轮次照旧
   await expect(page.getByTestId("agent-turn").first().getByTestId("agent-turn-usage")).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("turn-costs.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("turn-costs.png"), animations: "disabled" });
   // 本段对话：合计含语音、读屏、搜索；明细里分开
   await expect(page.getByTestId("usage-pill-conversation")).toHaveText("本段对话 ¥0.014 · 命中 95%");
   await page.getByTestId("usage-pill").click();
   const dialog = page.getByTestId("usage-dialog");
   await dialog.getByTestId("usage-tab-conversation").click();
   await expect(dialog.getByTestId("usage-conversation-breakdown")).toHaveText("对话 ¥0.0020 · 语音 ¥0.0050 · 读屏 ¥0.0015 · 搜索 ¥0.0055");
-  await page.screenshot({ path: testInfo.outputPath("conversation-costs.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("conversation-costs.png"), animations: "disabled" });
 });
 
 test("what a background task spent shows up under the turn that handed it off, as 后台", async ({ page }) => {

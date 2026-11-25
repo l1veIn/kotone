@@ -4,6 +4,7 @@
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）；浏览器预览里的识别是模拟的（ipc/browserMock.ts）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 截图放在仓库的 target/plugin-shots/round7/（实现记录用）；testDir 是 plugins/。 */
 const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "round7", `${name}.png`);
@@ -35,7 +36,7 @@ test("online: the voice input card only shows the current speech recognition and
     await expect(page.getByTestId(id), id).toHaveCount(0);
   }
   await card.scrollIntoViewIfNeeded();
-  await card.screenshot({ path: shot(testInfo, "voice-input-asr-card-online") });
+  await screenshot(card, { path: shot(testInfo, "voice-input-asr-card-online") });
 
   // 链接打开「设置 → 模型 → 语音识别」：那里能换、能下载
   await page.getByTestId("asr-open-models").click();
@@ -57,7 +58,7 @@ test("local: the card shows the local model's name and state (not downloaded / n
   await expect(page.getByTestId("asr-status")).toHaveText("本地模型还没下载");
   await expect(actionButtons(page)).toHaveCount(0);
   await card.scrollIntoViewIfNeeded();
-  await card.screenshot({ path: shot(testInfo, "voice-input-asr-card") });
+  await screenshot(card, { path: shot(testInfo, "voice-input-asr-card") });
 
   // 本地模型下好了、没启动：卡片写“未启动”，启动按钮在设置里
   await page.goto("/?case=local-ready#/settings?onboarding=never&mockAsr=local-ready");
@@ -71,7 +72,7 @@ test("local: the card shows the local model's name and state (not downloaded / n
   const runtime = page.getByTestId("models-asr-runtime");
   await expect(runtime).toHaveAttribute("data-asr-state", "local-stopped");
   await expect(page.getByTestId("asr-toggle-hotkey")).toBeVisible();
-  await runtime.screenshot({ path: shot(testInfo, "settings-models-asr-runtime") });
+  await screenshot(runtime, { path: shot(testInfo, "settings-models-asr-runtime") });
   await page.getByTestId("asr-start").click();
   await expect(runtime).toHaveAttribute("data-asr-state", "local-running");
   // 回到语音输入：卡片跟着变成“已启动”

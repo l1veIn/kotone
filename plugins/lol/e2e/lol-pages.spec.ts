@@ -5,6 +5,7 @@
 // plugins/lol/app/dist（test:e2e 先打包）。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type FrameLocator, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片；左侧栏亮的是「插件」。
  * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
@@ -61,7 +62,7 @@ test("the plugin page is the App itself: its own tabs, 这局 while loading, a p
   await expect(lol.getByTestId("lol-app-foot")).toContainText("Legal Jibber Jabber");
   await lol.getByTestId("lol-app-risk").locator("summary").click();
   await expect(lol.getByTestId("lol-app-risk")).toContainText("github.com/LeagueAkari/LeagueAkari/issues/523");
-  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-match") });
+  await screenshot(page, { path: shot(testInfo, "kotone-plugin-page-match") });
 
   // 点对面的亚索：他的战绩（App 里换页）
   await weak.click();
@@ -69,7 +70,7 @@ test("the plugin page is the App itself: its own tabs, 这局 while loading, a p
   await expect(lol.getByTestId("lol-app-tab-player")).toHaveAttribute("aria-current", "page");
   await expect(lol.getByTestId("lol-player-name")).toHaveText("对手子#1006");
   await expect(lol.getByTestId("lol-player-game")).toHaveCount(20);
-  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-player") });
+  await screenshot(page, { path: shot(testInfo, "kotone-plugin-page-player") });
 
   // 点一局：两队 10 个人；“← 战绩”回去
   await lol.getByTestId("lol-player-game").first().click();
@@ -77,7 +78,7 @@ test("the plugin page is the App itself: its own tabs, 这局 while loading, a p
   await expect(lol.getByTestId("lol-game-team")).toHaveCount(2);
   await expect(lol.getByTestId("lol-game-player")).toHaveCount(10);
   await expect(lol.getByTestId("lol-game-team").first()).toHaveAttribute("data-win", "true");
-  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-game") });
+  await screenshot(page, { path: shot(testInfo, "kotone-plugin-page-game") });
   await lol.getByTestId("lol-game-back").click();
   await expect(lol.getByTestId("lol-player-name")).toHaveText("对手子#1006");
   // 从单局点某个人：他的战绩
@@ -106,7 +107,7 @@ test("after the game 这局 shows the result and opens this game with the 刚结
   await expect(result).toContainText("胜利");
   await expect(result).toContainText("18:32");
   await expect(lol.getByTestId("lol-match-player")).toHaveCount(10);
-  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-post-match") });
+  await screenshot(page, { path: shot(testInfo, "kotone-plugin-page-post-match") });
   await lol.getByTestId("lol-match-result-open").click();
   await expect(lol.getByTestId("lol-app-game")).toHaveAttribute("data-just-ended", "true");
   await expect(lol.getByTestId("lol-game-just-ended")).toHaveText("刚结束");
@@ -138,7 +139,7 @@ test("the 设置 button next to the plugin's name opens the host's settings for 
   await expect(settings.getByTestId("plugin-lol-source-client")).toHaveAttribute("aria-checked", "true");
   await expect(settings.getByTestId("plugin-lol-source-client-risk")).toContainText("可能违反腾讯的用户协议");
   await expect(settings.getByTestId("plugin-lol-control-section")).toBeVisible();
-  await page.screenshot({ path: shot(testInfo, "kotone-plugin-settings") });
+  await screenshot(page, { path: shot(testInfo, "kotone-plugin-settings") });
   // 点插件名或再点一次“设置”：回到 App（没重新加载，还在原来那页）
   await page.getByTestId("plugin-app-name").click();
   await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-view", "app");
@@ -161,7 +162,7 @@ test("asking for this match's history leaves the App as a card in the chat; open
   await expect(inline.getByTestId("lol-match-card")).toBeVisible();
   await expect(inline.getByTestId("lol-card-row")).toHaveCount(10);
   await expect(inline.getByTestId("lol-card-weak")).toContainText("亚索");
-  await card.screenshot({ path: shot(testInfo, "kotone-chat-card-match") });
+  await screenshot(card, { path: shot(testInfo, "kotone-chat-card-match") });
 
   await card.getByTestId("plugin-card-open").click();
   const sidebar = page.getByTestId("right-sidebar");
@@ -175,7 +176,7 @@ test("asking for this match's history leaves the App as a card in the chat; open
   await full.locator('[data-testid="lol-match-player"][data-weak="true"]').click();
   await expect(full.getByTestId("lol-player-name")).toHaveText("对手子#1006");
   await expect(stack).toHaveAttribute("data-depth", "1");
-  await page.screenshot({ path: shot(testInfo, "kotone-sidebar-player") });
+  await screenshot(page, { path: shot(testInfo, "kotone-sidebar-player") });
 });
 
 test("ui.open with parameters opens that page of the App in the right sidebar; old settings addresses still land", async ({ page }) => {
@@ -229,7 +230,7 @@ test("the 英雄 page shows skill icons with the key on each and the name on hov
   // 前几级的加点顺序：每一级一个图标
   await expect(skills.locator(".order").getByTestId("lol-ability").locator("img")).toHaveCount(11);
   await skills.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: shot(testInfo, "kotone-champion-skills") });
+  await screenshot(page, { path: shot(testInfo, "kotone-champion-skills") });
 
   // 没有技能资料的英雄（客户端没开、CommunityDragon 也没取到）：字母格子，没有被动那一格
   await lol.getByTestId("lol-champion-bad").getByTestId("lol-champion-link").first().click();

@@ -7,6 +7,7 @@
 import { expect, test, type Frame, type Page, type TestInfo } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 const TIER = "ui://kotone/lol/tier";
 const MATCH = "ui://kotone/lol/match";
@@ -76,7 +77,7 @@ test("the plugin page is the plugin's MCP App: a sandboxed iframe on another ori
   await expect.poll(async () => (await calls(page)).filter((c) => c.tool === "lol.tier")).toEqual([{ plugin: "lol", tool: "lol.tier" }]);
   await expect(app.locator("body")).toContainText("腾讯 101");
   await expect(app.locator("body")).toContainText("T0");
-  await page.screenshot({ path: shot(testInfo, "tier-app-plugin-page") });
+  await screenshot(page, { path: shot(testInfo, "tier-app-plugin-page") });
 });
 
 test("the App only reaches its own plugin: lol tools work, other plugins' tools are refused, its settings link opens the plugin's settings", async ({ page }) => {
@@ -135,7 +136,7 @@ test("the tier card in the chat is the same App, inline, shown with the result s
   const box = await frame.boundingBox();
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(120);
   expect(box?.height ?? 0).toBeLessThanOrEqual(520);
-  await card.screenshot({ path: shot(testInfo, "tier-app-chat-card") });
+  await screenshot(card, { path: shot(testInfo, "tier-app-chat-card") });
 
   // 点卡片头上一行：右侧栏打开完整页面（fullscreen 的同一个 App）
   await card.getByTestId("plugin-card-open").click();

@@ -1,5 +1,6 @@
 import { openSettingsTab } from "./nav";
 import { expect, test, type Page } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 琴音的对话气泡页（#/companion）：浏览器预览里用 kotone-bubble-preview 事件喂状态。
 const SHOTS = process.env.KOTONE_BUBBLE_SHOTS;
@@ -36,7 +37,7 @@ test.describe("对话气泡", () => {
       if (text) await expect(page.getByTestId("companion-text")).toHaveText(text);
       if (SHOTS) {
         await page.waitForTimeout(400);
-        await page.screenshot({ path: `${SHOTS}/bubble-${phase}.png`, omitBackground: true });
+        await screenshot(page, { path: `${SHOTS}/bubble-${phase}.png`, omitBackground: true });
       }
     }
 
@@ -53,7 +54,7 @@ test.describe("对话气泡", () => {
     await expect(stage).toHaveClass(/top/);
     if (SHOTS) {
       await page.waitForTimeout(400);
-      await page.screenshot({ path: `${SHOTS}/bubble-top-left.png`, omitBackground: true });
+      await screenshot(page, { path: `${SHOTS}/bubble-top-left.png`, omitBackground: true });
     }
   });
 
@@ -98,7 +99,7 @@ test.describe("对话气泡", () => {
     await page.getByLabel("气泡位置").click();
     await page.getByRole("option", { name: "左下角" }).click();
     await page.getByTestId("bubble-enabled").scrollIntoViewIfNeeded();
-    await page.screenshot({ path: SHOTS ? `${SHOTS}/bubble-settings.png` : testInfo.outputPath("bubble-settings.png") });
+    await screenshot(page, { path: SHOTS ? `${SHOTS}/bubble-settings.png` : testInfo.outputPath("bubble-settings.png") });
     const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
     expect(settings.assistant.bubble).toMatchObject({ enabled: true, corner: "bottom-left", offsetY: 0, alsoDanmaku: false });
   });

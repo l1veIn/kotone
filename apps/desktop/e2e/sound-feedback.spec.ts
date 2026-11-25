@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 test("sound feedback cards render with defaults and per-item toggles", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
@@ -31,7 +32,7 @@ test("sound feedback cards render with defaults and per-item toggles", async ({ 
   await page.getByRole("button", { name: "试听发送音" }).click();
 
   // 截图：默认双开 + 刚切换的音效（供维护者确认 UI）
-  await page.screenshot({
+  await screenshot(page, {
     path: "test-results/sound-feedback-tab.png",
     clip: { x: 180, y: 0, width: 720, height: 700 },
   });

@@ -4,6 +4,7 @@
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 截图放在仓库的 target/plugin-shots/step4/（实现记录用）；testDir 是 plugins/。 */
 const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "step4", `${name}.png`);
@@ -33,7 +34,7 @@ test("game voice is a plugin: off by default, turn it on, install the virtual mi
   await expect(card).toContainText("游戏语音");
   await expect(card.getByTestId("plugins-card-game-voice-off")).toBeVisible();
   await expect(card.getByTestId("plugins-card-game-voice-enabled")).toHaveAttribute("aria-checked", "false");
-  await page.screenshot({ path: shot(testInfo, "settings-plugins-game-voice") });
+  await screenshot(page, { path: shot(testInfo, "settings-plugins-game-voice") });
 
   // 从卡片点开插件的 App：关着时只有开关和一句说明；左侧栏没有单个插件，亮的是「插件」
   await expect(page.getByTestId("app-sidebar").locator('[data-testid^="settings-nav-plugin:"]')).toHaveCount(0);
@@ -59,7 +60,7 @@ test("game voice is a plugin: off by default, turn it on, install the virtual mi
   await expect(pluginPage.getByTestId("voice-chat-restore-mic")).toBeVisible();
   await pluginPage.getByTestId("voice-chat-test").click();
   await expect(page.getByText("通了")).toBeVisible();
-  await page.screenshot({ path: shot(testInfo, "game-voice-page") });
+  await screenshot(page, { path: shot(testInfo, "game-voice-page") });
   await pluginPage.getByTestId("voice-chat-restore-mic").click();
   await expect(pluginPage.getByTestId("voice-chat-use-cable")).toBeVisible();
 

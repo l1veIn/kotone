@@ -11,9 +11,11 @@ name = "kotone_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 # exe 名保持 kotone.exe（package 改名 kotone-tauri 不影响产物名）
+# test = false：main.rs 只做入口、没有测试，不再为它把整个应用链接成一个空的测试程序（测试写在 lib 里）
 [[bin]]
 name = "kotone"
 path = "src/main.rs"
+test = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

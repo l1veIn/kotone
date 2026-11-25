@@ -4,6 +4,7 @@
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 /** 截图放在仓库的 target/plugin-shots/step4/（实现记录用）；testDir 是 plugins/。 */
 const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "step4", `${name}.png`);
@@ -57,7 +58,7 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await pluginPage.getByTestId("interpreter-start").click();
   await expect(page.getByText("帮我盯着队友说的话，当同传：听 Discord.exe，每句外语翻成日语，用气泡显示。")).toBeVisible();
   await expect(listening).toHaveText("正在听：Discord.exe");
-  await page.screenshot({ path: shot(testInfo, "interpreter-page") });
+  await screenshot(page, { path: shot(testInfo, "interpreter-page") });
 
   // 停止：对她说“停止同传”，不听了
   await pluginPage.getByTestId("interpreter-stop").click();
@@ -115,7 +116,7 @@ test("the page says which recognition interpreting uses: SenseVoice to download,
   await expect(recognizer).toContainText("DeepSeek");
   await expect(recognizer).toContainText("在线");
   await expect(pluginPage).toContainText("队友说的每一句都会发给它识别，每句计费");
-  await page.screenshot({ path: shot(testInfo, "interpreter-recognizer-online") });
+  await screenshot(page, { path: shot(testInfo, "interpreter-recognizer-online") });
 
   // “去 设置 → 模型 换”：换模型只有一个地方
   await pluginPage.getByTestId("interpreter-open-models").click();

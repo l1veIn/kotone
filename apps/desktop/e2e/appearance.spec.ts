@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 外观（设置 → 外观，ADR 023 从“通用”搬来）：只作用于设置窗口，偏好存在 localStorage，读坏了回退默认。
 
@@ -38,7 +39,7 @@ test("appearance switches theme, palette, zoom and font, and persists across rel
   await expect(html).toHaveAttribute("data-palette", "green");
   await expect(page.locator("body")).toHaveCSS("zoom", "1.1");
   expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DengXian");
-  await panel.screenshot({ path: testInfo.outputPath("appearance-light-green.png") });
+  await screenshot(panel, { path: testInfo.outputPath("appearance-light-green.png") });
 
   await page.reload();
   await page.getByTestId("settings-nav-advanced").click();

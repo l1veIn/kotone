@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openSettingsTab, openVoiceInput } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 // 设置窗口外壳：标题栏、侧边栏（展开 / 图标栏 / 窄窗口抽屉）、窗口按钮。
 
@@ -10,7 +11,7 @@ test("sidebar collapses to an icon rail and remembers it", async ({ page }, test
   await expect(sidebar).toHaveAttribute("data-rail", "false");
   await expect(sidebar.getByTestId("settings-nav-plugins")).toHaveText("插件");
   await expect(sidebar.getByTestId("agent-conversations")).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("shell-expanded.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("shell-expanded.png"), animations: "disabled" });
 
   await page.getByTestId("sidebar-toggle").click();
   await expect(sidebar).toHaveAttribute("data-rail", "true");
@@ -32,7 +33,7 @@ test("narrow windows use a drawer that closes after navigating", async ({ page }
   await page.getByTestId("sidebar-toggle").click();
   const drawer = page.getByTestId("sidebar-drawer");
   await expect(drawer).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("shell-drawer.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("shell-drawer.png"), animations: "disabled" });
   await drawer.getByTestId("settings-nav-plugins").click();
   await expect(drawer).toHaveCount(0);
   await expect(page.getByTestId("plugins-page")).toBeVisible();

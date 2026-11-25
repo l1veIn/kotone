@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 高级 → API 连接：按分组展示预置提供商，编辑地址 / 模型 / 密钥（只写），设为琴音的连接并做能力自检。
 
@@ -18,7 +19,7 @@ test("providers are grouped, searchable and every preset is listed", async ({ pa
     await expect(providers.getByText(label, { exact: true })).toBeVisible();
   }
   await expect(page.getByTestId("connections-section")).toContainText("给琴音用的主流大模型");
-  await page.screenshot({ path: testInfo.outputPath("connections-list.png"), fullPage: false });
+  await screenshot(page, { path: testInfo.outputPath("connections-list.png"), fullPage: false });
   await providers.getByLabel("搜索服务商或模型").fill("kimi");
   await expect(providers.getByTestId("connection-preset-moonshot-cn")).toBeVisible();
   await expect(providers.getByTestId("connection-preset-openai")).toHaveCount(0);
@@ -35,7 +36,7 @@ test("editing picks a listed model or a typed one, and the key is write-only", a
   await expect(editor.getByRole("button", { name: "deepseek-v4-pro", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(editor.getByRole("button", { name: "deepseek-flash", exact: true })).toHaveAttribute("aria-pressed", "false");
   await editor.getByTestId("connection-api-key").fill("sk-local-fixture");
-  await page.screenshot({ path: testInfo.outputPath("connections-editor.png") });
+  await screenshot(page, { path: testInfo.outputPath("connections-editor.png") });
   await editor.getByTestId("connection-save").click();
   const card = page.locator('[data-testid^="connection-card-deepseek-"]');
   await expect(card).toContainText("已保存 Key");
@@ -62,7 +63,7 @@ test("a connection becomes 琴音's without any check, and can be tested by hand
   await expect(card.getByTestId("connection-check-result")).toHaveCount(0);
   await card.getByTestId("connection-self-check").click();
   await expect(card.getByTestId("connection-check-result")).toContainText("连接正常");
-  await page.screenshot({ path: testInfo.outputPath("connections-check.png") });
+  await screenshot(page, { path: testInfo.outputPath("connections-check.png") });
   const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(settings.assistant.connectionId).toMatch(/^dashscope-/);
 });

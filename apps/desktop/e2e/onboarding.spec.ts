@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openSettingsTab, openVoiceInput } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 // 引导（ADR 028）：新用户 欢迎 → 填 DeepSeek Key → 已连接、设呼叫键 → 聊天；“只想用语音输入？”进语音输入子板块的
 // 四步引导；0.1.x 升级用户先看升级欢迎页。主路径的验收在 copilot-flow.spec.ts，这里补各种出错和边界情况。
@@ -61,7 +62,7 @@ test("voice-only path: the guide records a hotkey, the first sentence lands, and
 test("with one DeepSeek key and no local model, everything runs on DeepSeek and “你能做什么？” waits in the composer", async ({ page }, testInfo) => {
   // 刚装好：一个本地模型都没有，语音识别也用 DeepSeek
   await page.goto("/#/settings?onboarding=always&mockModels=none");
-  await page.screenshot({ path: testInfo.outputPath("welcome.png") });
+  await screenshot(page, { path: testInfo.outputPath("welcome.png") });
   await page.getByTestId("onboarding-add-key").click();
   await expect(page.getByTestId("onboarding-key-step")).toBeVisible();
   await expect(page.getByTestId("onboarding-key-submit")).toBeDisabled();

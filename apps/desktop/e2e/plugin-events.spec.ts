@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 游戏事件由插件登记（插件重构第 7 步，ADR 036 D4）：自动化编辑里英雄联盟的事来自英雄联盟插件的清单（[[events]]），
 // 名字用插件的文案；插件关着时不在选择里；已经保存的不删、不报废，列表和编辑里说清楚“英雄联盟插件关着，这个触发不会发生”。
@@ -48,7 +49,7 @@ test("LoL events come from the plugin; with the plugin off they leave the picker
   await expect(page.getByRole("option", { name: "推掉一座塔", exact: true })).toHaveCount(0);
   await expect(page.getByRole("option", { name: "阶段变化", exact: true })).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.screenshot({ path: testInfo.outputPath("plugin-events-off.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("plugin-events-off.png"), fullPage: true });
   await editor.getByLabel("自动化名字").fill("对面拿龙提醒我（改）");
   await editor.getByRole("button", { name: "保存", exact: true }).click();
   const renamed = automation.getByTestId("automation-item").filter({ hasText: "对面拿龙提醒我（改）" });

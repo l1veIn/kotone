@@ -320,10 +320,7 @@ async fn an_http_server_gets_its_key_from_the_credential_store() {
 /// 地址里的 Key（`?token=${input:token}`）连不上时不出现在给模型的“没连上”和卡片的错误里（审查后加的，2026-11-25）。
 #[tokio::test]
 async fn keys_in_the_url_stay_out_of_errors() {
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
+    let (held, port) = nobody_listening();
     let spec = ServerSpec::parse(&json!({
         "url": format!("http://127.0.0.1:{port}/mcp?token=${{input:token}}"),
         "headers": {"X-Key": "${input:header}"}
@@ -363,6 +360,18 @@ async fn keys_in_the_url_stay_out_of_errors() {
             "{text}"
         );
     }
+    drop(held);
+}
+
+/// 一个肯定没人听的端口：占着但不 listen，连过去是“拒绝连接”，拿着它的时候别的测试也绑不上。
+/// 不能绑了再放掉：Windows 连一个没人听的端口要重试约 2 秒，这期间同时在跑的测试在这个端口上
+/// listen 就连上了（2026-11-25 一次全量跑里 `an_offline_server_says_it_is_not_connected` 看到 NotConnected：
+/// 连上了别人的服务器，调用时才断）。
+fn nobody_listening() -> (tokio::net::TcpSocket, u16) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let port = socket.local_addr().unwrap().port();
+    (socket, port)
 }
 
 /// 服务器掉线（连不上）：工具还在（一段对话里清单不变），调用回答“这个插件现在没连上”；
@@ -370,11 +379,7 @@ async fn keys_in_the_url_stay_out_of_errors() {
 #[tokio::test]
 async fn an_offline_server_says_it_is_not_connected() {
     let dir = tempfile::tempdir().unwrap();
-    // 一个肯定没人听的端口
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
+    let (held, port) = nobody_listening();
     let spec = ServerSpec::parse(&json!({"url": format!("http://127.0.0.1:{port}/mcp")})).unwrap();
     // 上次连上时记下的工具清单
     let known = crate::Known {
@@ -407,6 +412,7 @@ async fn an_offline_server_says_it_is_not_connected() {
         started.elapsed() < Duration::from_secs(1),
         "一会儿之内不再重试"
     );
+    drop(held);
 }
 
 /// 权限（MCP 方案第七节第 3 条）：用 kotone-agent 的判定核对。

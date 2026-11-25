@@ -5,6 +5,7 @@
 // 真机见 scripts/manual-e2e/hotkey_tools_real.py。
 import { expect, test, type Page } from "@playwright/test";
 import { openSettingsTab } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 type Binding = { key: string; id?: string; say?: string; tool?: string; args?: Record<string, unknown>; page?: string; confirmed?: string[]; label?: string };
 const table = (page: Page) => page.evaluate(async () =>
@@ -103,7 +104,7 @@ test("calling a tool: 发到游戏聊天 is first; one that asks says what it wi
   await expect(willDo).toContainText("按的时候不再问你");
   await expect(page.getByTestId("custom-save")).toHaveText("允许并保存");
   await page.getByTestId("custom-tool-search").fill("");
-  await form.screenshot({ path: testInfo.outputPath("custom-hotkey-form.png"), animations: "disabled" });
+  await screenshot(form, { path: testInfo.outputPath("custom-hotkey-form.png"), animations: "disabled" });
   await page.getByTestId("custom-save").click();
   await expect(form).toHaveCount(0);
   expect(await entry(page, "qm-1")).toMatchObject({ tool: "everything.echo", args: { message: "集合打龙" }, confirmed: ["third-party-action"] });

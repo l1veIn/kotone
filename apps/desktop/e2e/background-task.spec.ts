@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 交给后台做的事（ADR 029 第三节）：主会话里 agent.start 显示成一张卡片，随 subagent 事件变化；
 // 等确认、停止、继续、做完的总结；交回来的 agent-report 不显示；做事过程那段对话不进对话列表。
@@ -156,7 +157,7 @@ test("a background task card follows its state: steps, confirmation, done with s
   await expect(card.getByTestId("task-card-step-text")).toHaveText("先看看血量条在哪。");
   await expect(card.locator('[data-testid="agent-tool-card"][data-tool-name="game.look"]')).toContainText("看游戏画面");
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
-  await card.screenshot({ path: testInfo.outputPath("task-card-running-light.png"), animations: "disabled" });
+  await screenshot(card, { path: testInfo.outputPath("task-card-running-light.png"), animations: "disabled" });
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
   await card.getByTestId("task-card-toggle").click();
 
@@ -165,7 +166,7 @@ test("a background task card follows its state: steps, confirmation, done with s
   await expect(card.getByTestId("task-card-status")).toHaveText("等你确认");
   await expect(card.getByTestId("task-card-ask")).toContainText("需要你确认：保存自动化《自动喝药》（会按键）");
   await expect(card.getByTestId("task-card-allow-conversation")).toHaveText("本段对话都允许");
-  await card.screenshot({ path: testInfo.outputPath("task-card-waiting-dark.png"), animations: "disabled" });
+  await screenshot(card, { path: testInfo.outputPath("task-card-waiting-dark.png"), animations: "disabled" });
   await card.getByTestId("task-card-allow-once").click();
   expect(await calls(page, "agent_subagent_answer")).toEqual([{ conversationId: "c-main", name: "potion", answer: "allow-once" }]);
   await page.evaluate(() => window.taskTest.subagent({ name: "potion", status: "running", steps: 6 }));
@@ -199,7 +200,7 @@ test("a background task card follows its state: steps, confirmation, done with s
   await expect(page.getByTestId("agent-answer").last()).toHaveText("喝药脚本写好了，要现在打开吗？");
   await expect(page.getByTestId("agent-user-message")).toHaveText(["陪我打一局", "帮我写喝药脚本"]);
   await expect(page.getByTestId("assistant-chat")).not.toContainText("agent-report");
-  await page.screenshot({ path: testInfo.outputPath("task-card-done.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("task-card-done.png"), animations: "disabled" });
 });
 
 test("a running task can be stopped, an interrupted one continued, and a follow-up takes over the card", async ({ page }) => {

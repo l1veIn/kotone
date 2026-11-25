@@ -200,10 +200,11 @@ mod tests {
     /// reqwest 连不上时的错误带着 “for url (…)”：地址（和里面的 Key）不进这句话。
     #[tokio::test]
     async fn connect_errors_do_not_carry_the_url() {
-        let port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap().port()
-        };
+        // 占着一个端口但不 listen：连过去是“拒绝连接”，测试期间别的测试也绑不上它（放掉的话，
+        // Windows 连一个没人听的端口要重试约 2 秒，这期间谁在这个端口上 listen 就连上了）
+        let held = tokio::net::TcpSocket::new_v4().unwrap();
+        held.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = held.local_addr().unwrap().port();
         let url = format!("http://127.0.0.1:{port}/mcp?token=sk-secret-123");
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
@@ -218,5 +219,6 @@ mod tests {
             "{text}"
         );
         assert!(!text.is_empty());
+        drop(held);
     }
 }

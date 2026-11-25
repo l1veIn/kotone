@@ -1,5 +1,6 @@
 import { openSettingsTab } from "./nav";
 import { expect, test } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 「自动化」页（ADR 013 §8）：浏览器预览用示例数据，不运行任何程序。
 
@@ -35,7 +36,7 @@ test("one list: play / stop, temporary reminders, schedules, details and the ful
   await expect(loose).toHaveCount(1);
   await expect(loose).toContainText("界面示例：打野有闪了");
   await expect(loose).toContainText(/临时提醒/);
-  await page.screenshot({ path: testInfo.outputPath("automation-list.png"), animations: "disabled", fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("automation-list.png"), animations: "disabled", fullPage: true });
 
   await pressQ.getByTestId("automation-item-stop").click();
   await expect(pressQ.getByTestId("automation-item-play")).toBeVisible();
@@ -110,7 +111,7 @@ test("saved automations can be created with params and a schedule, edited and de
   await expect(editor.getByTestId("automation-schedule")).toContainText("30 9 * * 1-5");
   await editor.getByLabel("定时 key").fill("E");
   await editor.getByLabel("定时 key").blur();
-  await page.screenshot({ path: testInfo.outputPath("automation-editor.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("automation-editor.png"), fullPage: true });
   await editor.getByRole("button", { name: "保存", exact: true }).click();
 
   const saved = automation.getByTestId("automation-item").filter({ hasText: "每隔一会按 E" });
@@ -170,7 +171,7 @@ test("game events: the LoL template is off, and an 'ask her' automation saves wi
   await editor.getByTestId("automation-trigger-event").click();
   await page.getByRole("option", { name: "阶段变化", exact: true }).click();
   await expect(editor.getByTestId("automation-trigger-team")).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("automation-trigger.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("automation-trigger.png"), fullPage: true });
   await editor.getByRole("button", { name: "保存", exact: true }).click();
 
   const saved = automation.getByTestId("automation-item").filter({ hasText: "进对局一分钟提醒买眼" });

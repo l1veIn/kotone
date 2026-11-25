@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 // 第三方插件（MCP 方案第 2 期）的界面：插件页上的卡片和开关、“加 MCP 服务器”（粘贴配置、从 Claude Desktop 导入）
 // 和信任提示、点开以后的状态和工具列表、设置里填 Key / 信任 / 删掉。浏览器预览用 ipc/mcpServersMock（不连任何服务器）；
@@ -36,7 +37,7 @@ test("third-party cards sit in their own group with a badge, status, fallback lo
   await expect(card).toHaveAttribute("data-enabled", "false");
   await card.getByTestId("plugins-card-weather-enabled").click();
   await expect(card).toHaveAttribute("data-enabled", "true");
-  await page.screenshot({ path: testInfo.outputPath("mcp-cards.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("mcp-cards.png"), animations: "disabled" });
 });
 
 test("pasting a config shows the trust prompt (program, package, keys moving out) before anything is added", async ({ page }, testInfo) => {
@@ -70,7 +71,7 @@ test("pasting a config shows the trust prompt (program, package, keys moving out
   await expect(item.getByTestId("mcp-trust-facts-package")).toContainText("@modelcontextprotocol/server-github");
   await expect(item.getByTestId("mcp-trust-facts-moved")).toContainText("GITHUB_TOKEN");
   await expect(dialog).not.toContainText("ghp_secret");
-  await page.screenshot({ path: testInfo.outputPath("mcp-trust-prompt.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("mcp-trust-prompt.png"), animations: "disabled" });
   // 还没点“信任并添加”：什么都没加
   await expect(page.getByTestId("plugins-card-gh")).toHaveCount(0);
   await dialog.getByTestId("mcp-trust-confirm").click();
@@ -125,7 +126,7 @@ test("a third-party plugin opens to its status and tool list; settings fill the 
   await settings.getByTestId("remote-plugin-trust-button").click();
   await expect(settings.getByTestId("remote-plugin-trust")).toHaveAttribute("data-trusted", "true");
   await settings.getByTestId("remote-plugin-settings-reconnect").click();
-  await page.screenshot({ path: testInfo.outputPath("mcp-settings.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("mcp-settings.png"), animations: "disabled" });
 
   // 回到它的页面：连上了，一页工具列表（只读的标出来）
   await page.getByTestId("plugin-app-name").click();
@@ -134,7 +135,7 @@ test("a third-party plugin opens to its status and tool list; settings fill the 
   const echo = app.locator('[data-tool="weather.echo"]');
   await expect(echo.getByTestId("remote-plugin-tool-read-only")).toBeVisible();
   await expect(app.locator('[data-tool="weather.add"]').getByTestId("remote-plugin-tool-read-only")).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("mcp-tools.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("mcp-tools.png"), animations: "disabled" });
 
   // 删掉：先问，删完回到插件页
   await page.getByTestId("plugin-settings-button").click();
@@ -168,7 +169,7 @@ test("mcp.json entries that clash with built-in plugins are listed with the reas
   await expect(page.getByTestId("plugins-grid").getByTestId("plugins-card-lol")).toBeVisible();
   await expect(page.getByTestId("plugins-card-lol-third-party")).toHaveCount(0);
   await status.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("mcp-problems.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("mcp-problems.png"), animations: "disabled" });
   // 从 mcp.json 删掉那一项：只删它，内置的照旧
   await status.locator('[data-id="lol"]').getByTestId("plugins-mcp-problem-remove").click();
   await expect(status.locator('[data-id="lol"]')).toHaveCount(0);

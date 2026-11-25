@@ -853,10 +853,11 @@ async fn discovery_rejects_stale_insecure_and_foreign_descriptors() {
     write(&d);
     let client = ToolClient::discover(h.dir.path(), h.host.as_ref()).unwrap();
     assert_eq!(client.status().await.unwrap_err().code, "INSTANCE_MISMATCH");
-    // 端口上没有服务 → SERVICE_UNREACHABLE
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // 端口上没有服务 → SERVICE_UNREACHABLE。占着端口但不 listen：连过去是“拒绝连接”，别的测试也绑不上它
+    // （绑了再放掉不行：Windows 连没人听的端口要重试约 2 秒，这期间谁在这个端口上 listen 就连上了）
+    let closed = tokio::net::TcpSocket::new_v4().unwrap();
+    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let port = closed.local_addr().unwrap().port();
-    drop(closed);
     let mut d = original.clone();
     d.address = format!("127.0.0.1:{port}");
     write(&d);
@@ -865,6 +866,7 @@ async fn discovery_rejects_stale_insecure_and_foreign_descriptors() {
         client.status().await.unwrap_err().code,
         "SERVICE_UNREACHABLE"
     );
+    drop(closed);
     // 恢复原文件后可以正常使用
     write(&original);
     let client = ToolClient::discover(h.dir.path(), h.host.as_ref()).unwrap();

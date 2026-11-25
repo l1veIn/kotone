@@ -1,5 +1,6 @@
 import { openSettingsTab, openVoiceInput } from "./nav";
 import { expect, test, type Page } from "@playwright/test";
+import { screenshot } from "./screenshot.cjs";
 
 const message = (page: Page) => page.getByTestId("danmaku-message");
 
@@ -48,7 +49,7 @@ test("danmaku moves right to left at the configured speed without a plate or poi
   const duration = Number(await message(page).getAttribute("data-duration-ms"));
   await seek(page, duration / 2);
   await message(page).locator("img").evaluate((image: HTMLImageElement) => image.decode());
-  await page.screenshot({ path: testInfo.outputPath("danmaku-floating.png"), omitBackground: true });
+  await screenshot(page, { path: testInfo.outputPath("danmaku-floating.png"), omitBackground: true });
 
   await page.evaluate(() => {
     (window as Window & { finishedDanmaku?: number }).finishedDanmaku = undefined;
@@ -123,7 +124,7 @@ test("top offset keeps the old default, accepts zero and fits large text plus em
   await expect(message(page)).toHaveAttribute("data-duration-ms", /\d/);
   await seek(page, Number(await message(page).getAttribute("data-duration-ms")) / 2);
   await message(page).locator("img").evaluate((image: HTMLImageElement) => image.decode());
-  await page.screenshot({ path: testInfo.outputPath("danmaku-position.png"), omitBackground: true });
+  await screenshot(page, { path: testInfo.outputPath("danmaku-position.png"), omitBackground: true });
 });
 
 test("resize updates vertical bounds without restarting travel and removes position observers on destroy", async ({ page }) => {
@@ -267,8 +268,8 @@ test("appearance settings persist speed, font, exact top offset, color and built
   await openSettingsTab(page, "reply");
   await expect(topNumber).toHaveValue("345");
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: "弹幕样式已保存" })).toHaveCount(0);
-  await settings.screenshot({ path: testInfo.outputPath("danmaku-settings.png") });
+  await screenshot(settings, { path: testInfo.outputPath("danmaku-settings.png") });
   await page.setViewportSize({ width: 1040, height: 900 });
   await page.getByRole("main").evaluate((element) => { element.scrollTop = element.scrollHeight; });
-  await page.screenshot({ path: testInfo.outputPath("danmaku-settings-fullscreen-hint.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("danmaku-settings-fullscreen-hint.png"), animations: "disabled" });
 });

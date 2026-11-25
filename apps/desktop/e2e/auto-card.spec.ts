@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { openSettingsTab } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 // 自动卡片和消息提示（ADR 039 D3、D4）：用 @tauri-apps/api/mocks 模拟 agent_* 命令和 kotone://agent-* 事件，不接任何 AI。
 // 后端怎么存、什么时候追加给她的那句，由 Rust 单元测试（kotone-agent auto_card）和真机脚本 auto_card_real.py 管。
@@ -115,7 +116,7 @@ test("an auto card shows in the chat as from 英雄联盟, opens in the right si
   await expect(page.getByTestId("agent-turn").last().getByTestId("auto-card")).toHaveCount(1);
   await expect(page.getByTestId("agent-turn").last().getByTestId("agent-answer")).toHaveCount(0);
   await card.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: shot("chat-auto-card") });
+  await screenshot(page, { path: shot("chat-auto-card") });
 
   await card.getByTestId("plugin-card-open").click();
   const sidebar = page.getByTestId("right-sidebar");
@@ -174,7 +175,7 @@ test("the switches for auto cards and the message pop-up live in 交互 and defa
   await expect(page.getByTestId("auto-cards-enabled")).toBeChecked();
   await expect(page.getByTestId("auto-cards-popup")).toBeChecked();
   await page.locator("#settings-reply-auto-cards").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: shot("settings-auto-cards") });
+  await screenshot(page, { path: shot("settings-auto-cards") });
   await page.getByTestId("auto-cards-popup").click();
   await expect(page.getByTestId("auto-cards-popup")).not.toBeChecked();
   const patches = await page.evaluate(() => window.autoCardTest.calls.filter((c) => c.command === "update_settings").map((c) => c.args?.patch));
@@ -194,7 +195,7 @@ test("the message pop-up window: avatar, name · plugin, one line; click opens, 
   const box = await popup.boundingBox();
   expect(Math.round(box?.width ?? 0)).toBe(320);
   expect(Math.round(box?.height ?? 0)).toBe(72);
-  await page.screenshot({ path: shot("message-popup-preview") });
+  await screenshot(page, { path: shot("message-popup-preview") });
   // 鼠标停在上面：× 出来；点 × 只关掉
   await popup.hover();
   await page.getByTestId("message-popup-close").click();

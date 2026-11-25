@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openChat, openSettingsTab } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 // ADR 022 / 023 / 028：角色页只有“角色 / 记忆 / 技能”（聊天从侧栏进入，设置在「设置」）。浏览器预览用内存里的示例工作区和示例角色。
 test("rename her, edit SOUL, memory and game memory, manage skills", async ({ page }, testInfo) => {
@@ -31,7 +32,7 @@ test("rename her, edit SOUL, memory and game memory, manage skills", async ({ pa
   await soul.fill("长".repeat(4001));
   await expect(page.getByTestId("identity-soul-save")).toBeDisabled();
   await expect(page.getByTestId("identity-soul-count")).toHaveClass(/text-destructive/);
-  await page.screenshot({ path: testInfo.outputPath("identity.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("identity.png"), fullPage: true });
 
   // 头像：超过 2 MB 被拒
   await page.getByTestId("identity-avatar-input").setInputFiles({ name: "big.png", mimeType: "image/png", buffer: Buffer.alloc(2 * 1024 * 1024 + 1) });
@@ -46,7 +47,7 @@ test("rename her, edit SOUL, memory and game memory, manage skills", async ({ pa
   await expect(page.getByTestId("memory-user-save")).toBeDisabled();
   await expect(page.getByTestId("memory-game")).toHaveText(["pubg"]);
   await expect(page.getByTestId("memory-game-editor-text")).toHaveValue(/P 城/);
-  await page.screenshot({ path: testInfo.outputPath("memory.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("memory.png"), fullPage: true });
   await page.getByTestId("memory-game-delete").click();
   await page.getByTestId("memory-game-delete-confirm").click();
   await expect(page.getByTestId("memory-games-empty")).toBeVisible();
@@ -57,7 +58,7 @@ test("rename her, edit SOUL, memory and game memory, manage skills", async ({ pa
   await expect(page.getByTestId("assistant-nav-memory")).not.toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("skill")).toHaveCount(1);
   await expect(page.getByTestId("skill")).toContainText("pubg-callouts");
-  await page.screenshot({ path: testInfo.outputPath("skills.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("skills.png"), fullPage: true });
   await page.getByTestId("skill-delete").click();
   await page.getByTestId("skill-delete-confirm").click();
   await expect(page.getByTestId("skills-empty")).toBeVisible();
@@ -121,7 +122,7 @@ test("roles: switch, create, wake word check, placeholder avatar", async ({ page
   await page.getByTestId("role-wake-reading").selectOption("háng");
   await page.getByTestId("role-wake-save").click();
   await expect(page.getByTestId("role-wake-save")).toBeDisabled();
-  await page.screenshot({ path: testInfo.outputPath("roles.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("roles.png"), fullPage: true });
 
   // 删掉自己建的角色；换回琴音
   await page.getByTestId("role-delete").click();

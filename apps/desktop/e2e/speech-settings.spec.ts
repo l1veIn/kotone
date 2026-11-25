@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openSettingsTab, openVoiceInput } from "./nav";
 import type { SpeechModelStatus } from "../src/lib/assistant";
+import { screenshot } from "./screenshot.cjs";
 
 declare global {
   interface Window {
@@ -132,9 +133,9 @@ test("browser preview clearly shows an uninstalled model, disables download and 
   expect(result).toContain("请在桌面应用中下载语音模型");
   expect(external).toEqual([]);
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
-  await page.screenshot({ path: testInfo.outputPath("assistant-settings-top.png"), fullPage: true, animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("assistant-settings-top.png"), fullPage: true, animations: "disabled" });
   await page.getByTestId("danmaku-settings").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("assistant-settings-bottom.png"), fullPage: true, animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("assistant-settings-bottom.png"), fullPage: true, animations: "disabled" });
 });
 
 test("native download progress, failure, retry and cancellation remain actionable", async ({ page }) => {

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openChat, openSettingsTab, openVoiceInput } from "./nav";
+import { screenshot } from "./screenshot.cjs";
 
 test("chat is home and keeps the draft across the role tabs and 设置; speech lives in 设置 and defaults to automatic", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1040, height: 1000 });
@@ -11,7 +12,7 @@ test("chat is home and keeps the draft across the role tabs and 设置; speech l
   // 进行中的提醒与自动化只在这里显示概况（预览数据：1 条提醒等待中、1 个自动化运行中）
   await expect(page.getByTestId("assistant-open-summary")).toContainText("1 条提醒、1 个自动化");
   await page.getByTestId("assistant-request").fill("5 分钟后提醒我打野有闪");
-  await page.screenshot({ path: testInfo.outputPath("assistant-tasks.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("assistant-tasks.png"), animations: "disabled" });
   // 角色页（角色 · 记忆 · 技能）：聊天藏起来但草稿还在
   await page.getByTestId("settings-nav-assistant").click();
   await expect(page.getByTestId("assistant-tasks")).not.toBeVisible();
@@ -25,7 +26,7 @@ test("chat is home and keeps the draft across the role tabs and 设置; speech l
   await expect(page.getByTestId("assistant-settings")).toHaveCount(0);
   await expect(page.getByTestId("settings-reply-model-moved")).toBeVisible();
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
-  await page.screenshot({ path: testInfo.outputPath("settings-reply.png"), animations: "disabled" });
+  await screenshot(page, { path: testInfo.outputPath("settings-reply.png"), animations: "disabled" });
   // 去设置转一圈回来，草稿还在
   await openChat(page);
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
@@ -40,7 +41,7 @@ test("chat is home and keeps the draft across the role tabs and 设置; speech l
   await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "auto");
   await expect(output.getByTestId("auto-speech-info")).toContainText("自动用 DeepSeek 语音");
   await expect(output.getByRole("button", { name: "下载语音模型", exact: true })).toHaveCount(0);
-  await output.screenshot({ path: testInfo.outputPath("output-settings.png") });
+  await screenshot(output, { path: testInfo.outputPath("output-settings.png") });
 });
 
 test("呼叫琴音 has one key (default ~) and no input-mode choice; the chat offers a call button instead of push-to-talk", async ({ page }) => {
@@ -111,7 +112,7 @@ test("assistant preview labels itself and never pretends to run AI", async ({ pa
   expect(externalRequests).toEqual([]);
   await page.setViewportSize({ width: 1040, height: 1150 });
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
-  await page.screenshot({ path: testInfo.outputPath("assistant-preview.png"), fullPage: true });
+  await screenshot(page, { path: testInfo.outputPath("assistant-preview.png"), fullPage: true });
 });
 
 test("assistant shares connections and saves voice/delivery settings with an independent conflict-checked hotkey", async ({ page }) => {
@@ -218,5 +219,5 @@ test("calling her opens a call; how long it stays open and echo cancellation are
   await expect(echo).not.toBeChecked();
   saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant.echoCancellation).toBe(false);
-  await talk.screenshot({ path: testInfo.outputPath("call-settings.png"), animations: "disabled" });
+  await screenshot(talk, { path: testInfo.outputPath("call-settings.png"), animations: "disabled" });
 });
