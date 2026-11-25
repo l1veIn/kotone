@@ -114,8 +114,12 @@ fn core_against_core() {
 
 #[test]
 fn core_against_plugin() {
-    let settings = Settings::default();
-    // 语音输入热键默认 CapsLock、切换频道默认 Shift+CapsLock
+    // 新装不再默认带频道切换（ADR 040 D4）：这里是老用户迁移来的 Shift+CapsLock
+    let settings = Settings {
+        channel_cycle_hotkey: "Shift+CapsLock".into(),
+        ..Default::default()
+    };
+    // 语音输入热键默认 CapsLock、切换频道 Shift+CapsLock
     assert_eq!(
         check_ids(&settings, "CapsLock", Some(HK_ASSISTANT)),
         vec![HK_RECORD]

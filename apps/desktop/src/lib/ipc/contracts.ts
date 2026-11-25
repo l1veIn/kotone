@@ -204,6 +204,25 @@ export interface Settings {
    * 搬到 `plugins.music.settings`）。
    */
   plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown> }>;
+  /**
+   * 热键表（ADR 040 D8，后端 `kotone_core::hotkey_bindings`）。热键的旧字段（`hotkey.key`、`channelCycleHotkey`、
+   * 呼叫键……）是它的镜像，后端每次保存照表写回；改旧字段也会改进表里。
+   */
+  hotkeys?: HotkeysConfig;
+}
+
+/** 表里的一条：`key` 加上 `command`（`<来源>.<命令 id>`）/ `tool` + `args` / `page` 三选一；读不懂的字段原样保留。 */
+export interface HotkeyBinding {
+  key: string;
+  command?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  page?: string;
+  [field: string]: unknown;
+}
+
+export interface HotkeysConfig {
+  bindings: HotkeyBinding[];
 }
 
 export interface OcrConfig {

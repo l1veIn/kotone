@@ -66,8 +66,10 @@ pub struct Settings {
     pub vad_silence_ms: u32,
     /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
     pub run_as_admin_on_start: bool,
-    /// 频道切换热键（ADR-008；默认 Shift+CapsLock）。按声明顺序循环切换当前
+    /// 频道切换热键（ADR-008）。按声明顺序循环切换当前
     /// profile 的聊天频道；与录制热键冲突时后端拒绝注册并在状态里给出错误。
+    /// 新装默认空（ADR 040 D4；以前默认 Shift+CapsLock，老用户迁移进表照旧生效）。
+    /// 这一项和下面几个热键字段、`hotkey.key`、呼叫键现在都是 [`Settings::hotkeys`] 的镜像（只读，见 `hotkey_bindings`）。
     #[serde(default = "default_channel_cycle_hotkey")]
     pub channel_cycle_hotkey: String,
     /// 重发最近一条热键（默认空 = 关闭）。Idle 时按下把历史最新一条发送成功的
@@ -155,6 +157,11 @@ pub struct Settings {
     /// 旧的 `lol.enabled`（ADR 035）读进来时搬到 `plugins.lol.sources.client`（[`migrate_plugins_json`]）。
     #[serde(default)]
     pub plugins: std::collections::BTreeMap<String, PluginConfig>,
+    /// 热键表（ADR 040 D8）：`hotkeys.bindings`，每条 键 + 命令（第 3 期还有工具、页面）。新字段，旧版本会忽略；
+    /// 热键的旧字段（`hotkey.key`、`channelCycleHotkey`……、呼叫键）是它的镜像，每次保存照表写全
+    /// （[`crate::hotkey_bindings`]：读旧写新、旧写法照样能改）。
+    #[serde(default)]
+    pub hotkeys: crate::hotkey_bindings::HotkeysConfig,
 }
 
 /// 一个插件的设置（config.json `plugins.<id>`，ADR 038 D6）。没写的项按插件清单（`plugin.toml`）的默认。
@@ -706,6 +713,7 @@ impl Default for Settings {
             search: SearchConfig::default(),
             browser: BrowserConfig::default(),
             plugins: Default::default(),
+            hotkeys: Default::default(),
         }
     }
 }
@@ -847,9 +855,10 @@ fn default_vad_silence_ms() -> u32 {
     crate::vad::DEFAULT_SILENCE_MS
 }
 
-/// 频道切换热键默认值（ADR-008）
+/// 频道切换热键默认值：新装不带（ADR 040 D4）。旧版本的默认 Shift+CapsLock 只在迁移老配置时用
+/// （[`crate::hotkey_bindings::LEGACY`]）。
 fn default_channel_cycle_hotkey() -> String {
-    "Shift+CapsLock".into()
+    String::new()
 }
 
 /// Kotone 用户数据目录：~/.kotone/
@@ -934,6 +943,8 @@ impl SettingsRepository {
         let old = self.current.read().unwrap().clone();
         let mut next = old.clone();
         mutate(&mut next)?;
+        // 热键：改了旧字段（旧写法）就改表，最后把旧字段照表写回（ADR 040 D8）
+        next.reconcile_hotkeys(&old);
         save_to(&self.path, &next)?;
 
         let applied = match apply(&old, &next) {
@@ -1005,6 +1016,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     migrate_call_hotkey_json(&mut user);
     migrate_call_idle_json(&mut user);
     migrate_plugins_json(&mut user);
+    crate::hotkey_bindings::migrate_hotkeys_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
@@ -1014,6 +1026,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     settings.assistant.normalize_voices();
     migrate_legacy_engine_ids(&mut settings);
     settings.post_processing.normalize_active_id();
+    settings.sync_hotkey_mirrors();
     SettingsLoadResult {
         settings,
         warning: None,
@@ -1437,6 +1450,9 @@ pub fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
     }
+    // 热键的旧字段是表的镜像：有代码直接改了旧字段（没经过 reconcile）时，先算进表里（ADR 040 D8）
+    let fixed = crate::hotkey_bindings::with_direct_edits(settings);
+    let settings = fixed.as_ref().unwrap_or(settings);
     let mut value = serde_json::to_value(settings).map_err(|e| format!("序列化配置失败: {e}"))?;
     stash_voice_input_json(&mut value);
     let json = serde_json::to_string_pretty(&value).map_err(|e| format!("序列化配置失败: {e}"))?;
@@ -1919,7 +1935,9 @@ mod tests {
             "cpu"
         );
         assert!(!s.run_as_admin_on_start);
-        assert_eq!(s.channel_cycle_hotkey, "Shift+CapsLock");
+        // 新装不再默认带频道切换（ADR 040 D4）；表里正好呼叫键、停下热键、说话三条
+        assert_eq!(s.channel_cycle_hotkey, "");
+        assert_eq!(s.hotkeys.bindings.len(), 3);
         assert!(!s.admin_prompt_dismissed);
         assert!(!s.auto_admin_prompt_dismissed);
         assert_eq!(s.history.mode, crate::history::HistoryMode::Capped);

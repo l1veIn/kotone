@@ -1236,7 +1236,11 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
     let mut merged =
         serde_json::to_value(current).map_err(|e| format!("序列化当前配置失败: {e}"))?;
     settings::merge_json(&mut merged, &patch);
-    serde_json::from_value(merged).map_err(|e| format!("值「{raw}」对 {key} 不合法: {e}"))
+    let mut next: Settings =
+        serde_json::from_value(merged).map_err(|e| format!("值「{raw}」对 {key} 不合法: {e}"))?;
+    // 热键的旧字段（hotkey.key……）是热键表的镜像：改了它就改表（ADR 040 D8）
+    next.reconcile_hotkeys(current);
+    Ok(next)
 }
 
 /// 点路径读取（只读，允许任意存在的路径）
@@ -1822,6 +1826,8 @@ mod tests {
     fn config_set_hotkey_key() {
         let s = apply_config_set(&Settings::default(), "hotkey.key", "F9").unwrap();
         assert_eq!(s.hotkey.key, "F9");
+        // 存进热键表（ADR 040 D8）：旧写法照样能改
+        assert_eq!(s.binding_key(kotone_core::hotkey_bindings::CMD_TALK), "F9");
         // 其余字段不受影响
         assert_eq!(s.hotkey.mode, kotone_core::hotkey::HotkeyMode::Toggle);
     }

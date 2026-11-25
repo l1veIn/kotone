@@ -74,6 +74,7 @@
 | 本体 | Kotone 自己：感官和表达（耳、眼、嘴、手）、对话、自动化、宿主（ADR 038 D2）。语音识别和往游戏聊天里打字也在本体（ADR 039 D2） | core |
 | 插件 | 装在本体上的 App（ADR 038），界面上的说法见上一节 | plugin |
 | 琴音 | 角色（默认的那个）。讲“谁在听、谁在说、谁在想”时用；玩家可以换角色 | Kotone (the character) |
+| 命令 / 热键表 | 命令：能绑热键的一件事，`<来源>.<命令 id>`（本体的 `kotone.call`、插件 `plugin.toml` 里 `[[commands]]` 登记的 `voice-input.talk`）。热键表：config.json 的 `hotkeys.bindings`，每条 键 + 命令（第 3 期还有工具、页面）；热键的旧字段（`hotkey.key`、`channelCycleHotkey`……）是它的镜像（ADR 040 D1、D8）。界面上不说“命令”，行名就是命令的名字 | command / hotkey table |
 
 ## 游戏陪玩的核心概念（ADR 028）
 

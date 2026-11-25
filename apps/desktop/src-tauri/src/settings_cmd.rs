@@ -87,6 +87,8 @@ pub(crate) fn update_settings(
                 serde_json::to_value(&*next).map_err(|e| format!("序列化配置失败: {e}"))?;
             settings::merge_json(&mut merged, &patch);
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
+            // 热键：旧字段（hotkey.key……）改了就改表，再照表写回（ADR 040 D8）；下面的检查看的是对齐以后的值
+            next.reconcile_hotkeys(&previous);
             next.overlay.normalize_interaction();
             next.assistant.normalize_voices();
             next.ui.sidebar.normalize();
