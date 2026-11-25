@@ -43,39 +43,6 @@ pub fn conversation_store(app: &AppHandle) -> Result<Arc<ConversationStore>, Str
     store(app)
 }
 
-/// 等琴音空下来（最多 3 分钟），把一条说明加到当前对话末尾（没有当前对话就加到最近的主对话）；
-/// 不发给模型。返回加到了哪段对话。
-pub async fn append_notice_when_idle(app: &AppHandle, notice: Message) -> Option<String> {
-    let messages = [notice];
-    for attempt in 0..90 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
-        if is_running(app) {
-            continue;
-        }
-        let store = store(app).ok()?;
-        let id = store.current().or_else(|| {
-            store
-                .list()
-                .into_iter()
-                .find(|c| c.parent.is_none())
-                .map(|c| c.id)
-        })?;
-        // 和 send_message 同一把锁读、改、存（她恰好开始了一轮就再等）
-        match append_to_conversation(app, &id, &messages, IfBusy::Wait) {
-            Ok(Appended::Saved) => return Some(id),
-            Ok(Appended::Busy | Appended::Steered) => continue,
-            Ok(Appended::Gone) => return None,
-            Err(e) => {
-                log::log(&format!("agent: save failed: {e}"));
-                return None;
-            }
-        }
-    }
-    None
-}
-
 /// 主会话正在回答吗。
 pub fn is_running(app: &AppHandle) -> bool {
     runtime(app).is_ok_and(|rt| rt.inner.lock().unwrap().running.is_some())

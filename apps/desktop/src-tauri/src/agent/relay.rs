@@ -22,7 +22,7 @@ async fn wait_quiet(app: &AppHandle, span: std::time::Duration) {
 }
 
 /// 现在能不能插进主会话说一句：她没在回答、玩家没在说话、没有提问在等回答。
-/// 自动卡片（`auto_card.rs`）也用它判断什么时候把给她的那句记进对话。
+/// 她正忙时插进来的（自动卡片、复盘、自动化的结果，`when_free.rs`）也用它判断什么时候记进对话。
 pub(super) fn main_is_quiet(app: &AppHandle) -> bool {
     if is_running(app) || crate::voice_ask::is_pending(app) || crate::assistant::output_busy(app) {
         return false;
@@ -117,9 +117,25 @@ pub(super) fn schedule_report(app: &AppHandle, main: &str) {
 /// “让她做”最多等主会话空下来多久（玩家一直在和她说话就算了：事件已经过去了）。
 const PROMPT_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// “让她做”等过 [`PROMPT_WAIT`] 没做时，留在聊天里给玩家看的那一句（不发给模型）。
+fn prompt_skipped_notice(name: &str) -> Message {
+    Message::Notice {
+        text: format!(
+            "自动化「{name}」要她做的事没做：她一直在忙，等了 {} 分钟，已经过时了",
+            PROMPT_WAIT.as_secs() / 60
+        ),
+        at_ms: now_ms(),
+        compaction: None,
+        usage: None,
+        recap: None,
+        card: None,
+    }
+}
+
 /// 自动化“让她做”（ADR 036 D8）：等主会话空下来，放一条系统消息进当前对话，让她跑一轮。
 /// 来源是 `automation`：界面当系统消息显示；算游戏里的入口（开口说）；不是玩家亲口说的，
-/// 这一轮不能交给后台（ADR 030 第 2 节）。触发它的游戏事件按数据附上。
+/// 这一轮不能交给后台（ADR 030 第 2 节）。触发它的游戏事件按数据附上。等过 [`PROMPT_WAIT`] 还不空就不做了
+/// （事件已经过去了），但在聊天里留一句（照 `when_free.rs` 排着，不悄悄丢；共享资源评估第二节第 9 条）。
 pub fn run_prompt(
     app: &AppHandle,
     name: &str,
@@ -155,6 +171,7 @@ pub fn run_prompt(
                 log::log(&format!(
                     "automation {name}: 她一直没空，这次“让她做”不做了"
                 ));
+                post_notice(&app, prompt_skipped_notice(&name));
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -166,11 +183,12 @@ pub fn run_prompt(
     });
 }
 
-/// 只把一条消息记进某段对话（不调用模型）；那段对话恰好在跑就作为插话交给它（和 `send_message` 同一把锁，
-/// 见 [`append_to_conversation`]）。
+/// 只把一条消息记进某段对话（不调用模型）；那段对话恰好在跑就作为插话交给它，她正忙就排着（`when_free.rs`）。
 fn append_to(app: &AppHandle, id: &str, message: Message) {
-    if let Err(e) = append_to_conversation(app, id, &[message], IfBusy::Steer) {
-        log::log(&format!("agent: background result not saved: {e}"));
+    match post(app, id, &[message], IfBusy::Steer) {
+        Ok(Posted::Gone) => log::log(&format!("agent: background result not saved: {id} 没了")),
+        Ok(_) => {}
+        Err(e) => log::log(&format!("agent: background result not saved: {e}")),
     }
 }
 
@@ -357,5 +375,21 @@ mod tests {
         assert!(
             matches!(&attachments[..], [Attachment::Data { text, .. }] if text.contains("26.22"))
         );
+    }
+
+    /// “让她做”过时没做：留给玩家看的是一条说明（`Notice` 不发给模型，她不会照着晚做），说清是哪个自动化、为什么。
+    #[test]
+    fn a_skipped_prompt_leaves_a_line_for_the_player() {
+        let Message::Notice {
+            text, card, recap, ..
+        } = prompt_skipped_notice("进加载播报突破口")
+        else {
+            panic!("要是 Notice")
+        };
+        assert_eq!(
+            text,
+            "自动化「进加载播报突破口」要她做的事没做：她一直在忙，等了 2 分钟，已经过时了"
+        );
+        assert!(card.is_none() && recap.is_none());
     }
 }

@@ -241,54 +241,38 @@ fn claim_picked(
     })))
 }
 
-/// 往对话末尾追加时，那段对话正在跑一轮怎么办。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum IfBusy {
-    /// 不写，返回 [`Appended::Busy`]：调用方自己等（自动卡片、复盘提示：不插进正在跑的那一轮）。
-    Wait,
-    /// 作为插话交给正在跑的那一轮（自动化的结果、交回的后台结果：本来就要她看）。
-    Steer,
-}
-
 /// 往对话末尾追加的结果。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Appended {
     /// 存进对话了。
     Saved,
-    /// 那段对话在跑，作为插话交给它了（[`IfBusy::Steer`]）。
-    Steered,
-    /// 那段对话在跑，没写（[`IfBusy::Wait`]）。
+    /// 那段对话在跑，没写。
     Busy,
     /// 那段对话没了（被删了）。
     Gone,
 }
 
+/// 这段对话（主会话，或后台的一件事）正在跑的那一轮。
+fn running_in<'a>(inner: &'a Inner, id: &str) -> Option<&'a Running> {
+    inner
+        .running
+        .as_ref()
+        .filter(|r| r.conversation_id == id)
+        .or_else(|| inner.children.get(id).and_then(|c| c.running.as_ref()))
+}
+
 /// 往对话末尾追加几条，不叫模型。和 [`claim_main`] 认领 `running` 同一把锁，读、改、存都在锁里：正要开始的一轮
-/// 在认领之后才读对话，看得到这里写的；那段对话（主会话，或后台的一件事）正在跑时不写——那一轮存盘时会把这里写的
-/// 盖掉——照 `if_busy` 插话或者交回调用方等。所有往对话里追加的都走这里（原则 15）。
-fn append_locked(
+/// 在认领之后才读对话，看得到这里写的；那段对话正在跑时不写（那一轮存盘时会把这里写的盖掉），返回
+/// [`Appended::Busy`]。所有往对话里追加的都走这里（原则 15）；她正忙时怎么排只写在 `when_free.rs`。
+pub(super) fn append_locked(
     inner: &Mutex<Inner>,
     store: &ConversationStore,
     id: &str,
     messages: &[Message],
-    if_busy: IfBusy,
 ) -> Result<Appended, String> {
     let inner = inner.lock().unwrap();
-    let running = inner
-        .running
-        .as_ref()
-        .filter(|r| r.conversation_id == id)
-        .or_else(|| inner.children.get(id).and_then(|c| c.running.as_ref()));
-    if let Some(running) = running {
-        // 转到后台的工具没有模型在读收件箱：插不进话，算在忙
-        return Ok(if if_busy == IfBusy::Steer && !running.moved_tool {
-            for message in messages {
-                running.inbox.steer(message.clone());
-            }
-            Appended::Steered
-        } else {
-            Appended::Busy
-        });
+    if running_in(&inner, id).is_some() {
+        return Ok(Appended::Busy);
     }
     let Some(mut conversation) = store.load(id)? else {
         return Ok(Appended::Gone);
@@ -298,28 +282,17 @@ fn append_locked(
     Ok(Appended::Saved)
 }
 
-/// [`append_locked`]，存进去了再通知界面。
-pub(super) fn append_to_conversation(
-    app: &AppHandle,
-    id: &str,
-    messages: &[Message],
-    if_busy: IfBusy,
-) -> Result<Appended, String> {
-    let rt = runtime(app)?;
-    let store = store(app)?;
-    let appended = append_locked(&rt.inner, &store, id, messages, if_busy)?;
-    if appended == Appended::Saved {
-        for message in messages {
-            emit(
-                app,
-                id,
-                event_json(&AgentEvent::Appended {
-                    message: message.clone(),
-                }),
-            );
-        }
+/// 那段对话正有模型在跑一轮：作为插话交给它，返回 true。没在跑，或者在跑的是转到后台的工具（没有模型读收件箱，
+/// 插不进话）：false。
+pub(super) fn steer_locked(inner: &Mutex<Inner>, id: &str, messages: &[Message]) -> bool {
+    let inner = inner.lock().unwrap();
+    let Some(running) = running_in(&inner, id).filter(|r| !r.moved_tool) else {
+        return false;
+    };
+    for message in messages {
+        running.inbox.steer(message.clone());
     }
-    Ok(appended)
+    true
 }
 
 /// 一轮接一轮地跑，直到没有待处理的消息。
@@ -968,11 +941,11 @@ pub fn on_run_finished(app: &AppHandle, run: &Run) {
         at_ms: now_ms(),
         context: String::new(),
     };
-    // 主会话或后台的那件事还在做：作为插话交给它。没在跑：只记进对话，不自动调用模型（不花钱）；玩家下次说话时
-    // 模型能看到。
-    match append_to_conversation(app, &conversation_id, &[message], IfBusy::Steer) {
-        Ok(Appended::Busy) => log::log(&format!(
-            "agent: 自动化 {} 的结果没能交回对话 {conversation_id}（那边插不进话）",
+    // 主会话或后台的那件事还有模型在跑：作为插话交给它。没在跑：只记进对话，不自动调用模型（不花钱）；玩家下次说话时
+    // 模型能看到。插不进话（转到后台的工具在跑）、她正忙：排着，空了再记（when_free.rs，不丢）。
+    match post(app, &conversation_id, &[message], IfBusy::Steer) {
+        Ok(Posted::Gone) => log::log(&format!(
+            "agent: 自动化 {} 的结果没交回：对话 {conversation_id} 没了",
             run.id
         )),
         Ok(_) => {}
@@ -1039,7 +1012,7 @@ mod tests {
         assert!(!has_card(&picked.messages));
         // 这时候还没人认领：自动卡片记进去了
         assert_eq!(
-            append_locked(&inner, &store, &id, &card(), IfBusy::Wait).unwrap(),
+            append_locked(&inner, &store, &id, &card()).unwrap(),
             Appended::Saved
         );
         let Claim::Started(started) =
@@ -1083,14 +1056,11 @@ mod tests {
         assert_eq!(conversation.id, id);
         let before = store.load(&id).unwrap().unwrap().messages.len();
         assert_eq!(
-            append_locked(&inner, &store, &id, &card(), IfBusy::Wait).unwrap(),
+            append_locked(&inner, &store, &id, &card()).unwrap(),
             Appended::Busy
         );
         let report = vec![Message::user("<agent-report>")];
-        assert_eq!(
-            append_locked(&inner, &store, &id, &report, IfBusy::Steer).unwrap(),
-            Appended::Steered
-        );
+        assert!(steer_locked(&inner, &id, &report));
         assert!(
             matches!(inbox.next_follow_up(), Some(Message::User { text, .. }) if text == "<agent-report>"),
             "交回的结果作为插话给这一轮"
@@ -1105,19 +1075,20 @@ mod tests {
         let mut other = store.create();
         store.save(&mut other).unwrap();
         assert_eq!(
-            append_locked(&inner, &store, &other.id, &card(), IfBusy::Wait).unwrap(),
+            append_locked(&inner, &store, &other.id, &card()).unwrap(),
             Appended::Saved
         );
         assert_eq!(
-            append_locked(&inner, &store, "c-gone", &card(), IfBusy::Wait).unwrap(),
+            append_locked(&inner, &store, "c-gone", &card()).unwrap(),
             Appended::Gone
         );
         // 这一轮存盘、结束
         conversation.messages.push(assistant("在", &[]));
         store.save(&mut conversation).unwrap();
         inner.lock().unwrap().running = None;
+        assert!(!steer_locked(&inner, &id, &report), "没在跑：插不进话");
         assert_eq!(
-            append_locked(&inner, &store, &id, &card(), IfBusy::Wait).unwrap(),
+            append_locked(&inner, &store, &id, &card()).unwrap(),
             Appended::Saved
         );
         let saved = store.load(&id).unwrap().unwrap().messages;
@@ -1158,17 +1129,19 @@ mod tests {
             .unwrap()
             .children
             .insert(child.id.clone(), running(false));
+        assert!(steer_locked(&inner, &child.id, &message));
         assert_eq!(
-            append_locked(&inner, &store, &child.id, &message, IfBusy::Steer).unwrap(),
-            Appended::Steered
+            append_locked(&inner, &store, &child.id, &message).unwrap(),
+            Appended::Busy
         );
         inner
             .lock()
             .unwrap()
             .children
             .insert(child.id.clone(), running(true));
+        assert!(!steer_locked(&inner, &child.id, &message));
         assert_eq!(
-            append_locked(&inner, &store, &child.id, &message, IfBusy::Steer).unwrap(),
+            append_locked(&inner, &store, &child.id, &message).unwrap(),
             Appended::Busy
         );
         assert!(store.load(&child.id).unwrap().unwrap().messages.is_empty());

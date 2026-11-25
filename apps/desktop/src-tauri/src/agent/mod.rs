@@ -9,6 +9,7 @@
 //! - 事件：`kotone://agent-event`（按 ACP 会话更新设计），每条新消息同时存盘。
 //! - 自动化由某段对话发起（`automation.run` / `saved.*`）时，结束后把结果作为一条消息
 //!   放回那段对话（正在跑就作为插话交给模型）。
+//! - 她正忙时插进来、要进聊天的（自动卡片、复盘、自动化的结果）：排队，不丢；怎么排只写在 `when_free.rs`。
 //!
 //! 不做：游戏内入口与快速模式（第 4 步）、切换到游戏窗口（第 5 步）。
 
@@ -22,6 +23,7 @@ mod relay;
 mod subagents;
 mod turn;
 mod voice;
+mod when_free;
 
 #[cfg(test)]
 mod test_util;
@@ -37,6 +39,8 @@ use relay::*;
 pub use subagents::*;
 pub use turn::*;
 use voice::*;
+pub use when_free::{post_notice, resume_held_cards};
+use when_free::*;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
