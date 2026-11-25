@@ -4225,3 +4225,79 @@ async fn wake_session_without_speech_is_cancelled_quietly() {
         .iter()
         .any(|(name, _)| name == "kotone://vad-no-speech"));
 }
+
+// ---------- ADR 041 第 1 期复现（发到游戏：一把输入锁） ----------
+
+/// 把“开聊天框 / 打字 / 发送”三步记进同一份流水、每步之间停一下的注入器（照 `send_sequence` 的
+/// 回车 → 20ms → 文字 → 100ms → 回车，停顿放大一点让重叠稳定出现）。
+struct SequenceInjector {
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+impl Injector for SequenceInjector {
+    fn send(
+        &self,
+        text: &str,
+        _profile: &GameProfile,
+        _cancel: CancelToken,
+    ) -> Result<(), InjectError> {
+        for step in ["open", "text", "send"] {
+            self.log.lock().unwrap().push(format!("{step}:{text}"));
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        Ok(())
+    }
+}
+
+/// ADR 041 第 1 期复现（共享资源评估第二节问题 3）：语音输入识别完往聊天框打字的同时，`game_chat.send`
+/// 也在打字。桌面端 `companion::type_text` 的做法是 `state.injector.clone()` → `spawn_blocking(injector.send(..))`，
+/// 和编排器拿的是同一个注入器（`lib.rs` 把 `injector.clone()` 交给 `Orchestrator::new`）；语音输入只占自己的
+/// 发送权（`claim_send`），注入器本身不加锁，所以两段“开框—打字—发送”会交错。
+/// 修完（第 1 期）：另一路改成调入口（和语音输入共用一把输入锁），两段一前一后，再去掉 ignore。
+#[tokio::test]
+#[ignore = "ADR 041 第 1 期复现，修完去掉"]
+async fn adr041_voice_input_and_game_chat_send_do_not_interleave() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(SequenceInjector { log: log.clone() });
+    let (orch, _) = make_orchestrator_with(true, injector.clone());
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let voice = {
+        let orch = orch.clone();
+        tokio::spawn(async move { orch.end().await })
+    };
+    // 语音输入的聊天框一开，另一路（game_chat.send 的做法）就开始发
+    let started = std::time::Instant::now();
+    while !log.lock().unwrap().iter().any(|s| s.starts_with("open:")) {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "语音输入没有开始打字"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let other = injector.clone();
+    tokio::task::spawn_blocking(move || {
+        other.send(
+            "我去下路",
+            &GameProfile::builtin_generic(),
+            CancelToken::default(),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    voice.await.unwrap().unwrap();
+    let log = log.lock().unwrap().clone();
+    let one_after_another = |first: &str, second: &str| -> Vec<String> {
+        [first, second]
+            .iter()
+            .flat_map(|t| ["open", "text", "send"].map(|s| format!("{s}:{t}")))
+            .collect()
+    };
+    let (voice_text, chat_text) = ("对面打野在下路", "我去下路");
+    assert!(
+        log == one_after_another(voice_text, chat_text)
+            || log == one_after_another(chat_text, voice_text),
+        "两段打字交错了：{log:?}"
+    );
+}

@@ -63,3 +63,10 @@
 | 1 | 入口加固：一把输入锁、等修饰键、按前台检测的游戏、频道参数、多行、结果说清楚；`companion.type`、`builtin-chat-repeat` 改调入口 | 按住 Shift 不会发到全体；两边同时发不交错 | 假注入器的单元测试（交错、修饰键、前台）；测试窗口在前台的真机脚本 |
 | 2 | “提供发法”的插件契约；英雄联盟插件实现（选人 / 大厅走客户端聊天接口，对局里逐行按键） | 选人时琴音发的话不再按键 | 假客户端的测试；`lol_tools_real.py`；真客户端留给玩家 |
 | 3 | 英雄联盟“一键喊话”命令（依赖 ADR 040 第 2 期） | 一个键把对面技能 / 战绩发出去 | Playwright；真机脚本 |
+
+## 实施记录
+
+- **2026-11-25 第 1 期第一段（复现，没改产品代码）**：
+  - 共享资源评估 #3（两边同时打字交错）复现了：`crates/kotone-core/tests/orchestrator.rs` 的 `adr041_voice_input_and_game_chat_send_do_not_interleave`（先标 `#[ignore]`，手动跑 `cargo test -p kotone-core --test orchestrator -- adr041 --ignored`）——语音输入发送时另一路照 `game_chat.send` 的做法调同一个注入器，流水是 `open:A, open:B, text:A, text:B, send:A, send:B`。
+  - #2（按住 Shift 发到全体）只核对了代码（`game_chat.send` 一路不读修饰键，只有语音输入等），真机没跑成（玩家在用机器，前台不是终端）。真机复现 / 回归脚本 `scripts/manual-e2e/send_to_game_e2e.py`：按住 Shift 后松开、一直按住、两条同时发、两行、`channel: "all"`，第 1 期之前五项都应失败。
+  - 清点出来 ADR 没列的一条：旧陪玩流程的“帮忙打字”（`companion.rs` 的 `handle_assistant` / `run`）也直接调注入器、不核对前台；`companion.type` 也不核对前台。
