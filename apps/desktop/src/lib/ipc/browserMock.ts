@@ -1008,6 +1008,22 @@ function mockAsrIsLocal(): boolean {
   return !REMOTE_ASR_IDS.has(mockActiveModelId());
 }
 
+const SENSE_VOICE_ID = "sense-voice-zh-en-ja-ko-yue-2024-07-17";
+/** 能听懂外语的识别（自动判语种，或中英日韩都认得；和后端 `kotone_stt::listen` 同一条规矩）。 */
+const FOREIGN_ASR_IDS = new Set(["deepseek-asr", "openai-compat-stt", SENSE_VOICE_ID]);
+
+/** 同传用的识别（后端 `kotone_stt::listen::listen_model`）：你选的听得懂外语就用它，否则本地 SenseVoice。 */
+function mockListenModel(): Pick<RuntimeStatus, "listenModelId" | "listenOnline" | "listenError"> {
+  const active = mockActiveModelId();
+  const id = FOREIGN_ASR_IDS.has(active) ? active : SENSE_VOICE_ID;
+  const online = REMOTE_ASR_IDS.has(id);
+  const downloaded = online || (mock.models.find((m) => m.id === id)?.downloaded ?? false);
+  return downloaded
+    ? { listenModelId: id, listenOnline: online, listenError: null }
+    // 后端错误原文（kotone_stt::listen::NEED_SENSEVOICE）
+    : { listenModelId: null, listenOnline: false, listenError: "同传要能听懂外语的识别：在「设置 → 模型 → 语音识别」下载 SenseVoice 多语言（约 230 MB），或者换成能自动判语种的在线识别（DeepSeek）" };
+}
+
 /** mock 的 restartNeeded 推导：Running 且快照 ≠ 当前配置 */
 function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
   const s = mock.settings;
@@ -1027,6 +1043,7 @@ function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
     stage,
     asrLocal: mockAsrIsLocal(),
     error: mockRuntimeError,
+    ...mockListenModel(),
   };
 }
 

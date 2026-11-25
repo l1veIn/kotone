@@ -65,6 +65,12 @@ pub struct RuntimeStatus {
     pub asr_local: bool,
     /// 最近一次启动失败的原因（再次启动、启动成功、停止或换识别模型时清掉）
     pub error: Option<String>,
+    /// 同传用的识别（`kotone_stt::listen`：你选的识别听得懂外语就用它，否则本地 SenseVoice）：模型 id。
+    /// 现在用不了时 None，原因在 `listen_error`（例如还没下载 SenseVoice）。同传页面照这个显示。
+    pub listen_model_id: Option<String>,
+    /// 同传用的是在线识别（队友的声音会发给识别服务商，每句计费）。
+    pub listen_online: bool,
+    pub listen_error: Option<String>,
 }
 
 /// 运行时管理器：相位 + 启动快照（两个锁分开，避免事件构造时长持锁）
@@ -183,6 +189,7 @@ impl RuntimeManager {
             });
         let restart_needed = engine_or_model_changed || session_config_changed;
         let asr_local = !kotone_stt::model::is_remote_model(&model_id);
+        let listen = kotone_stt::listen::listen_model(settings, engines);
         RuntimeStatus {
             phase: phase.as_str().to_string(),
             restart_needed,
@@ -200,6 +207,9 @@ impl RuntimeManager {
             stage,
             asr_local,
             error: self.error(),
+            listen_online: listen.as_ref().is_ok_and(|m| !m.local),
+            listen_model_id: listen.as_ref().ok().map(|m| m.model_id.clone()),
+            listen_error: listen.err(),
         }
     }
 }
@@ -509,7 +519,8 @@ pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
                 rt.status(&settings, &state.engines, None).restart_needed
             };
             if restart_needed {
-                stop(app).await?;
+                // 重启：同传接着听（它的模型下一句从注册表重新拿），不算玩家停止
+                stop_runtime(app, false).await?;
             } else {
                 return snapshot_and_emit(app, None)
                     .ok_or_else(|| "运行时状态未初始化".to_string());
@@ -768,9 +779,16 @@ fn finish_start(
     Ok(())
 }
 
-/// 停止：取消进行中的会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎。
+/// 停止：取消进行中的会话 → 注销热键 → 隐藏悬浮窗 → 停掉用本地模型的同传 → 卸载引擎。
 /// Stopped 时幂等返回（不报错）。
 pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
+    stop_runtime(app, true).await
+}
+
+/// `by_player`：玩家停止本地语音识别（托盘、按钮、`runtime.stop`、启动热键）——本体不再跑任何本地识别模型，
+/// 用本地模型的同传一起停，它那段对话里收到一句说明（ADR 039 实施记录“同传用本体的识别”）。
+/// 重启（换了设置）时为 false：同传接着听。
+async fn stop_runtime(app: &AppHandle, by_player: bool) -> Result<RuntimeStatus, String> {
     let rt = app.state::<RuntimeManager>();
     match rt.phase() {
         RuntimePhase::Stopped => {
@@ -809,17 +827,18 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
         hide_window(&win);
     }
 
-    // 卸载引擎（释放模型内存）
+    if by_player {
+        crate::voice_listen::stop_local(app);
+    }
+
+    // 卸载引擎（释放模型内存）：注册表里全部的。同传可能另加载了一个（玩家用 X-ASR、同传用 SenseVoice），
+    // 设置页也可能在 Running 期间先选中了另一个引擎；在线引擎的 unload 什么都不做。
     let engines = state.engines.clone();
-    // 设置页可在 Running 期间先选中另一引擎。停止时必须卸载
-    // 真正已预热的快照引擎，不能卸载尚未启动的「当前选择」。
-    let engine_id = rt
-        .started()
-        .map(|snapshot| snapshot.engine_id)
-        .unwrap_or_else(|| state.settings.read().unwrap().stt_engine.clone());
     let _ = tauri::async_runtime::spawn_blocking(move || {
-        if let Some(en) = engines.get(&engine_id) {
-            en.unload();
+        for info in engines.list_info() {
+            if let Some(en) = engines.get(&info.id) {
+                en.unload();
+            }
         }
     })
     .await;

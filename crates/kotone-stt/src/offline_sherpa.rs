@@ -9,8 +9,10 @@
 //! feature `engine-sherpa` 控制编译：开启 = 真实实现；关闭 = 占位注册
 //! （恒 is_ready=false，默认构建零原生依赖）。
 //!
-//! 共享 recognizer 首次创建时绑定当时的活动模型与 language——之后切换模型/
-//! 语言/热词需「重启生效」（与各 sherpa 引擎同一约定）。
+//! recognizer 按（模型 id, 识别语言, 线程数）各缓存一份：同一个模型、同样的设置在进程里只加载一次，
+//! 呼叫 / 语音输入和同传（`crate::listen`）共用；2026-11-25 以前只有一个格子，第一次建好以后不管
+//! 会话要哪个模型都返回它（玩家用 FunASR-Nano、同传要 SenseVoice 时会悄悄拿错）。运行中改模型 /
+//! 语言仍是「重启生效」：本体的会话用启动时的配置快照。
 
 use tokio::sync::mpsc;
 
@@ -35,6 +37,7 @@ pub struct OfflineSpec {
 
 #[cfg(feature = "engine-sherpa")]
 pub mod imp {
+    use std::collections::HashMap;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -57,11 +60,14 @@ pub mod imp {
     /// 的模型家族字段（sense_voice / funasr_nano 等）
     pub type ConfigureFn = fn(&SessionConfig, &Path, &mut OfflineRecognizerConfig);
 
+    type Slot = Arc<Mutex<Option<Arc<OfflineRecognizer>>>>;
+
     /// 非流式引擎：懒加载共享 recognizer（模型加载百毫秒级，复用避免每会话重建）。
     pub struct OfflineEngine {
         spec: &'static OfflineSpec,
         configure: ConfigureFn,
-        recognizer: Mutex<Option<Arc<OfflineRecognizer>>>,
+        /// [`Self::cache_key`] → 那一格（每格自己一把锁：加载一个模型时只挡住要同一份的，别的照常取）。
+        recognizers: Mutex<HashMap<String, Slot>>,
     }
 
     impl OfflineEngine {
@@ -69,13 +75,50 @@ pub mod imp {
             Self {
                 spec,
                 configure,
-                recognizer: Mutex::new(None),
+                recognizers: Mutex::new(HashMap::new()),
             }
         }
 
-        /// 取共享 recognizer（不存在则按当前活动模型 + 本次会话语言创建）
+        fn threads(cfg: &SessionConfig) -> i32 {
+            cfg.options
+                .get("threads")
+                .and_then(|t| t.as_u64())
+                .map(|t| t.clamp(1, 16) as i32)
+                .unwrap_or(DEFAULT_THREADS as i32)
+        }
+
+        /// 决定 recognizer 长什么样的几项：模型、识别语言（SenseVoice 才有）、线程数。
+        pub(crate) fn cache_key(&self, cfg: &SessionConfig) -> String {
+            let id = crate::model::model_id_from_cfg(cfg, self.spec.engine_id);
+            let language = match crate::model::recipe_of(&id) {
+                Some(crate::model::ModelRecipe::SenseVoice) => crate::sensevoice::language(cfg),
+                _ => String::new(),
+            };
+            format!("{id}|{language}|{}", Self::threads(cfg))
+        }
+
+        /// 现在加载着几份（测试和日志用）。
+        pub fn loaded(&self) -> usize {
+            self.recognizers
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|slot| slot.try_lock().is_ok_and(|r| r.is_some()))
+                .count()
+        }
+
+        /// 取共享 recognizer（这个模型、这样设置的还没有就创建一份）。表锁只拿一下；模型加载在这一格的锁里，
+        /// 要同一份的第二个会话等它建好直接用（不会建两份），要别的模型的不受影响（原则 20）。
         fn recognizer(&self, cfg: &SessionConfig) -> Result<Arc<OfflineRecognizer>, String> {
-            let mut guard = self.recognizer.lock().unwrap();
+            let key = self.cache_key(cfg);
+            let slot = self
+                .recognizers
+                .lock()
+                .unwrap()
+                .entry(key)
+                .or_default()
+                .clone();
+            let mut guard = slot.lock().unwrap();
             if let Some(r) = guard.as_ref() {
                 return Ok(r.clone());
             }
@@ -93,15 +136,8 @@ pub mod imp {
             }
             let dir = crate::model::multi_model_dir(&id).unwrap();
 
-            let threads = cfg
-                .options
-                .get("threads")
-                .and_then(|t| t.as_u64())
-                .map(|t| t.clamp(1, 16) as i32)
-                .unwrap_or(DEFAULT_THREADS as i32);
-
             let mut config = OfflineRecognizerConfig::default();
-            config.model_config.num_threads = threads;
+            config.model_config.num_threads = Self::threads(cfg);
             config.model_config.provider = Some("cpu".into());
             (self.configure)(cfg, &dir, &mut config);
 
@@ -157,9 +193,9 @@ pub mod imp {
             self.recognizer(cfg).map(|_| ())
         }
 
-        /// 卸载：释放共享 recognizer（重新「启动」或下次会话时重建）
+        /// 卸载：释放全部共享 recognizer（重新「启动」或下次会话时重建；会话手里的那份用完才真正释放）
         fn unload(&self) {
-            *self.recognizer.lock().unwrap() = None;
+            self.recognizers.lock().unwrap().clear();
         }
 
         fn start_session(

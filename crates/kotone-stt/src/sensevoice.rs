@@ -14,6 +14,22 @@ pub(crate) fn map_language(lang: &str) -> String {
     }
 }
 
+/// 识别器用的语言：模型配置里玩家选的（「设置 → 模型 → 语音识别 → SenseVoice」的“识别语言”），没选就是
+/// `auto`——和界面上显示的缺省一致。2026-11-25 以前没选时用的是全局的 `settings.language`（缺省 `zh`），
+/// 界面写“自动”、实际按中文认；中、英、日、韩游戏短句实测 `auto` 对中文一字不差、对韩语好得多
+/// （`tests/interpreter_sensevoice.rs`，ADR 039 实施记录“同传用本体的识别”），所以缺省改成 `auto`，
+/// 同传和玩家自己就能共用一份。
+#[cfg(feature = "engine-sherpa")]
+pub(crate) fn language(cfg: &SessionConfig) -> String {
+    let chosen = cfg
+        .options
+        .get("language")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    map_language(chosen)
+}
+
 /// 填充 SenseVoice 模型家族字段（骨架已设 num_threads/provider）
 #[cfg(feature = "engine-sherpa")]
 pub(crate) fn configure(
@@ -22,15 +38,9 @@ pub(crate) fn configure(
     config: &mut sherpa_onnx::OfflineRecognizerConfig,
 ) {
     let f = |name: &str| dir.join(name).to_string_lossy().into_owned();
-    let language = cfg
-        .options
-        .get("language")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.is_empty())
-        .unwrap_or(&cfg.language);
     config.model_config.sense_voice = sherpa_onnx::OfflineSenseVoiceModelConfig {
         model: Some(f("model.int8.onnx")),
-        language: Some(map_language(language)),
+        language: Some(language(cfg)),
         use_itn: true, // 逆文本正则（数字/标点落形），聊天场景更自然
     };
     config.model_config.tokens = Some(f("tokens.txt"));
@@ -47,5 +57,19 @@ mod tests {
         assert_eq!(map_language("auto"), "auto");
         assert_eq!(map_language(""), "auto");
         assert_eq!(map_language("fr"), "auto");
+    }
+
+    #[test]
+    fn language_is_the_chosen_one_or_auto() {
+        let cfg = |options: serde_json::Value| SessionConfig {
+            // 全局的 settings.language（缺省 zh）不再决定 SenseVoice 的语言
+            language: "zh".into(),
+            options,
+            ..Default::default()
+        };
+        assert_eq!(language(&cfg(serde_json::json!({}))), "auto");
+        assert_eq!(language(&cfg(serde_json::json!({"language": ""}))), "auto");
+        assert_eq!(language(&cfg(serde_json::json!({"language": "ko"}))), "ko");
+        assert_eq!(language(&cfg(serde_json::json!({"language": "zh"}))), "zh");
     }
 }

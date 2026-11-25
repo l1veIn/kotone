@@ -3,7 +3,13 @@
   // 她交给后台去听、去翻；“停止”就是对她说“停止同传”。下面一行是她的耳朵现在在听哪些程序（开着页面时每 2 秒读一次）。
   // 左侧栏「插件 → 同传」和她 `ui.open` 打开的右侧栏页面共用（右侧栏里不重复页标题）。
   // 插件开关是 `plugins.interpreter.enabled`；关着时只显示开关和一句说明。
+  // “识别”一行：同传用的是本体的语音识别（ADR 039 实施记录“同传用本体的识别”）——你选的识别听得懂外语就用它，
+  // 否则本地 SenseVoice；后端算好放在运行时状态里（listenModelId / listenOnline / listenError），这里只显示，
+  // 换模型去「设置 → 模型 → 语音识别」（换模型只有一个地方，ADR 039 D2）。在线时写明队友的声音会发出去、每句计费。
   import { onMount } from "svelte";
+  import { listModels, type ModelInfo } from "$lib/ipc";
+  import { runtimeStore } from "$lib/stores/runtime";
+  import { openTarget } from "$lib/stores/navigation";
   import { Ear, EarOff, LoaderCircle, Play, Square } from "@lucide/svelte";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
@@ -34,6 +40,17 @@
   let appDraft = $state<string | null>(null);
   let saving: Promise<void> = Promise.resolve();
   let busy = $state<"" | "start" | "stop">("");
+
+  let models = $state<ModelInfo[]>([]);
+  const rt = $derived($runtimeStore);
+  const recognizerName = $derived(
+    (models.find((model) => model.id === rt?.listenModelId)?.displayName ?? rt?.listenModelId ?? "").replace(/（.*$/, ""),
+  );
+  async function refreshModels() {
+    try { models = await listModels(); } catch { /* 只少了模型名 */ }
+  }
+  $effect(() => { rt?.listenModelId; void refreshModels(); });
+  const openModels = () => openTarget({ page: "advanced", tab: "models", anchor: "models-asr" });
 
   // i18n-ignore-start：语言的值和后端 TARGETS 一致（存进设置、写进替你说的话），界面上显示的是右边的文案
   const TARGET_LABELS: Record<string, () => string> = {
@@ -136,6 +153,27 @@
             <div class="w-56 max-w-full">
               <SelectField ariaLabel={m.plugin_interpreter_display_label()} testid="interpreter-display" value={config.display} options={displayOptions}
                 onchange={(display) => void save({ display: display === "bubble" ? "bubble" : "danmaku" })} />
+            </div>
+          {/snippet}
+        </SettingsRow>
+        <SettingsRow label={m.plugin_interpreter_recognizer_label()}
+          description={rt?.listenModelId
+            ? (rt.listenOnline ? m.plugin_interpreter_recognizer_online_note() : m.plugin_interpreter_recognizer_local_note())
+            : (rt?.listenError ?? "")}>
+          {#snippet control()}
+            <div class="flex max-w-full items-center gap-3">
+              <span class="truncate text-[13px] text-foreground" data-testid="interpreter-recognizer"
+                data-online={rt?.listenOnline ? "true" : "false"}>
+                {#if rt?.listenModelId}
+                  {rt.listenOnline
+                    ? m.plugin_interpreter_recognizer_online({ name: recognizerName })
+                    : m.plugin_interpreter_recognizer_local({ name: recognizerName })}
+                {:else}
+                  {m.plugin_interpreter_recognizer_missing()}
+                {/if}
+              </span>
+              <button class="shrink-0 text-xs text-primary hover:underline" data-testid="interpreter-open-models"
+                onclick={openModels}>{m.plugin_interpreter_recognizer_open_models()}</button>
             </div>
           {/snippet}
         </SettingsRow>

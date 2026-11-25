@@ -1,16 +1,13 @@
-//! 同传（ADR 021）另起一份 SenseVoice 的复现（共享资源评估第二节第 7 条）。
+//! 同传（ADR 021）和本体共用一份 SenseVoice（共享资源评估第二节第 7 条；ADR 039 实施记录“同传用本体的识别”）。
 //!
-//! 走的就是产品里的两条路：本体的语音识别 = `SherpaOfflineEngine::warmup`（`runtime.rs` 启动时调），
-//! 同传 = `Transcriber::new(<模型目录>/sherpa-onnx-sense-voice-…)`（`voice_listen.rs` 开始听时调）。
+//! - `interpreter_reuses_the_loaded_sensevoice`：本体启动本地语音识别（`SherpaOfflineEngine::warmup`，`runtime.rs`）
+//!   以后，同传（`listen::listen_model` + `listen::recognize`，`voice_listen.rs`）不再加载一份。2026-11-25 修之前
+//!   同传用 `Transcriber::new` 自己建，+276 MB（复现 (b)）；修完是回归测试。
+//! - `sensevoice_auto_is_as_good_as_zh_for_chinese`：SenseVoice 的识别语言是建识别器时定的；缺省改成 `auto`
+//!   （和界面一致）的依据：中、英、日、韩游戏短句上 `auto` 对中文不变差、日语韩语好得多。
 //!
-//! - `interpreter_reuses_the_loaded_sensevoice`：本体已经加载了 SenseVoice，同传开始听时不该再加载一份
-//!   （ADR 038 D3 第 7 条“识别模型也只该下一份”、ADR 039 D2“加载一份”）。修之前失败（复现 (b)）。
-//! - `sensevoice_language_is_fixed_per_recognizer`：设计探针——SenseVoice 的识别语言是建识别器时定的
-//!   （`sensevoice::configure`），本体缺省是 `zh`，同传要 `auto`；看一个识别器能不能按句换语言
-//!   （sherpa-onnx 1.13.5 的 `OfflineStream::set_option`）。只打印、只断言 `auto` 认得出英语。
-//!
-//! 都要真模型，默认忽略：
-//! `KOTONE_SENSEVOICE_DIR`（SenseVoice 模型目录）、`KOTONE_SPEECH_WAV`（16 位单声道英语 wav），
+//! 都要真模型，默认忽略：`KOTONE_SENSEVOICE_DIR`（SenseVoice 模型目录）、`KOTONE_SPEECH_WAV`（16 位单声道英语
+//! wav）、`KOTONE_LANG_SAMPLES`（`scripts/manual-e2e/sensevoice_lang_samples.py` 生成的录音），
 //! `cargo test -p kotone-stt --features engine-sherpa,vad-silero --test interpreter_sensevoice -- --ignored --nocapture --test-threads=1`
 #![cfg(all(windows, feature = "engine-sherpa", feature = "vad-silero"))]
 
@@ -98,45 +95,78 @@ fn read_wav_16k(path: &Path) -> Vec<f32> {
         .collect()
 }
 
+/// 隔离配置里换掉 SenseVoice 的“识别语言”（玩家在「设置 → 模型」里选的；空 = 没选）。
+fn set_player_language(models: &Path, language: &str) {
+    let home = PathBuf::from(std::env::var("KOTONE_HOME").unwrap());
+    let mut config = serde_json::json!({
+        "models": {"dir": models.to_string_lossy()},
+        "sttEngine": "sherpa-offline",
+        "activeModelId": SENSEVOICE_ID,
+    });
+    if !language.is_empty() {
+        config["modelConfigs"] = serde_json::json!({ SENSEVOICE_ID: {"language": language} });
+    }
+    std::fs::write(home.join("config.json"), config.to_string()).unwrap();
+}
+
+/// 本体启动本地语音识别时的会话配置（`runtime.rs` 的 `session_config_from`）。
+fn core_config(settings: &kotone_core::settings::Settings) -> SessionConfig {
+    SessionConfig {
+        language: settings.language.clone(),
+        options: settings.session_options("sherpa-offline"),
+        ..Default::default()
+    }
+}
+
+/// 本体已经加载了 SenseVoice，同传开始听（`listen::listen_model` + `listen::recognize`）时不再加载一份：
+/// 修之前 `Transcriber::new` 另建一个，+276 MB（复现 (b)）；修完 < 50 MB，注册表里只有一份。
+/// 玩家在模型配置里专门选了 `zh` 时，同传（要 `auto`）才另加载一份（缓存按模型 + 语言分格）。
 #[test]
-#[ignore = "needs the SenseVoice model (KOTONE_SENSEVOICE_DIR)"]
+#[ignore = "needs the SenseVoice model and an English wav (KOTONE_SENSEVOICE_DIR, KOTONE_SPEECH_WAV)"]
 fn interpreter_reuses_the_loaded_sensevoice() {
+    use kotone_stt::listen;
+
     let dir = sensevoice_dir();
-    let _home = isolated_home(dir.parent().unwrap());
+    let models = dir.parent().unwrap();
+    let _home = isolated_home(models);
     assert_eq!(
         kotone_stt::model::multi_model_dir(SENSEVOICE_ID).as_deref(),
         Some(dir.as_path()),
         "隔离配置的模型目录没生效"
     );
+    let english = read_wav_16k(Path::new(
+        &std::env::var("KOTONE_SPEECH_WAV").expect("KOTONE_SPEECH_WAV"),
+    ));
+    let mut registry = kotone_core::stt::EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    // 看份数用：loaded() 在具体类型上，另建一个和注册表里一样的引擎。
+    let offline = kotone_stt::sherpa_runtime::SherpaOfflineEngine::new;
 
     let before = memory();
+    let settings = kotone_core::settings::load();
+    let engine = registry.get("sherpa-offline").unwrap();
     // 本体：玩家选了 SenseVoice，“启动本地语音识别”= warmup（runtime.rs start_inner）。
-    let engine = kotone_stt::sherpa_runtime::SherpaOfflineEngine::new();
-    let cfg = SessionConfig {
-        options: serde_json::json!({"model": SENSEVOICE_ID}),
-        ..Default::default()
-    };
-    engine.warmup(&cfg).expect("本体加载 SenseVoice");
+    engine
+        .warmup(&core_config(&settings))
+        .expect("本体加载 SenseVoice");
     let core = memory();
-    // 同传：voice_listen.rs start_listener → Transcriber::new(sensevoice_dir)。
-    let transcriber = kotone_stt::transcriber::Transcriber::new(&dir).expect("同传加载 SenseVoice");
+    // 同传：voice_listen.rs → listen_model + 每句 recognize。
+    let model = listen::listen_model(&settings, &registry).expect("同传的识别");
+    assert_eq!(
+        (model.engine_id.as_str(), model.model_id.as_str()),
+        ("sherpa-offline", SENSEVOICE_ID)
+    );
+    let heard = listen::recognize(engine, &model.config, &english)
+        .expect("同传识别一句")
+        .expect("认出一句话");
     let both = memory();
     let core_mb = core.0 - before.0;
     let interpreter_mb = both.0 - core.0;
     println!(
         "private: before {:.0} MB, core SenseVoice +{core_mb:.0} MB, interpreter +{interpreter_mb:.0} MB \
-         (working set {:.0} → {:.0} → {:.0} MB)",
+         (working set {:.0} → {:.0} → {:.0} MB); heard {heard:?}",
         before.0, before.1, core.1, both.1
     );
-    // 卸载本体那份（runtime.rs stop 只卸本体的），同传那份还在。
-    engine.unload();
-    let after_stop = memory();
-    println!(
-        "after the core unloads: private {:.0} MB (still {:.0} MB above the start while the interpreter listens)",
-        after_stop.0,
-        after_stop.0 - before.0
-    );
-    drop(transcriber);
     assert!(
         core_mb > 100.0,
         "本体那份应该是一整个模型（{core_mb:.0} MB），测量不对"
@@ -145,20 +175,79 @@ fn interpreter_reuses_the_loaded_sensevoice() {
         interpreter_mb < 50.0,
         "同传又加载了一份 SenseVoice：+{interpreter_mb:.0} MB（本体那份 +{core_mb:.0} MB）"
     );
+    let text = heard.text.to_lowercase();
+    assert!(
+        text.contains("house") || text.contains("enem"),
+        "{}",
+        heard.text
+    );
+    assert_eq!(heard.language, "en");
+
+    // 停止本地语音识别 = 卸掉（runtime.rs stop）：两边用的是同一份，一起没了。
+    engine.unload();
+    let unloaded = memory();
+    println!("after unload: private {:.0} MB", unloaded.0);
+    assert!(
+        unloaded.0 - before.0 < 50.0,
+        "卸掉以后还有 {:.0} MB",
+        unloaded.0 - before.0
+    );
+
+    // 玩家专门把 SenseVoice 定成中文：同传（auto）另加载一份，玩家自己的不受影响。
+    set_player_language(models, "zh");
+    let settings = kotone_core::settings::load();
+    let probe = offline();
+    probe.warmup(&core_config(&settings)).unwrap();
+    let model = listen::listen_model(&settings, &registry).unwrap();
+    listen::recognize(&probe, &model.config, &english).unwrap();
+    assert_eq!(probe.loaded(), 2, "玩家定了 zh、同传要 auto：两份");
+    set_player_language(models, "");
+    let settings = kotone_core::settings::load();
+    let probe = offline();
+    probe.warmup(&core_config(&settings)).unwrap();
+    let model = listen::listen_model(&settings, &registry).unwrap();
+    listen::recognize(&probe, &model.config, &english).unwrap();
+    assert_eq!(probe.loaded(), 1, "没定（缺省 auto）：一份");
 }
 
+/// 去掉标点和空白、转小写，按字比较。
+fn normalize(text: &str) -> Vec<char> {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// 字错误率：编辑距离 / 参考文字的字数。
+fn cer(reference: &str, hypothesis: &str) -> f64 {
+    let (r, h) = (normalize(reference), normalize(hypothesis));
+    let mut row: Vec<usize> = (0..=h.len()).collect();
+    for (i, rc) in r.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, hc) in h.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = (prev + usize::from(rc != hc)).min(row[j] + 1).min(cur + 1);
+            prev = cur;
+        }
+    }
+    row[h.len()] as f64 / r.len().max(1) as f64
+}
+
+/// 识别语言 `zh`（本体缺省：`settings.language`）和 `auto`（同传）在中、英、日、韩游戏短句上的字错误率。
+/// 决定 SenseVoice 能不能统一用 `auto`、共用一份（ADR 039 实施记录“同传用本体的识别”）：
+/// `auto` 对中文不能明显变差（平均字错误率最多高 0.05），日语、韩语在 `auto` 下要认得出来。
+///
+/// 录音：`scripts/manual-e2e/sensevoice_lang_samples.py` 生成到 `KOTONE_LANG_SAMPLES`
+/// （`<语言>-<n>.wav` + 同名 `.txt` 参考文字）。
 #[test]
-#[ignore = "needs the SenseVoice model and an English wav (KOTONE_SENSEVOICE_DIR, KOTONE_SPEECH_WAV)"]
-fn sensevoice_language_is_fixed_per_recognizer() {
+#[ignore = "needs the SenseVoice model and the language samples (KOTONE_SENSEVOICE_DIR, KOTONE_LANG_SAMPLES)"]
+fn sensevoice_auto_is_as_good_as_zh_for_chinese() {
     use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig};
 
     let dir = sensevoice_dir();
-    let english = read_wav_16k(Path::new(
-        &std::env::var("KOTONE_SPEECH_WAV").expect("KOTONE_SPEECH_WAV"),
-    ));
-    let chinese =
-        read_wav_16k(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zh-game-3s.wav"));
-    // 和 sensevoice::configure / Transcriber::new 一样的配置，只换语言。
+    let samples = PathBuf::from(std::env::var("KOTONE_LANG_SAMPLES").expect("KOTONE_LANG_SAMPLES"));
+    // 和 sensevoice::configure 一样的配置，只换语言。
     let recognizer = |language: &str| {
         let mut config = OfflineRecognizerConfig::default();
         config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
@@ -171,43 +260,67 @@ fn sensevoice_language_is_fixed_per_recognizer() {
         config.model_config.provider = Some("cpu".into());
         OfflineRecognizer::create(&config).expect("SenseVoice")
     };
-    let decode = |r: &OfflineRecognizer, pcm: &[f32], option: Option<&str>| {
+    let decode = |r: &OfflineRecognizer, pcm: &[f32]| {
         let stream = r.create_stream();
-        if let Some(language) = option {
-            stream.set_option("language", language);
-        }
         stream.accept_waveform(16_000, pcm);
         r.decode(&stream);
         stream.get_result().map(|x| x.text).unwrap_or_default()
     };
-    let zh = recognizer("zh");
-    let auto = recognizer("auto");
-    let rows = [
-        (
-            "en audio, recognizer zh (the core's default)",
-            decode(&zh, &english, None),
-        ),
-        (
-            "en audio, recognizer auto (the interpreter)",
-            decode(&auto, &english, None),
-        ),
-        (
-            "en audio, recognizer zh + stream option en",
-            decode(&zh, &english, Some("en")),
-        ),
-        (
-            "en audio, recognizer zh + stream option auto",
-            decode(&zh, &english, Some("auto")),
-        ),
-        ("zh audio, recognizer zh", decode(&zh, &chinese, None)),
-        ("zh audio, recognizer auto", decode(&auto, &chinese, None)),
-    ];
-    for (what, text) in &rows {
-        println!("{what}: {text}");
+    let configs = [("zh", recognizer("zh")), ("auto", recognizer("auto"))];
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&samples)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "wav"))
+        .collect();
+    files.sort();
+    assert!(!files.is_empty(), "{} 里没有录音", samples.display());
+    // (语言, 识别语言) → 每句的字错误率
+    let mut table: std::collections::BTreeMap<(String, &str), Vec<f64>> = Default::default();
+    for wav in &files {
+        let lang = wav
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .split('-')
+            .next()
+            .unwrap()
+            .to_string();
+        let reference = std::fs::read_to_string(wav.with_extension("txt")).unwrap();
+        let pcm = read_wav_16k(wav);
+        for (name, r) in &configs {
+            let text = decode(r, &pcm);
+            let e = cer(&reference, &text);
+            println!(
+                "{:<10} {name:<4} cer {e:.2}  {reference} → {text}",
+                wav.file_name().unwrap().to_string_lossy()
+            );
+            table.entry((lang.clone(), name)).or_default().push(e);
+        }
+    }
+    let mean = |lang: &str, name: &str| {
+        let v = &table[&(lang.to_string(), name)];
+        v.iter().sum::<f64>() / v.len() as f64
+    };
+    for lang in ["zh", "en", "ja", "ko"] {
+        if table.contains_key(&(lang.to_string(), "zh")) {
+            println!(
+                "{lang}: mean cer  zh {:.3}  auto {:.3}",
+                mean(lang, "zh"),
+                mean(lang, "auto")
+            );
+        }
     }
     assert!(
-        rows[1].1.to_lowercase().contains("house") || rows[1].1.to_lowercase().contains("enem"),
-        "auto 应该认得出这句英语：{}",
-        rows[1].1
+        mean("zh", "auto") <= mean("zh", "zh") + 0.05,
+        "auto 让中文变差了：{:.3} 对 {:.3}",
+        mean("zh", "auto"),
+        mean("zh", "zh")
     );
+    for lang in ["ja", "ko"] {
+        assert!(
+            mean(lang, "auto") < 0.5,
+            "auto 认不出 {lang}：平均字错误率 {:.3}",
+            mean(lang, "auto")
+        );
+    }
 }

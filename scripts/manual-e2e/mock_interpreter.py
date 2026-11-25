@@ -7,6 +7,8 @@ main        "停止同传"      -> agent.stop(interpreter) -> final "已经停�
 main        other           -> final "收到"
 background  task            -> voice.listen.start(app = MOCK_LISTEN_APP) -> final "开始听了，翻译会显示成弹幕"
 background  heard sentence  -> danmaku("（译）<text>")  (the background cannot speak) -> final "好的"
+background  “监听……停了” note (voice_listen.rs, e.g. local recognition stopped) -> final "同传停了"
+POST …/tools/asr (DeepSeek speech recognition, multipart) -> {"text": MOCK_ASR_TEXT} (default "Enemy behind the red house.")
 
 Every request body is appended to <log dir>/requests.jsonl.
 usage: python -X utf8 -I mock_interpreter.py <port> <log dir>
@@ -20,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18766
 LOG_DIR = sys.argv[2] if len(sys.argv) > 2 else "."
 APP = os.environ.get("MOCK_LISTEN_APP", "python.exe")
+ASR_TEXT = os.environ.get("MOCK_ASR_TEXT", "Enemy behind the red house.")
 
 
 def chunk(delta, finish=None):
@@ -43,7 +46,10 @@ def plan(body):
     user = text_of(messages[last_user]) if last_user >= 0 else ""
     done = sum(1 for m in messages[last_user + 1:] if m.get("role") == "tool")
     if "在后台替玩家做事的帮手" in system:
-        if "（听到" in user:
+        if "监听" in user and "停了" in user and "（听到" not in user:
+            steps = []
+            final = "同传停了"
+        elif "（听到" in user:
             heard = re.findall(r"KOTONE_DATA（[^）]*）\n(.*?)\nKOTONE_DATA", user, re.S)
             said = heard[-1].strip() if heard else user[-80:]
             steps = [("danmaku", {"text": "（译）" + said[:200]})]
@@ -84,7 +90,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("content-length", "0"))
-        body = json.loads(self.rfile.read(length) or b"{}")
+        raw = self.rfile.read(length)
+        if self.path.endswith("/tools/asr"):
+            with open(os.path.join(LOG_DIR, "asr.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"bytes": len(raw)}) + "\n")
+            data = json.dumps({"text": ASR_TEXT}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        body = json.loads(raw or b"{}")
         with open(os.path.join(LOG_DIR, "requests.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps(body, ensure_ascii=False) + "\n")
         events = plan(body)

@@ -1,9 +1,12 @@
-//! 连续转写（ADR 021“耳朵”）：一路 16 kHz 单声道 PCM 进来，Silero VAD 切出一句一句，
-//! 每句用 SenseVoice（中英日韩粤，自动判别语种）识别成文字。
+//! 连续切句（ADR 021“耳朵”）：一路 16 kHz 单声道 PCM 进来，Silero VAD 切出一句一句。
 //!
-//! 做法照 auto-caption（MIT）的 sherpa-onnx SenseVoice + 端点检测；VAD 参数比按键说话宽一些
-//! （游戏语音里一句话中间常有停顿）。sherpa-onnx 的 Rust 绑定拿不到 SenseVoice 判出的语种，
-//! 这里按文字的书写系统粗判（[`guess_language`]），只作提示。
+//! 只切句，不识别：每一句交给本体的语音识别（[`crate::listen`]，和呼叫、语音输入同一个注册表、
+//! 同一份模型；2026-11-25 以前这里自己建了一个固定的 SenseVoice，见共享资源评估第二节第 7 条）。
+//! VAD 参数照 auto-caption（MIT）的端点检测，比按键说话宽一些（游戏语音里一句话中间常有停顿）。
+//! 识别结果拿不到模型判出的语种，按文字的书写系统粗判（[`guess_language`]），只作提示。
+
+/// 短于 0.25 秒的段不识别（多半是噪声）。
+pub const MIN_SEGMENT_SAMPLES: usize = 16_000 / 4;
 
 /// 按书写系统粗判语种：ko / ja / ru / th / zh / en；判不出来返回空。
 pub fn guess_language(text: &str) -> &'static str {
@@ -33,6 +36,11 @@ pub fn guess_language(text: &str) -> &'static str {
         .unwrap_or("")
 }
 
+/// 识别出来的字算不算一句话：少于 2 个字母 / 数字 / 汉字的（“嗯”、标点、空）不算。
+pub fn is_sentence(text: &str) -> bool {
+    text.chars().filter(|c| c.is_alphanumeric()).count() >= 2
+}
+
 /// 一句识别结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Utterance {
@@ -41,26 +49,31 @@ pub struct Utterance {
     pub duration_ms: u64,
 }
 
-#[cfg(all(feature = "engine-sherpa", feature = "vad-silero"))]
+impl Utterance {
+    /// 一段音频识别出来的字 → 一句话（不算一句话时 None）。
+    pub fn from_text(text: &str, samples: usize) -> Option<Self> {
+        let text = text.trim();
+        is_sentence(text).then(|| Self {
+            language: guess_language(text),
+            duration_ms: samples as u64 * 1000 / 16_000,
+            text: text.to_string(),
+        })
+    }
+}
+
+#[cfg(feature = "vad-silero")]
 mod imp {
-    use std::path::Path;
+    use sherpa_onnx::{VadModelConfig, VoiceActivityDetector};
 
-    use sherpa_onnx::{
-        OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig, VadModelConfig,
-        VoiceActivityDetector,
-    };
+    use super::MIN_SEGMENT_SAMPLES;
 
-    use super::{guess_language, Utterance};
-
-    /// 连续转写器（只在一个线程里用）。
-    pub struct Transcriber {
+    /// 连续切句器（只在一个线程里用）。
+    pub struct Segmenter {
         vad: VoiceActivityDetector,
-        recognizer: OfflineRecognizer,
     }
 
-    impl Transcriber {
-        /// `model_dir`：SenseVoice 模型目录（含 `model.int8.onnx`、`tokens.txt`）。
-        pub fn new(model_dir: &Path) -> Result<Self, String> {
+    impl Segmenter {
+        pub fn new() -> Result<Self, String> {
             if !crate::model::vad_model_ready() {
                 crate::model::ensure_vad_model()?;
             }
@@ -81,75 +94,41 @@ mod imp {
             vad_config.provider = Some("cpu".into());
             let vad = VoiceActivityDetector::create(&vad_config, 60.0)
                 .ok_or("语音切句（silero VAD）创建失败")?;
-
-            let model = model_dir.join("model.int8.onnx");
-            let tokens = model_dir.join("tokens.txt");
-            if !model.exists() || !tokens.exists() {
-                return Err(
-                    "还没有下载 SenseVoice 模型（设置 → 模型 → 语音识别 → SenseVoice 多语言）"
-                        .into(),
-                );
-            }
-            let mut config = OfflineRecognizerConfig::default();
-            config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
-                model: Some(model.to_string_lossy().into_owned()),
-                language: Some("auto".into()),
-                use_itn: true,
-            };
-            config.model_config.tokens = Some(tokens.to_string_lossy().into_owned());
-            config.model_config.num_threads = 2;
-            config.model_config.provider = Some("cpu".into());
-            let recognizer = OfflineRecognizer::create(&config).ok_or("SenseVoice 模型加载失败")?;
-            Ok(Self { vad, recognizer })
+            Ok(Self { vad })
         }
 
-        /// 喂一段 16 kHz 单声道 PCM；返回这段里说完的句子。
-        pub fn push(&mut self, samples: &[f32]) -> Vec<Utterance> {
+        /// 喂一段 16 kHz 单声道 PCM；返回这段里说完的句子（每句一段 PCM，太短的不要）。
+        pub fn push(&mut self, samples: &[f32]) -> Vec<Vec<f32>> {
             self.vad.accept_waveform(samples);
             self.drain()
         }
 
-        /// 结束时把还没说完的一句也识别出来。
-        pub fn flush(&mut self) -> Vec<Utterance> {
+        /// 结束时把还没说完的一句也切出来。
+        pub fn flush(&mut self) -> Vec<Vec<f32>> {
             self.vad.flush();
             self.drain()
         }
 
-        fn drain(&mut self) -> Vec<Utterance> {
+        fn drain(&mut self) -> Vec<Vec<f32>> {
             let mut out = Vec::new();
             while let Some(segment) = self.vad.front() {
                 let audio = segment.samples().to_vec();
                 self.vad.pop();
-                if audio.len() < 16000 / 4 {
-                    continue;
+                if audio.len() >= MIN_SEGMENT_SAMPLES {
+                    out.push(audio);
                 }
-                let stream = self.recognizer.create_stream();
-                stream.accept_waveform(16000, &audio);
-                self.recognizer.decode(&stream);
-                let text = stream
-                    .get_result()
-                    .map(|r| r.text.trim().to_string())
-                    .unwrap_or_default();
-                if text.chars().filter(|c| c.is_alphanumeric()).count() < 2 {
-                    continue;
-                }
-                out.push(Utterance {
-                    language: guess_language(&text),
-                    duration_ms: audio.len() as u64 * 1000 / 16000,
-                    text,
-                });
             }
             out
         }
     }
 }
 
-#[cfg(all(feature = "engine-sherpa", feature = "vad-silero"))]
-pub use imp::Transcriber;
+#[cfg(feature = "vad-silero")]
+pub use imp::Segmenter;
 
 #[cfg(test)]
 mod tests {
-    use super::guess_language;
+    use super::*;
 
     #[test]
     fn guesses_the_script() {
@@ -161,37 +140,13 @@ mod tests {
         assert_eq!(guess_language("123 !!"), "");
     }
 
-    /// 真机：`KOTONE_SENSEVOICE_DIR` 指向 SenseVoice 模型目录，`KOTONE_SPEECH_WAV` 是 16 位单声道 wav。
-    #[cfg(all(feature = "engine-sherpa", feature = "vad-silero"))]
     #[test]
-    #[ignore = "needs the SenseVoice model and a speech wav"]
-    fn transcribes_a_wav() {
-        let dir = std::env::var("KOTONE_SENSEVOICE_DIR").unwrap();
-        let wav = std::fs::read(std::env::var("KOTONE_SPEECH_WAV").unwrap()).unwrap();
-        let rate = u32::from_le_bytes(wav[24..28].try_into().unwrap());
-        let data = wav.windows(4).position(|w| w == b"data").unwrap() + 8;
-        let pcm: Vec<f32> = wav[data..]
-            .chunks_exact(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
-            .collect();
-        // 线性插值重采样到 16 kHz（测试用）
-        let step = rate as f64 / 16_000.0;
-        let mono: Vec<f32> = (0..(pcm.len() as f64 / step) as usize)
-            .map(|i| {
-                let x = i as f64 * step;
-                let (j, f) = (x as usize, (x.fract()) as f32);
-                let a = pcm[j];
-                let b = *pcm.get(j + 1).unwrap_or(&a);
-                a + (b - a) * f
-            })
-            .collect();
-        let mut t = super::Transcriber::new(std::path::Path::new(&dir)).unwrap();
-        let mut out = Vec::new();
-        for chunk in mono.chunks(800) {
-            out.extend(t.push(chunk));
-        }
-        out.extend(t.flush());
-        println!("{out:?}");
-        assert!(!out.is_empty());
+    fn short_noise_is_not_a_sentence() {
+        assert_eq!(Utterance::from_text(" 嗯。 ", 16_000), None);
+        assert_eq!(Utterance::from_text("", 16_000), None);
+        let u = Utterance::from_text(" Enemy behind. ", 24_000).unwrap();
+        assert_eq!(u.text, "Enemy behind.");
+        assert_eq!(u.language, "en");
+        assert_eq!(u.duration_ms, 1500);
     }
 }

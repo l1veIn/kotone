@@ -114,6 +114,12 @@ impl SherpaOfflineEngine {
     pub fn new() -> Self {
         Self(OfflineEngine::new(&OFFLINE_SPEC))
     }
+
+    /// 现在加载着几份 recognizer（同一个模型、同样的设置只有一份）。
+    #[cfg(feature = "engine-sherpa")]
+    pub fn loaded(&self) -> usize {
+        self.0.loaded()
+    }
 }
 
 impl Default for SherpaOfflineEngine {

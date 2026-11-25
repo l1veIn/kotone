@@ -469,6 +469,11 @@ export interface RuntimeStatus {
   asrLocal?: boolean;
   /** 最近一次启动失败的原因；成功启动、停止或换识别模型后清空。 */
   error?: string | null;
+  /** 同传用的识别（模型 id）：你选的识别听得懂外语就是它，否则本地 SenseVoice。现在用不了时为 null，原因在 listenError。 */
+  listenModelId?: string | null;
+  /** 同传用的是在线识别（队友的声音会发给识别服务商，每句计费）。 */
+  listenOnline?: boolean;
+  listenError?: string | null;
 }
 
 /**

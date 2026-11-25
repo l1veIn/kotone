@@ -903,6 +903,23 @@ pub fn deliver_heard(app: &AppHandle, owner: &str, app_name: &str, language: &st
         at_ms: now_ms(),
         context: String::new(),
     };
+    deliver_to_listener(app, owner, message);
+}
+
+/// 耳朵自己的一句说明交给开着监听的那段对话（例如“本地语音识别停了，监听也停了”）。是 Kotone 说的，
+/// 不是别人说的话（不像 [`deliver_heard`] 那样按不可信数据交）。
+pub fn deliver_listen_note(app: &AppHandle, owner: &str, text: &str) {
+    let message = Message::User {
+        text: text.to_string(),
+        attachments: Vec::new(),
+        source: "listen".into(),
+        at_ms: now_ms(),
+        context: String::new(),
+    };
+    deliver_to_listener(app, owner, message);
+}
+
+fn deliver_to_listener(app: &AppHandle, owner: &str, message: Message) {
     if child_spec(app, owner).is_some() {
         if let Err(e) = deliver_to_child(app, owner, message, false) {
             log::log(&format!("agent: heard delivery failed: {e}"));

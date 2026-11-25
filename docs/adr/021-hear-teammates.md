@@ -47,7 +47,7 @@
 
 ## 已确认（2026-11-17）
 
-1. 第一版只用 SenseVoice（中英日韩粤）；更多语种以后加。
+1. 第一版只用 SenseVoice（中英日韩粤）；更多语种以后加。（2026-11-25 起读作“本地用 SenseVoice”：识别归本体，你选的识别听得懂外语就用它，否则本地 SenseVoice，见实施记录最后一条。）
 2. 同传默认用弹幕或气泡显示，不出声。
 3. 第一版不区分说话人（这是录音工具的属性，见“约束”）。
 
@@ -62,3 +62,4 @@
   - 真机（隔离 `KOTONE_HOME`，假 AI，`scripts/manual-e2e/sessions_e2e.py`）：琴音派出“同传”子会话 → 子会话开始听 python.exe → 另一个 Python 进程播放英语句子 → 子会话收到“Enmy behind the Red house.”，弹幕显示译文并 `session.send` 回主会话 → “停止同传”后子会话与监听一起停。全部通过。
   - 2026-11-20 修正（ADR 029 第二期，`scripts/manual-e2e/interpreter_e2e.py`）：逐个进程录时传的 `include_tree = false` 在 Windows 进程回环里是 **EXCLUDE**（录除了这棵进程树以外的全部声音），不是“只录这一个进程”——上面那次能通过，是因为当时机器上没有别的声音。机器上有别的程序在放视频时，听 python.exe 录进了浏览器里的中文视频，那段英语反而没录到。改成含子进程录（INCLUDE）后：只录到目标程序 3.5 秒的声音，认出英语句子，视频的声音不再进来。测试改用改名的 powershell.exe（`kotone-speaker.exe`）放声音，避免和机器上别的 python.exe 混在一起。
 - 没验证：真实游戏或 Discord 里的队友语音、中文以外的非英语语种（只有模型本身支持）、长时间（一局游戏）连续运行的资源占用。
+- 2026-11-25（共享资源评估第二节第 7 条，[ADR 039](039-desktop-companion-and-game-apps.md) 实施记录“同传用本体的识别”）：识别不再自己建。`voice_listen.rs` 原来 `Transcriber::new` 另起一个固定的 SenseVoice——用在线识别的人也得下载、和所选相同时加载两份（+276 MB）、停了本地语音识别还在跑。现在切句（`transcriber::Segmenter`，VAD 参数不变）之后每句交给本体的语音识别（`kotone_stt::listen`）：你选的识别听得懂外语（DeepSeek、OpenAI 兼容、SenseVoice）就用它，否则本地 SenseVoice；同一个模型只加载一份；用在线识别时队友的声音每句上传、按句计费（`PRIVACY.md`）；停止本地语音识别时用本地模型的同传一起停。上面“只在内存里处理”照旧（在线识别时音频发给识别服务商，不落盘）。SenseVoice 没选识别语言时改成 `auto`（中英日韩游戏短句实测对中文不变差、韩语好得多）。测试 `transcribes_a_wav` 挪到 `tests/interpreter_sensevoice.rs`（真模型、同一份识别器认出那句英语）。

@@ -96,3 +96,28 @@ test("empty program means the current game, and her ui.open lands on the interpr
   await expect(view.getByTestId("plugin-interpreter-enabled")).toBeVisible();
   await expect(view.getByTestId("interpreter-listening")).toHaveText("正在听：TslGame.exe");
 });
+
+test("the page says which recognition interpreting uses: SenseVoice to download, then online DeepSeek with its cost", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/#/settings?onboarding=never");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await page.evaluate("import('/src/lib/stores/navigation.ts').then((n) => n.openLocation('设置 → 插件 → 同传'))");
+  const pluginPage = page.getByTestId("plugin-page-interpreter");
+  const recognizer = pluginPage.getByTestId("interpreter-recognizer");
+
+  // 预览里选的是本地 X-ASR（只认中英文）、SenseVoice 没下载：还不能用，说清楚下一步
+  await expect(recognizer).toHaveText("还不能用");
+  await expect(pluginPage).toContainText("下载 SenseVoice 多语言");
+
+  // 换成 DeepSeek 在线识别：同传也用它，不用下载；写明队友的声音会发出去、每句计费
+  await page.evaluate("import('/src/lib/ipc.ts').then((ipc) => ipc.setActiveModel('deepseek-asr', 'deepseek-asr'))");
+  await expect(recognizer).toHaveAttribute("data-online", "true");
+  await expect(recognizer).toContainText("DeepSeek");
+  await expect(recognizer).toContainText("在线");
+  await expect(pluginPage).toContainText("队友说的每一句都会发给它识别，每句计费");
+  await page.screenshot({ path: shot(testInfo, "interpreter-recognizer-online") });
+
+  // “去 设置 → 模型 换”：换模型只有一个地方
+  await pluginPage.getByTestId("interpreter-open-models").click();
+  await expect(page.getByTestId("plugin-page-interpreter")).toHaveCount(0);
+});

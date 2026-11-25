@@ -20,5 +20,12 @@
   "plugin_interpreter_not_listening": "没在听",
   "plugin_interpreter_note": "点“开始”就等于你在聊天里对她说这句话：她交给后台去听、去翻，每听到一句外语都要用她的模型翻一次（按你用的模型计费）。点“停止”就是对她说“停止同传”。",
   "plugin_interpreter_said": "已替你对她说：{text}",
-  "plugin_interpreter_status_failed": "读取同传状态失败：{error}"
+  "plugin_interpreter_status_failed": "读取同传状态失败：{error}",
+  "plugin_interpreter_recognizer_label": "识别",
+  "plugin_interpreter_recognizer_local": "{name} · 本地",
+  "plugin_interpreter_recognizer_online": "{name} · 在线",
+  "plugin_interpreter_recognizer_missing": "还不能用",
+  "plugin_interpreter_recognizer_local_note": "用本体的语音识别：你选的识别听得懂外语就用它，否则用本地的 SenseVoice（中英日韩粤）。队友的声音不出电脑。停止本地语音识别时同传也停。",
+  "plugin_interpreter_recognizer_online_note": "用你选的在线识别：队友说的每一句都会发给它识别，每句计费（记在用量里）。",
+  "plugin_interpreter_recognizer_open_models": "去 设置 → 模型 换"
 }

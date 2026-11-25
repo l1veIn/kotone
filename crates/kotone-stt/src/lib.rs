@@ -13,6 +13,7 @@ pub mod download;
 pub mod eval;
 mod funasr_nano;
 mod iflytek;
+pub mod listen;
 pub mod mock;
 pub mod model;
 pub mod offline_sherpa;

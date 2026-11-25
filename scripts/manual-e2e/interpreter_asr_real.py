@@ -1,26 +1,28 @@
-"""Real-machine reproduction: the interpreter (同传, ADR 021) runs its own fixed SenseVoice (shared-resources audit §2 #7).
+"""Real-machine check: the interpreter (同传, ADR 021) uses Kotone's one speech recognition (shared-resources audit §2 #7).
 
 Two isolated Kotone instances (target/interp-asr-real/, `--background`, a copy of target/debug/kotone.exe so other builds
 are not blocked), a mock AI (mock_interpreter.py: “帮我盯着队友” → agent.start → voice.listen.start kotone-speaker.exe),
-no cost, no network.
+no cost, no network (the mock also answers DeepSeek's speech recognition, `/v1/tools/asr`, with a fixed sentence).
 
 A. Online-ASR player (DeepSeek ASR selected through a fake DeepSeek connection; the models directory is empty):
-   (a) 同传 should start without downloading SenseVoice.
+   (a) 同传 starts without downloading SenseVoice, recognises the teammate through the online recognition (the mock
+       gets the audio, the sentence reaches the background task) and the cost is in usage.jsonl as ASR.
 B. Local SenseVoice player (models.dir = target/interp-asr-real/models-sv, a copy of the model; mic = CABLE Output):
-   (b) with SenseVoice already loaded by “启动本地语音识别”, starting 同传 should not load a second copy
+   (b) with SenseVoice already loaded by “启动本地语音识别”, starting 同传 does not load a second copy
        (private bytes of kotone.exe before / after);
    (d) a call (the chat page's call button, clicked through the WebView2 DevTools port) while 同传 decodes the
-       teammate's sentence: prints both results with their times and vad→text of the call alone vs. during 同传;
-   (c) after “停止本地语音识别” (runtime.stop), 同传 should no longer recognise with a local model.
-Before the fix the four checks fail (that is the reproduction); after the fix (design: scratchpad
-interpreter-asr-design.md) they should pass.
+       teammate's sentence: both results come, one copy in memory; prints vad→text of the call alone vs. during 同传;
+   (c) after “停止本地语音识别” (runtime.stop) 同传 stops too (nothing heard afterwards, memory back, not listening)
+       and its background conversation gets a note.
+Before the fix (2026-11-25, commit 62557aaf) the four checks failed — that was the reproduction; after the fix
+(ADR 039 实施记录“同传用本体的识别”) they pass.
 
 What it does to the machine: NO keyboard or mouse input at all (clicks go into the page through DevTools). It plays
 sound: the “teammate” (an English SAPI sentence, SAPI volume 40) from kotone-speaker.exe (a renamed powershell.exe)
-on the default speakers three times, and the player's Chinese fixture (zh-game-3s.wav) into “CABLE Input” (silent).
+on the default speakers three times (A once, B twice), and the player's Chinese fixture (zh-game-3s.wav) into “CABLE Input” (silent).
 Her voice is at volume 0. Wake word, hotkeys off; typing tools denied. Never touches ~/.kotone, the player's WebView2
 data or credential store (KOTONE_HOME isolates the credential service name). Stops if a game process is running or a
-game is in front, and checks again before each sound.
+game is in front, and checks again before each sound. Takes target/tmp/real.lock (waits up to 30 minutes).
 Needs: target/debug/kotone.exe (embedded frontend), VB-CABLE, Python numpy + sounddevice, node + @playwright/test in
 apps/desktop, the SenseVoice model in target/interp-e2e/home/models or target/interp-asr-real/models-sv.
 usage: python -X utf8 -I scripts/manual-e2e/interpreter_asr_real.py
@@ -54,6 +56,7 @@ STOP = os.path.join(WORK, "speak.stop")
 NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
 GAMES = ("league of legends", "leagueclient", "riotclient", "valorant", "genshinimpact", "yuanshen", "starrail",
          "zenlesszonezero", "dota2", "cs2", "wow", "overwatch", "pubg", "tslgame", "naraka", "eldenring")
+LOCK = os.path.join(REPO, "target", "tmp", "real.lock")
 RESULTS = []
 HOME = ""
 ENV = {}
@@ -142,8 +145,13 @@ const page = browser.contexts().flatMap((c) => c.pages()).find((p) => p.url().in
 const out = {};
 try {
 %s
+} catch (e) {
+  out.url = page.url();
+  out.text = (await page.evaluate(() => document.body.innerText)).slice(0, 600);
+  await page.screenshot({ path: %s }).catch(() => {});
+  throw e;
 } finally { console.log(JSON.stringify(out)); await browser.close(); }
-""" % (DEVTOOLS, body)
+""" % (DEVTOOLS, body, json.dumps(os.path.join(WORK, "page-failure.png")))
     proc = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True,
                           encoding="utf-8", cwd=os.path.join(REPO, "apps", "desktop"))
     if proc.returncode != 0:
@@ -365,11 +373,26 @@ def phase_online():
         info(f"runtime: {json.dumps({k: (status or {}).get(k) for k in ('phase', 'engineId', 'modelId', 'asrLocal')})}")
         info(f"models dir: {sorted(os.listdir(MODELS_EMPTY))} (SenseVoice on disk: "
              f"{os.path.isdir(os.path.join(MODELS_EMPTY, SENSEVOICE_DIR))})")
-        _, _, result = start_interpreter()
+        asr_log = os.path.join(WORK, "asr.jsonl")
+        open(asr_log, "w").close()
+        main_id, _, result = start_interpreter()
         content = str(result.get("content", ""))
         info(f"voice.listen.start → isError={result.get('isError')}: {content[:160]}")
-        check("(a) online recognition ready → 同传 starts without downloading SenseVoice",
-              status and not result.get("isError"), content[:120])
+        started = check("(a) online recognition ready → 同传 starts without downloading SenseVoice",
+                        status and not result.get("isError") and '"online":true' in content.replace(" ", ""),
+                        content[:160])
+        if started:
+            seen = len(heard_sentences(main_id))
+            t = teammate_speaks()
+            heard = wait_until(lambda: heard_after(main_id, seen, t), 40)
+            uploads = sum(1 for _ in open(asr_log, encoding="utf-8"))
+            asr = [r for r in ledger() if r.get("kind") == "asr" and r.get("atMs", 0) >= t * 1000 - 1000]
+            info(f"heard {heard}; {uploads} uploads to the mock DeepSeek ASR; usage: "
+                 f"{[(r.get('provider'), r.get('model'), r.get('audioMs'), r.get('cost')) for r in asr]}")
+            check("(a) the teammate is recognised by the online recognition, the cost is in usage as ASR",
+                  heard and uploads > 0 and any(r.get("provider") == "deepseek" for r in asr),
+                  f"heard {heard and heard[1]}, {uploads} uploads, {len(asr)} usage rows")
+            info(f"models dir afterwards: {sorted(os.listdir(MODELS_EMPTY))}")
     finally:
         stop_app(app)
         open(STOP, "w").close()
@@ -399,8 +422,8 @@ def phase_local():
         info(f"private bytes: idle {idle:.0f} MB → after 启动本地语音识别 {core:.0f} MB (+{core - idle:.0f})")
 
         # A call alone (baseline vad→text).
-        page_js('await page.reload(); await page.waitForTimeout(2000);'
-                'await page.getByTestId("sidebar-new-chat").evaluate((el) => el.click()); await page.waitForTimeout(1000);')
+        # 不 reload：2026-11-25 起的构建里 reload 回来是“asset not found: index.html”（窗口地址带 index.html）
+        page_js('await page.getByTestId("sidebar-new-chat").evaluate((el) => el.click()); await page.waitForTimeout(1000);')
         mark = len(log_text())
         t0 = int(time.time() * 1000)
         click_call()
@@ -433,7 +456,8 @@ def phase_local():
              f"call → {said and (round((said[0] - t1) / 1000, 1), said[1])} s; "
              f"vad→text {solo} ms alone vs {during} ms during 同传")
         check("(d) call + 同传 together: one recognizer in memory (both results came, private bytes as (b))",
-              heard and said and both - core < 50, f"{both - idle:.0f} MB for recognition = two SenseVoice")
+              heard and said and both - core < 50,
+              f"{both - idle:.0f} MB for recognition (one SenseVoice is about 285 MB)")
         time.sleep(5)
 
         # (c) 停止本地语音识别.
@@ -447,9 +471,14 @@ def phase_local():
         heard = wait_until(lambda: heard_after(main_id, seen, start), 30)
         info(f"after 停止本地语音识别: phase stopped, private {stopped:.0f} MB ({stopped - idle:+.0f} vs idle), "
              f"interpreter.status listening={listening}, {seen} sentences before, then heard={heard}")
-        check("(c) 停止本地语音识别 → 同传 no longer recognises with a local model",
-              not heard and stopped - idle < 50,
-              f"heard {heard[1] if heard else '-'}; {stopped - idle:+.0f} MB still loaded")
+        notes = [m.get("text", "") for m in (invoke("agent_subagent_messages",
+                 {"conversationId": main_id, "name": "interpreter"}).get("ok") or {}).get("messages", [])
+                 if m.get("role") == "user" and m.get("source") == "listen"]
+        info(f"note in the background conversation: {notes[-1][:80] if notes else '-'}")
+        check("(c) 停止本地语音识别 → 同传 stops too (nothing heard, memory back, not listening, a note)",
+              not heard and stopped - idle < 50 and not listening and notes,
+              f"heard {heard[1] if heard else '-'}; {stopped - idle:+.0f} MB; listening={listening}; "
+              f"{len(notes)} notes")
 
         invoke("agent_send", {"text": "停止同传"})
         wait_until(lambda: "background task interpreter stopped" in log_text(), 60)
@@ -466,8 +495,37 @@ def phase_local():
             speaker.kill()
 
 
+def ledger():
+    try:
+        with open(os.path.join(HOME, "usage.jsonl"), encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def take_lock():
+    deadline = time.time() + 1800
+    while True:
+        try:
+            os.makedirs(LOCK)
+            return
+        except FileExistsError:
+            if time.time() > deadline:
+                raise SystemExit(f"STOP: {LOCK} held for 30 minutes (another real-machine script is running)")
+            print("waiting for real.lock …", flush=True)
+            time.sleep(15)
+
+
 def main():
     guard()
+    take_lock()
+    try:
+        return run()
+    finally:
+        os.rmdir(LOCK)
+
+
+def run():
     if not os.path.exists(SRC_EXE):
         raise SystemExit(f"no {SRC_EXE} (build the desktop app first)")
     os.makedirs(os.path.join(WORK, "bin"), exist_ok=True)
