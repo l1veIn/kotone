@@ -787,6 +787,25 @@ main 上第一次跑这一轮的代码（第七轮起都只推了分支，main �
 
 玩家：“是否我们项目存在过渡CI检测或者过渡测试的情况？需要分析一下”。只读分析（全文在会话 scratchpad 的 `ci-test-analysis.md`，要整理进 `docs/research/`）：测试本身不多（1654 个 Rust 测试在 CI 上只跑约 30 秒），慢在构建——`.cargo/config.toml` 的 `jobs = 1`（为本机 1455 加的）CI 也用、每次推送编三遍（clippy / test / debug 安装包）、Playwright 1 个 worker 10 分钟、一个任务串到底；**冷缓存的一次会超过 45 分钟上限，超时又存不下缓存，会一直超时**；今天两次失败都因为工具链没钉死。建议（低风险，等玩家点头）：CI 里 `CARGO_BUILD_JOBS` 4 / 2、`rust-toolchain.toml` 钉 1.100.0、前端和 Playwright（4 个 worker）单独一个任务、clippy 和测试分开、缓存只在 main 上存、审计只在锁文件变了时 + 每天一次、debug 安装包只在安装包配置变了时编、只改文档不跑 CI、`--no-fail-fast`、CI 里不截图、删 / 修过时的真机脚本（约 1,200 行）、写一个推送前本地跑的脚本。预计热缓存 25–30 → 7–9 分钟、冷缓存超时 → 15–18 分钟。要玩家定的两条：浏览器预览的假后端不再复制后端规则（预览能看到的会变少）；发 RC 时这个提交已经在 CI 过了就不再跑测试（每次省 15–20 分钟）。
 
+### CI 提速（玩家：“可以，我同意，尽量减少我们CI的时间，实在是太长了。”）
+
+分析写成了 [`2026-11-25-ci-and-tests-audit.md`](2026-11-25-ci-and-tests-audit.md)。做了的（覆盖面不变，只换跑法和时机）：
+
+- `145e0f65`：`ci.yml` 拆成三个并行 job（Rust lint / Rust test `--no-fail-fast` / Frontend）、CI 里 `CARGO_BUILD_JOBS` 4 / 2（本机 `jobs = 1` 不动）、Rust 缓存只在 main 上存、只改文档不跑；`audit.yml`（锁文件变了 + 每天一次）、`installer.yml`（打包相关文件变了才编 debug 安装包）；`rust-toolchain.toml` 钉 1.100.0；`release.yml` 在这个提交的 CI 三个 job 都绿时跳过测试；`pnpm prepush`（推送前本机照 CI 跑，`docs/development.md` 写成规矩）。
+- `4ec6568b`：Playwright `fullyParallel` + 预热、CI 不截图（`KOTONE_E2E_SHOTS`）、bin `test = false`、kotone-cli 测试合成 `tests/it/`、5 处端口竞争改成占着不听。`e3269027`：prepush 认 DNF / 腾讯 ACE、每步重查游戏。`262a77cd`：计费测试的临时目录撞进程号。`1c2a2ada`、`5a626a16`：CI 上 Playwright 重试 1 次、单测 60 秒、expect 15 秒、**2 个 worker**（4 个反而慢：8.9 分对 5.1 分）、`locale.spec` 点语言后先等整页加载。
+- 删 / 修了过时的真机脚本（`ced1cfd0`）：删 4 个，修 5 个（只语法检查，要机器空着时补跑）。
+
+| CI（main） | 用时 |
+| --- | --- |
+| 改之前（一个任务串到底） | 热缓存 32 分钟；冷缓存会超 45 分钟上限 |
+| 新结构第一次（Rust 缓存冷，`262a77cd`） | 13 分 50 秒（Playwright 挂 1 个超时） |
+| 第二次（缓存热，`1c2a2ada`） | 11 分 15 秒（4 个 worker 挤，`locale.spec` 挂） |
+| **现在（`5a626a16`，缓存热）** | **6 分 27 秒，全绿**：lint 2.2 分、test 5 分、Frontend 6.4 分（Playwright 206 个 5.1 分） |
+
+本机 `pnpm prepush` 全量约 4.5 分钟。**事故**：2026-11-25 22:19 玩家开了《地下城与勇士》（DNF.exe，不在游戏名单里），子代理只在开头查过一次，22:25 照样开了 4 个 worker，22:27 虚拟内存不足、挂了两小时——名单加了 DNF 和腾讯 ACE，改成每一步开跑前、跑着时都查（记忆 `real-machine-tests-check-foreground`）。
+
+还没做的：浏览器预览的假后端不再复制后端规则（玩家同意了，但不省 CI 时间，是前端重构，以后单独做）；`kotone-core` 的 `export_copies_sessions_wavs_and_index` 往 `target/tmp` 里攒 `eval-export-*`（已 122 个）。
+
 ### 下一步
 
 1. 玩家在场时做“还要玩家的”三样；真人按过以后做 ADR 040 第 2 期第 4 步（删“主键位”旧路径）。
