@@ -48,23 +48,16 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
             != next.ui.legacy_upgrade.uses_legacy_assistant()
         // 语音输入插件开关：语音输入热键跟着登记 / 撤掉（ADR 038）
         || crate::plugins::voice_input_on(old) != crate::plugins::voice_input_on(next)
-        // 快捷指令按槽位登记（第 n 条占 quick-message-n）：键变了、加了 / 删了一条都要重新登记
-        // （共享资源评估第二节第 13 条）；说的话、自动化按下时才读，不用
-        || quick_message_hotkeys(old) != quick_message_hotkeys(next)
-        // 热键表（ADR 040 D8）：上面的旧字段都是它的镜像，表里别的条目（更新的版本写的）变了也重新算一遍
-        || old.hotkeys != next.hotkeys
+        // 热键表（ADR 040 D8）：上面的旧字段都是它的镜像，表里别的条目（更新的版本写的）变了也重新算一遍；
+        // 自己加的（快捷指令……，第 3 期）键变了、加了 / 删了一条、换了种类都要重新登记（共享资源评估第二节第 13 条），
+        // 说的话、自动化的入参按下时才读，不用
+        || hotkey_table_changed(old, next)
 }
 
-/// 每个快捷指令槽位登记的键（照 `hotkey.rs` 的 `named_list_from`：没有这一条就是空的）。
-fn quick_message_hotkeys(settings: &Settings) -> Vec<&str> {
-    let quick = &settings.assistant.companion.quick_messages;
-    (0..kotone_core::hotkey::HK_QUICK_MESSAGES.len())
-        .map(|slot| {
-            quick
-                .get(slot)
-                .map_or("", |message| message.hotkey.as_str())
-        })
-        .collect()
+/// 热键表里登记要看的那部分变了没有（[`kotone_core::hotkey_custom::registration_view`]）。
+fn hotkey_table_changed(old: &Settings, next: &Settings) -> bool {
+    use kotone_core::hotkey_custom::registration_view;
+    registration_view(&old.hotkeys) != registration_view(&next.hotkeys)
 }
 
 /// 应用级热键（启动 / 停止 Kotone）变化：与 runtime 是否运行无关，必须重注册。
@@ -73,8 +66,9 @@ fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
         || old.automation_stop_hotkey != next.automation_stop_hotkey
         || old.ui.legacy_upgrade.uses_legacy_assistant()
             != next.ui.legacy_upgrade.uses_legacy_assistant()
-        // 谁先拿到键按表的顺序算（ADR 040 D6）：呼叫键变了，停下热键可能从“被占了”变成能登记
-        || old.hotkeys != next.hotkeys
+        // 谁先拿到键按表的顺序算（ADR 040 D6）：呼叫键变了，停下热键可能从“被占了”变成能登记；
+        // 自己加的不用听的（运行自动化，第 3 期）也随应用登记
+        || hotkey_table_changed(old, next)
 }
 
 /// 局部更新配置；热键变化时触发重注册
@@ -113,8 +107,15 @@ pub(crate) fn update_settings(
                 serde_json::to_value(&*next).map_err(|e| format!("序列化配置失败: {e}"))?;
             settings::merge_json(&mut merged, &patch);
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
-            // 热键：旧字段（hotkey.key……）改了就改表，再照表写回（ADR 040 D8）；下面的检查看的是对齐以后的值
+            // 快捷指令的旧写法照旧受旧的限制（最多 8 条、话 1 到 200 字……）：对齐以后旧字段只是表的镜像，先查
+            if next.assistant.companion.quick_messages
+                != previous.assistant.companion.quick_messages
+            {
+                next.assistant.companion.validate()?;
+            }
+            // 热键：旧字段（hotkey.key、快捷指令……）改了就改表，再照表写回（ADR 040 D8）；下面的检查看的是对齐以后的值
             next.reconcile_hotkeys(&previous);
+            next.hotkeys.validate_custom()?;
             next.overlay.normalize_interaction();
             next.assistant.normalize_voices();
             next.ui.sidebar.normalize();
@@ -357,42 +358,47 @@ mod hotkey_settings_tests {
         }
     }
 
-    /// 共享资源评估第二节第 13 条：语音识别开着时改快捷指令的键，要立即重新登记（快捷指令按槽位登记：
-    /// 第 n 条占 `quick-message-n`，按下时读那一格）。键变了、加了一条带键的、删了一条（后面的挪了格子）都算；
-    /// 加了一条没绑键的、只改说的话不算（按下时才读）。
+    /// 旧写法改快捷指令（`settings.update` / 唤醒页）：和桌面端 `update_settings` 一样对齐进热键表。
+    fn with_quick(
+        old: &Settings,
+        edit: impl FnOnce(&mut Vec<kotone_core::assistant::QuickMessage>),
+    ) -> Settings {
+        let mut next = old.clone();
+        edit(&mut next.assistant.companion.quick_messages);
+        next.reconcile_hotkeys(old);
+        next
+    }
+
+    /// 共享资源评估第二节第 13 条：语音识别开着时改快捷指令的键，要立即重新登记。快捷指令在热键表里（第 3 期），
+    /// 每条用自己的 id 登记：键变了、加了一条带键的、删了一条、从“说一句”换成“运行自动化”（随识别 → 随应用）都算；
+    /// 加了一条没绑键的、只改说的话、只改自动化的入参不算（按下时才读）。
     #[test]
     fn changing_a_quick_message_hotkey_requires_registration() {
         let mut old = Settings::default();
         old.assistant.companion.quick_messages = vec![quick("q1", ""), quick("q2", "F7")];
-        let mut next = old.clone();
-        next.assistant.companion.quick_messages[0].hotkey = "F6".into();
+        old.reconcile_hotkeys(&Settings::default());
+        let next = with_quick(&old, |q| q[0].hotkey = "F6".into());
         assert!(hotkey_registration_changed(&old, &next), "绑了一个键");
-        let mut next = old.clone();
-        next.assistant.companion.quick_messages[1].hotkey = "F8".into();
+        let next = with_quick(&old, |q| q[1].hotkey = "F8".into());
         assert!(hotkey_registration_changed(&old, &next), "换了一个键");
-        let mut next = old.clone();
-        next.assistant.companion.quick_messages.remove(0);
-        assert!(
-            hotkey_registration_changed(&old, &next),
-            "删了第一条：F7 从第 2 格挪到第 1 格"
-        );
-        let mut next = old.clone();
-        next.assistant
-            .companion
-            .quick_messages
-            .push(quick("q3", "F9"));
+        let next = with_quick(&old, |q| {
+            q.remove(1);
+        });
+        assert!(hotkey_registration_changed(&old, &next), "删了一条带键的");
+        let next = with_quick(&old, |q| q.push(quick("q3", "F9")));
         assert!(hotkey_registration_changed(&old, &next), "加了一条带键的");
-        let mut next = old.clone();
-        next.assistant
-            .companion
-            .quick_messages
-            .push(quick("q3", ""));
+        let next = with_quick(&old, |q| q[1].automation_id = "auto-1".into());
+        assert!(
+            hotkey_registration_changed(&old, &next) && app_hotkey_changed(&old, &next),
+            "换成运行自动化：识别没在跑也登记"
+        );
+        let next = with_quick(&old, |q| q.push(quick("q3", "")));
         assert!(
             !hotkey_registration_changed(&old, &next),
             "加了一条没绑键的"
         );
-        let mut next = old.clone();
-        next.assistant.companion.quick_messages[1].text = "我们推塔".into();
+        let next = with_quick(&old, |q| q[1].text = "我们推塔".into());
+        assert_ne!(next.hotkeys, old.hotkeys, "话在表里改了");
         assert!(!hotkey_registration_changed(&old, &next), "只改了话");
         assert!(!app_hotkey_changed(&old, &next));
     }

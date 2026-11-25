@@ -12,12 +12,6 @@ const NAMES: Record<string, () => string> = {
   escape: m.hotkeys_escape,
 };
 
-/** 快捷指令的格子号（`quick-message-3` → 3）；不是快捷指令为 null。 */
-export function quickMessageNumber(id: string): number | null {
-  const slot = /^quick-message-(\d+)$/.exec(id);
-  return slot ? Number(slot[1]) : null;
-}
-
 /** 文案键里的一段：连字符换成下划线（`channel-cycle` → `channel_cycle`）。 */
 function keyPart(id: string): string {
   return id.replace(/[^A-Za-z0-9_]/g, "_");
@@ -32,8 +26,8 @@ export function keyUseName(use: KeyUse): string {
     if (use.gameKey === "console") return m.hotkeys_game_console({ game });
     return m.hotkeys_game_open_chat({ game });
   }
-  const number = quickMessageNumber(use.id);
-  if (number !== null) return m.voice_hotkey_name_quick_message({ number });
+  // 自己加的（ADR 040 第 3 期）：玩家起的名字，没起就是要做的事（后端给的，带着跟她说的那句话）
+  if (use.source === "custom") return use.label;
   if (use.source === "plugin" && use.owner && use.command) {
     const command = use.command.slice(use.owner.length + 1);
     return pluginText(use.owner, `command_${keyPart(command)}_name`, use.label);
@@ -50,16 +44,18 @@ export function keyUseSource(use: KeyUse): string {
   return m.hotkeys_source_core();
 }
 
-/** 一行底下的补充：快捷指令说的话、Esc 做什么、找不到的为什么。 */
+/** 一行底下的补充：快捷指令跟她说的话（起了名字时）、运行自动化、Esc 做什么、找不到的为什么。 */
 export function keyUseDetail(use: KeyUse, settings: Settings | null): string {
   if (use.id === "escape") return m.hotkeys_escape_detail();
   if (use.source === "unknown") return m.hotkeys_unknown_detail();
-  const number = quickMessageNumber(use.id);
-  if (number === null) return "";
-  const message = settings?.assistant.companion?.quickMessages?.[number - 1];
-  if (!message) return use.detail ?? "";
-  if (message.automationId?.trim()) return message.label.trim() || m.hotkeys_quick_automation();
-  return message.label.trim() || message.text.trim();
+  if (use.source !== "custom") return "";
+  if (use.action === "automation") return m.hotkeys_quick_automation();
+  // 没起名字时名字里已经有那句话了
+  const id = use.id.slice("custom.".length);
+  const binding = settings?.hotkeys?.bindings?.find((b) => b.id === id);
+  const quick = settings?.assistant.companion?.quickMessages?.find((q) => q.id === id);
+  const named = !!(binding?.label?.trim() || quick?.label.trim());
+  return named ? (use.detail ?? "") : "";
 }
 
 /** 好几个冲突连成一句（“语音输入热键、《英雄联盟》的打开聊天框键”）。 */

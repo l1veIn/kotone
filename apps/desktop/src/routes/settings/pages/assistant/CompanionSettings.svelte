@@ -152,7 +152,7 @@
           <!-- 快捷指令的键也只在「设置 → 热键」改（ADR 040 D3；说的话、自动化还在这里） -->
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-xs text-muted-foreground">{m.companion_quick_hotkey_title({ index: index + 1 })}</span>
-            <HotkeyLink id={`quick-message-${index + 1}`} value={item.hotkey} />
+            <HotkeyLink id={`custom.${item.id}`} value={item.hotkey} />
           </div>
         </div>
       {/each}

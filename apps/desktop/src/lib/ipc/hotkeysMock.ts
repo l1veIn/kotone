@@ -114,13 +114,30 @@ function bindings({ settings, voiceInput }: HotkeySources): KeyUse[] {
   const plugin = { owner: voiceInput.id, ownerName: voiceInput.name, enabled: voiceInput.enabled };
   for (const c of COMMANDS.filter((c) => c.command.startsWith("voice-input."))) out.push(commandRow(settings, c, plugin));
   if (!legacyOnly) {
-    (settings.assistant.companion?.quickMessages ?? []).slice(0, 8).forEach((message, index) => {
-      const detail = message.automationId?.trim() ? `运行自动化 ${message.automationId.trim()}` : (message.label.trim() || message.text.trim());
-      out.push(entry(`quick-message-${index + 1}`, message.hotkey, "custom", `快捷指令 ${index + 1}`, PAGE,
-        `assistant.companion.quickMessages.${index}.hotkey`, { detail, statusId: `quick-message-${index + 1}` }));
-    });
+    // 快捷指令在热键表里（第 3 期，后端 `hotkey_custom`）；预览照旧把旧字段当存放处，行 id 是 `custom.<id>`
+    for (const message of settings.assistant.companion?.quickMessages ?? []) out.push(customRow(message));
   }
   return out;
+}
+
+/** 同后端 `hotkey_table::custom_row`：名字是玩家起的，没起就用要做的事。 */
+function customRow(message: { id: string; label: string; text: string; hotkey: string; automationId?: string }): KeyUse {
+  const automation = message.automationId?.trim();
+  const text = message.text.trim();
+  const short = [...text].length > 16 ? `${[...text].slice(0, 16).join("")}…` : text;
+  const name = automation ? `运行自动化「${automation}」` : `快捷指令「${short}」`;
+  const id = `custom.${message.id}`;
+  return entry(id, message.hotkey, "custom", message.label.trim() || name, PAGE, "hotkeys.bindings", {
+    detail: automation ? `运行自动化 ${automation}` : text, statusId: id, action: automation ? "automation" : "say",
+  });
+}
+
+/** `custom.<id>`，或第 1、2 期的 `quick-message-n`（第 n 条快捷指令）→ 那一条快捷指令。 */
+function quickOf(settings: Settings, id: string) {
+  const messages = settings.assistant.companion?.quickMessages ?? [];
+  const slot = /^quick-message-(\d+)$/.exec(id);
+  if (slot) return messages[Number(slot[1]) - 1];
+  return id.startsWith("custom.") ? messages.find((m) => `custom.${m.id}` === id) : undefined;
 }
 
 function gameKeys(profiles: GameProfile[], activeProfileId: string | null | undefined): KeyUse[] {
@@ -168,16 +185,18 @@ export function hotkeyTable(src: HotkeySources): HotkeyTable {
 
 const COMMON_GAME_KEYS = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F9", "F10", "F11", "F12", "Tab", "Space", "Enter", "Shift", "Control", "Alt"];
 
-/** `except`：表里的 id、命令名、第 1 期的 id 都认（同后端）。 */
-function isSelf(use: KeyUse, except?: string): boolean {
+/** `except`：表里的 id、命令名、第 1 期的 id、`quick-message-n` 都认（同后端）。 */
+function isSelf(settings: Settings, use: KeyUse, except?: string): boolean {
   if (!except) return false;
-  return use.id === except || use.command === except || (!!use.command && commandOf(except)?.command === use.command);
+  const quick = quickOf(settings, except);
+  return use.id === except || use.command === except || (!!use.command && commandOf(except)?.command === use.command)
+    || (!!quick && use.id === `custom.${quick.id}`);
 }
 
 export function checkHotkey(src: HotkeySources, key: string, except?: string): HotkeyCheck {
   const trimmed = key.trim();
   const conflicts = [...bindings(src), ...gameKeys(src.profiles, src.settings.activeProfileId)]
-    .filter((use) => !isSelf(use, except) && collides(use, trimmed));
+    .filter((use) => !isSelf(src.settings, use, except) && collides(use, trimmed));
   const warnings = COMMON_GAME_KEYS.some((k) => k.toLowerCase() === trimmed.toLowerCase())
     ? [`「${trimmed}」是常见游戏/系统键位，可能与游戏内操作冲突`] // i18n-ignore：后端原样给的提示（预览用假数据）
     : [];
@@ -189,19 +208,18 @@ export function setHotkey(src: HotkeySources, id: string, key: string): void {
   const trimmed = key.trim();
   // i18n-ignore-start：后端原样给的错误（预览用假数据）
   if (trimmed && !canonicalCombo(trimmed)) throw new Error(`认不出「${trimmed}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按`);
-  const quick = /^quick-message-(\d+)$/.exec(id);
+  const isQuick = id.startsWith("custom.") || /^quick-message-\d+$/.test(id);
   const command = commandOf(id);
-  if (!quick && !command) throw new Error(id === "escape" ? "Esc 是固定的，不能改" : id === "legacy-reminder" ? "提醒助手热键在「提醒助手」页改" : `「${id}」在这里改不了`);
+  if (!isQuick && !command) throw new Error(id === "escape" ? "Esc 是固定的，不能改" : id === "legacy-reminder" ? "提醒助手热键在「提醒助手」页改" : `「${id}」在这里改不了`);
   // i18n-ignore-end
   if (trimmed) {
     const conflict = checkHotkey(src, trimmed, id).conflicts[0];
     if (conflict) throw new Error(conflictError(trimmed, conflict));
   }
   const { settings } = src;
-  if (quick) {
-    const messages = settings.assistant.companion?.quickMessages ?? [];
-    const message = messages[Number(quick[1]) - 1];
-    if (!message) throw new Error(`没有第 ${quick[1]} 条快捷指令了，刷新一下再改`); // i18n-ignore：后端原样给的错误
+  if (isQuick) {
+    const message = quickOf(settings, id);
+    if (!message) throw new Error("这条自己加的热键已经没有了，刷新一下再改"); // i18n-ignore：后端原样给的错误
     message.hotkey = trimmed;
     return;
   }

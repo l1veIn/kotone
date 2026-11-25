@@ -354,7 +354,7 @@ export async function checkHotkey(key: string, except?: string): Promise<HotkeyC
 
 /**
  * 「设置 → 热键」里改一个键（ADR 040 D3：热键只在那一页改；新手引导第一次设呼叫键也走这里）。`id` 是表里那一行的 id
- * （命令名 `kotone.call`、`quick-message-n`），`key` 空 = 清掉。后端查冲突：新造成的冲突不让存，错误里说清楚和谁撞了。
+ * （命令名 `kotone.call`、自己加的 `custom.<id>`；第 1 期的 id、`quick-message-n` 也认），`key` 空 = 清掉。后端查冲突：新造成的冲突不让存，错误里说清楚和谁撞了。
  */
 export async function setHotkey(id: string, key: string): Promise<Settings> {
   if (!isTauri) return browserMock.setHotkey(id, key);

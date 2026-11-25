@@ -3,7 +3,6 @@
   "voice_hotkey_name_record": "Voice input hotkey",
   "voice_hotkey_name_legacy_reminder": "Reminder assistant hotkey",
   "voice_hotkey_name_call": "Call key",
-  "voice_hotkey_name_quick_message": "Quick command {number} hotkey",
   "voice_hotkey_name_channel_cycle": "Switch channel hotkey",
   "voice_hotkey_name_resend_last": "Resend last message hotkey",
   "voice_hotkey_name_post_process_toggle": "Text processing on/off hotkey",

@@ -5,7 +5,7 @@
   import { m } from "$lib/paraglide/messages.js";
 
   let { id, value }: {
-    /** 热键表里那一行的 id（命令名 `kotone.call`、`quick-message-n`）。 */
+    /** 热键表里那一行的 id（命令名 `kotone.call`、自己加的 `custom.<id>`）。 */
     id: string;
     /** 现在的键（空 = 没设）。 */
     value: string;

@@ -104,7 +104,7 @@ pub(crate) async fn check_hotkey(
 }
 
 /// 「设置 → 热键」里改一个键（ADR 040 D3：热键只在这一页改；新手引导第一次设呼叫键也走这里）。
-/// `id` 是表里那一行的 id（命令名、`quick-message-n`；第 1 期的 id 也认），`key` 空 = 清掉。
+/// `id` 是表里那一行的 id（命令名、自己加的 `custom.<id>`；第 1 期的 id、`quick-message-n` 也认），`key` 空 = 清掉。
 /// 走和设置页保存同一条路：新造成的冲突不让存，说清楚和谁撞了；存了马上重新登记。
 #[tauri::command]
 pub(crate) fn set_hotkey(app: AppHandle, id: String, key: String) -> Result<Settings, String> {
@@ -113,20 +113,18 @@ pub(crate) fn set_hotkey(app: AppHandle, id: String, key: String) -> Result<Sett
     crate::settings_cmd::update_settings_from_backend(&app, patch)
 }
 
-/// 改一个键的设置补丁：命令写热键表（整组替换，别的条目原样），快捷指令写它那一条的键（第 3 期才搬进表）。
+/// 改一个键的设置补丁：写热键表（整组替换，别的条目原样）。命令改它的第一条；自己加的（快捷指令、运行自动化，
+/// 第 3 期搬进了表）改那一条的键，条目留着。
 fn hotkey_patch(current: &Settings, id: &str, key: &str) -> Result<Value, String> {
     if !key.is_empty() && kotone_core::hotkey::parse_hotkey(key).is_none() {
         return Err(format!(
             "认不出「{key}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按"
         ));
     }
-    if let Some(slot) = kotone_core::hotkey::quick_message_slot(id) {
-        let mut quick = current.assistant.companion.quick_messages.clone();
-        let message = quick
-            .get_mut(slot)
-            .ok_or_else(|| format!("没有第 {} 条快捷指令了，刷新一下再改", slot + 1))?;
-        message.hotkey = key.to_string();
-        return Ok(json!({"assistant": {"companion": {"quickMessages": quick}}}));
+    if kotone_core::hotkey_custom::resolve_row(current, id).is_some() {
+        let mut next = current.clone();
+        next.set_custom_key(id, key)?;
+        return Ok(json!({"hotkeys": {"bindings": next.hotkeys.bindings}}));
     }
     let command = legacy_by_id(id).map_or(id, |legacy| legacy.command);
     if split_command(command).is_none() {
@@ -149,13 +147,23 @@ mod tests {
     #[test]
     fn a_hotkey_change_is_a_settings_patch() {
         let mut settings = Settings::default();
-        settings.assistant.companion.quick_messages = vec![Default::default()];
+        settings
+            .hotkeys
+            .bindings
+            .push(kotone_core::hotkey_custom::binding_of(
+                &kotone_core::assistant::QuickMessage {
+                    id: "q1".into(),
+                    text: "集合".into(),
+                    ..Default::default()
+                },
+            ));
+        settings.sync_hotkey_mirrors();
         // 命令：整组替换热键表，别的条目原样
         let patch = hotkey_patch(&settings, CMD_CHANNEL_CYCLE, "Alt+C").unwrap();
         let bindings = &patch["hotkeys"]["bindings"];
-        assert_eq!(bindings.as_array().unwrap().len(), 4);
+        assert_eq!(bindings.as_array().unwrap().len(), 5);
         assert_eq!(
-            bindings[3],
+            bindings[4],
             json!({"key": "Alt+C", "command": CMD_CHANNEL_CYCLE})
         );
         // 第 1 期的 id 也认；空 = 清掉
@@ -169,13 +177,17 @@ mod tests {
             hotkey_patch(&settings, CMD_CALL, "F9").unwrap()["hotkeys"]["bindings"][0]["key"],
             "F9"
         );
-        // 快捷指令：写它那一条的键
-        let patch = hotkey_patch(&settings, "quick-message-1", "F8").unwrap();
-        assert_eq!(
-            patch["assistant"]["companion"]["quickMessages"][0]["hotkey"],
-            "F8"
-        );
+        // 自己加的（快捷指令搬进了表）：改那一条的键，话不动；第 1、2 期的 `quick-message-n` 也认
+        for id in ["custom.q1", "quick-message-1"] {
+            let patch = hotkey_patch(&settings, id, "F8").unwrap();
+            assert_eq!(
+                patch["hotkeys"]["bindings"][3],
+                json!({"key": "F8", "say": "集合", "id": "q1"}),
+                "{id}"
+            );
+        }
         assert!(hotkey_patch(&settings, "quick-message-2", "F8").is_err());
+        assert!(hotkey_patch(&settings, "custom.gone", "F8").is_err());
         // 改不了的、认不出的键
         assert!(hotkey_patch(&settings, "escape", "F8").is_err());
         assert!(hotkey_patch(&settings, "legacy-reminder", "F8").is_err());

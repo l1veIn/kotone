@@ -3,7 +3,6 @@
   "voice_hotkey_name_record": "语音输入热键",
   "voice_hotkey_name_legacy_reminder": "提醒助手热键",
   "voice_hotkey_name_call": "呼叫键",
-  "voice_hotkey_name_quick_message": "快捷指令 {number} 热键",
   "voice_hotkey_name_channel_cycle": "频道切换热键",
   "voice_hotkey_name_resend_last": "重发最近一条热键",
   "voice_hotkey_name_post_process_toggle": "文字处理开关热键",

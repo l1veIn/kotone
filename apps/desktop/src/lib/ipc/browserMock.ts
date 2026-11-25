@@ -909,12 +909,10 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
           key: mock.settings.automationStopHotkey || null,
           error: null,
         },
-        // 快捷指令按槽位登记（同后端 KNOWN_NAMED_HOTKEYS）
-        ...Array.from({ length: 8 }, (_, index) => ({
-          id: `quick-message-${index + 1}`,
-          key: usesLegacyVoiceInput(mock.settings.ui) ? null : mock.settings.assistant.companion?.quickMessages?.[index]?.hotkey || null,
-          error: null,
-        })),
+        // 自己加的（快捷指令……）每条用自己的 id 登记，接在后面（同后端：第 3 期起是 `custom.<id>`）
+        ...(usesLegacyVoiceInput(mock.settings.ui) ? [] : mock.settings.assistant.companion?.quickMessages ?? [])
+          .filter((message) => message.hotkey.trim())
+          .map((message) => ({ id: `custom.${message.id}`, key: message.hotkey, error: null })),
       ],
     };
 }

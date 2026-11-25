@@ -157,9 +157,10 @@ pub struct Settings {
     /// 旧的 `lol.enabled`（ADR 035）读进来时搬到 `plugins.lol.sources.client`（[`migrate_plugins_json`]）。
     #[serde(default)]
     pub plugins: std::collections::BTreeMap<String, PluginConfig>,
-    /// 热键表（ADR 040 D8）：`hotkeys.bindings`，每条 键 + 命令（第 3 期还有工具、页面）。新字段，旧版本会忽略；
-    /// 热键的旧字段（`hotkey.key`、`channelCycleHotkey`……、呼叫键）是它的镜像，每次保存照表写全
-    /// （[`crate::hotkey_bindings`]：读旧写新、旧写法照样能改）。
+    /// 热键表（ADR 040 D8）：`hotkeys.bindings`，每条 键 + 命令，或者玩家自己加的（跟她说一句、运行自动化、调工具、
+    /// 打开页面，第 3 期）。新字段，旧版本会忽略；热键的旧字段（`hotkey.key`、`channelCycleHotkey`……、呼叫键、快捷指令
+    /// `assistant.companion.quickMessages`）是它的镜像，每次保存照表写全（[`crate::hotkey_bindings`]、
+    /// [`crate::hotkey_custom`]：读旧写新、旧写法照样能改）。
     #[serde(default)]
     pub hotkeys: crate::hotkey_bindings::HotkeysConfig,
 }
@@ -1026,6 +1027,8 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     settings.assistant.normalize_voices();
     migrate_legacy_engine_ids(&mut settings);
     settings.post_processing.normalize_active_id();
+    // 快捷指令搬进热键表（ADR 040 第 3 期）：表里没有这个 id 的加进去，有的以表为准；再照表写回旧字段
+    settings.adopt_quick_messages_on_load();
     settings.sync_hotkey_mirrors();
     SettingsLoadResult {
         settings,

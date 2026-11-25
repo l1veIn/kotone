@@ -68,8 +68,8 @@ test("设置 → 热键 lists every hotkey with its source and edits them in pla
   await expectRow("voice-input.talk", "语音输入热键", "语音输入", "CapsLock");
   await expectRow("voice-input.channel-cycle", "频道切换热键", "语音输入", "Shift+CapsLock");
   await expectRow("voice-input.resend-last", "重发最近一条热键", "语音输入", "");
-  await expectRow("quick-message-1", "快捷指令 1 热键", "自己加的", "F8");
-  await expect(page.getByTestId("hotkeys-row-quick-message-1")).toContainText("集合打小龙");
+  // 快捷指令搬进了热键表（第 3 期），行 id 是 `custom.<它的 id>`；没起名字时名字就是那句话
+  await expectRow("custom.q1", "快捷指令「集合打小龙」", "自己加的", "F8");
   // Esc 不能改：只列出来，没有输入框、没有“去改”
   await expect(page.getByTestId("hotkeys-row-escape")).toContainText("取消这次录音");
   await expect(page.getByTestId("hotkeys-key-escape")).toHaveText("Escape");
@@ -80,14 +80,14 @@ test("设置 → 热键 lists every hotkey with its source and edits them in pla
   await expect(list.locator("[data-conflict='true']")).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("hotkeys-page.png"), fullPage: true, animations: "disabled" });
 
-  // 在表里改：快捷指令的键（存在那一条快捷指令里），唤醒页跟着显示
-  const quick = page.getByTestId("hotkey-input-quick-message-1");
+  // 在表里改：快捷指令的键（预览把快捷指令的旧字段当存放处），唤醒页跟着显示
+  const quick = page.getByTestId("hotkey-input-custom.q1");
   await quick.fill("F7");
   await quick.press("Enter");
-  await expect(page.getByTestId("hotkey-status-quick-message-1")).toHaveText("当前生效：F7");
+  await expect(page.getByTestId("hotkey-status-custom.q1")).toHaveText("当前生效：F7");
   expect((await mockSettings(page)).assistant.companion.quickMessages[0].hotkey).toBe("F7");
   await openSettingsTab(page, "call");
-  await expect(page.getByTestId("hotkey-link-key-quick-message-1")).toHaveText("F7");
+  await expect(page.getByTestId("hotkey-link-key-custom.q1")).toHaveText("F7");
 
   // 恢复默认：只有 D4 的三个默认键有
   await openSettingsTab(page, "hotkeys");
@@ -164,7 +164,7 @@ test("other pages show the current key and 去改 opens its row in 设置 → �
   await expect(page.getByTestId("settings-call").locator("input[aria-label='呼叫键']")).toHaveCount(0);
   await goTo("kotone.call");
   await openSettingsTab(page, "call");
-  await goTo("quick-message-1");
+  await goTo("custom.q1");
   // 设置 → 系统 → 停下
   await openSettingsTab(page, "system");
   await expect(page.getByTestId("hotkey-link-key-kotone.stop")).toHaveText("Ctrl + Shift + F12");

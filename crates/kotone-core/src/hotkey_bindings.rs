@@ -1,8 +1,9 @@
 //! 热键表的存法（ADR 040 D8；第 2 期第 1 步：格式 + 迁移，登记和界面还读旧字段）。
 //!
-//! config.json 里一个 `hotkeys.bindings` 列表，每条一个 JSON 对象：`key` 加上三选一——`command`
-//! （`<来源>.<命令 id>`，本体的是 `kotone.*`）、`tool`（+ `args`，第 3 期）、`page`（`ui://…`，第 3 期）。
-//! 照 VS Code 的 `keybindings.json`（key + command + args）。**不存“按一下 / 按住”**：由命令自己声明
+//! config.json 里一个 `hotkeys.bindings` 列表，每条一个 JSON 对象：`key` 加上四选一——`command`
+//! （`<来源>.<命令 id>`，本体的是 `kotone.*`）；或者玩家自己加的（第 3 期，带 `id`、可选 `label`，见
+//! [`crate::hotkey_custom`]）：`say`（跟她说一句，快捷指令）、`tool`（+ `args`；运行自动化就是 `automation.run`）、
+//! `page`（`ui://…`）。照 VS Code 的 `keybindings.json`（key + command + args）。**不存“按一下 / 按住”**：由命令自己声明
 //! （ADR 040 实施记录里对 D8 的修订）。
 //!
 //! 规矩（原则 19，读旧写新、不覆盖新字段）：
@@ -41,8 +42,8 @@ pub const CMD_PP_TOGGLE: &str = "voice-input.post-process-toggle";
 pub const CMD_PP_CYCLE: &str = "voice-input.post-process-cycle";
 
 /// 一个有旧字段的命令：命令名、第 1 期起热键表 / `hotkeys.status` 用的 id、旧版本缺这个字段时的默认。
-/// 迁移、镜像、旧写法都查这一张（顺序 = 热键表里的顺序）。提醒助手热键（ADR 040 D10）和快捷指令
-/// （第 3 期，D5）不在这里：它们照旧存在原来的地方。
+/// 迁移、镜像、旧写法都查这一张（顺序 = 热键表里的顺序）。提醒助手热键（ADR 040 D10）不在这里，照旧存在原来的地方；
+/// 快捷指令（第 3 期，D5）的镜像按 id 对，见 [`crate::hotkey_custom`]。
 pub struct Legacy {
     pub command: &'static str,
     pub id: &'static str,
@@ -219,16 +220,18 @@ impl Settings {
 
     /// 把表写回旧字段（只读的镜像）。没绑的写空串。呼叫键看是哪种用户：新用户写 `assistant.hotkey`；
     /// 0.1.x 升级后启用了她的写 `assistant.companionBindings.hotkey`（`assistant.hotkey` 是他的提醒键，不动）；
-    /// 还没启用她的没有呼叫键，不写。
+    /// 还没启用她的没有呼叫键，不写。快捷指令（`assistant.companion.quickMessages`）写表里前 8 条
+    /// “说一句 / 运行已保存的自动化”（第 3 期，[`crate::hotkey_custom`]）。
     pub fn sync_hotkey_mirrors(&mut self) {
         for legacy in LEGACY {
             let key = self.binding_key(legacy.command).to_string();
             set_mirror(self, legacy.command, key);
         }
+        self.sync_quick_message_mirror();
     }
 
-    /// 一次修改以后（`previous` 是改之前）：表没动、旧字段变了的，照旧字段改表（旧写法）；表动了的以表为准。
-    /// 最后把旧字段照表写回。调两次和调一次一样。
+    /// 一次修改以后（`previous` 是改之前）：表没动、旧字段变了的，照旧字段改表（旧写法，快捷指令按 id 搬）；
+    /// 表动了的以表为准。自己加的条目没有 id 的补上。最后把旧字段照表写回。调两次和调一次一样。
     pub fn reconcile_hotkeys(&mut self, previous: &Settings) {
         if self.hotkeys == previous.hotkeys {
             for legacy in LEGACY {
@@ -243,7 +246,9 @@ impl Settings {
                     self.set_binding(legacy.command, &key);
                 }
             }
+            self.adopt_quick_message_edits();
         }
+        self.number_custom_entries();
         self.sync_hotkey_mirrors();
     }
 }
@@ -256,6 +261,8 @@ pub(crate) fn with_direct_edits(settings: &Settings) -> Option<Settings> {
     if LEGACY
         .iter()
         .all(|l| mirror(settings, l.command) == mirror(&expected, l.command))
+        && settings.assistant.companion.quick_messages
+            == expected.assistant.companion.quick_messages
     {
         return None;
     }

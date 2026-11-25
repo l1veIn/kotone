@@ -117,7 +117,7 @@ pub const FIELDS: &[Field] = &[
     f("runtimeToggleHotkey", "启动 / 停止本地语音识别热键", "设置 → 热键", "只在用本地语音识别时显示和生效：按一下启动（把本地模型加载进内存），再按一下停止。在线识别打开 Kotone 就能用，没有启动这回事；换成在线识别时这个值保留，换回本地时还在。空 = 不用。", NONE, NOW),
     f("automationStopHotkey", "停下热键", "设置 → 热键", "停下：立刻停止她正在做的事（操作游戏、后台的事）和所有自动化，按住的键一起松开。也可以按 Esc（她操作游戏时）、说“停下”或用托盘菜单「停下」。空 = 不用（托盘仍能停）。", NONE, NOW),
     f("hotkeyBackend", "热键实现方式", "设置 → 系统", "游戏里热键不灵时可以换。", &[("auto", "自动"), ("llhook", "低层键盘钩子"), ("register", "系统热键注册")], NOW),
-    f("hotkeys.bindings", "热键表", "设置 → 热键", "全部热键存在这里：数组，每条 {key, command}。command 是 <来源>.<命令>：kotone.call 呼叫、kotone.stop 停下、kotone.speech-toggle 启动 / 停止本地语音识别、voice-input.talk 说话、voice-input.channel-cycle 切换频道、voice-input.resend-last 重发上一句、voice-input.post-process-toggle 开关文字处理、voice-input.post-process-cycle 切换文字处理方案。整组替换；只改一个键时照旧写 hotkey.key、channelCycleHotkey、assistant.hotkey 这些字段也行，会改进表里。改成和别的热键、Esc、游戏配置的聊天键一样的键会被拒绝（已经冲突着、这次没动的不拦）。看全部热键和冲突用 hotkeys.status，改之前用 hotkeys.conflicts 查。", NONE, NOW),
+    f("hotkeys.bindings", "热键表", "设置 → 热键", "全部热键存在这里：数组，每条 {key, command}。command 是 <来源>.<命令>：kotone.call 呼叫、kotone.stop 停下、kotone.speech-toggle 启动 / 停止本地语音识别、voice-input.talk 说话、voice-input.channel-cycle 切换频道、voice-input.resend-last 重发上一句、voice-input.post-process-toggle 开关文字处理、voice-input.post-process-cycle 切换文字处理方案。玩家自己加的不写 command，写要做的事，带 id（不写会补上）和可选的 label（名字）：快捷指令（跟她说一句）{key, say: \"帮我看看队友说了什么\", id, label}；运行已保存的自动化 {key, tool: \"automation.run\", args: {id: \"自动化 id\", args: {…}}, id, label}。整组替换；只改一个键时照旧写 hotkey.key、channelCycleHotkey、assistant.hotkey 这些字段也行，会改进表里。改成和别的热键、Esc、游戏配置的聊天键一样的键会被拒绝（已经冲突着、这次没动的不拦）。看全部热键和冲突用 hotkeys.status，改之前用 hotkeys.conflicts 查。", NONE, NOW),
     f("postProcessing.enabled", "文字处理开关", "插件 → 语音输入 → 文字处理", "语音输入的识别结果发送前是否经过文字处理（屏蔽词、润色、翻译等）。", NONE, NOW),
     f("postProcessing.activePipelineId", "当前文字处理方案", "插件 → 语音输入 → 文字处理", "方案 ID（见 postProcessing.pipelines）。", NONE, NOW),
     f("postProcessing.pipelines", "文字处理方案列表", "插件 → 语音输入 → 文字处理", "整组替换；处理器用 postprocess.processors 查，可用 postprocess.test 试。", NONE, NOW),
@@ -156,7 +156,7 @@ pub const FIELDS: &[Field] = &[
     f("assistant.danmakuColor", "弹幕颜色", "琴音 → 交互 → 声音与弹幕", "#RRGGBB。", NONE, NOW),
     f("assistant.danmakuEmote", "弹幕琴音表情", "琴音 → 交互 → 声音与弹幕", "", &[("none", "不显示"), ("hello", "打招呼"), ("cheering", "加油"), ("pointing", "指"), ("amazed", "惊讶")], NOW),
     f("assistant.companion.autoSend", "替你打字后直接发送", "琴音 → 唤醒 → 快捷指令", "false 时只把字打进聊天框，由你按回车。", NONE, NOW),
-    f("assistant.companion.quickMessages", "快捷指令", "琴音 → 唤醒 → 快捷指令，或设置 → 热键", "数组：每条绑一个热键，发一句话给琴音或直接运行一个已保存的自动化。整组替换。", NONE, NOW),
+    f("assistant.companion.quickMessages", "快捷指令", "琴音 → 唤醒 → 快捷指令，或设置 → 热键", "旧写法（热键表 hotkeys.bindings 前 8 条“跟她说一句 / 运行自动化”的镜像）：数组，每条 {id, label, text, hotkey} 或 {id, label, hotkey, automationId, args}，最多 8 条。整组替换，会按 id 改进热键表（加、删、改）；第 9 条以后请直接写 hotkeys.bindings。", NONE, NOW),
     f("agent.inGame", "通话交给她", "琴音 → 权限", "true：通话（呼叫键、唤醒词、快捷指令）交给她，多步、能用全部工具；false：旧的单次陪玩。", NONE, NOW),
     f(
         "agent.progressSpeech",

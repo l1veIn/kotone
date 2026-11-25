@@ -212,12 +212,17 @@ export interface Settings {
 }
 
 /** 表里的一条：`key` 加上 `command`（`<来源>.<命令 id>`）/ `tool` + `args` / `page` 三选一；读不懂的字段原样保留。 */
+/** `hotkeys.bindings` 的一条：键 + 命令，或者自己加的（ADR 040 第 3 期，带 id、可选的名字）：跟她说一句（`say`，快捷指令）、
+ * 运行自动化（`tool: "automation.run"`, `args: {id, args}`）、调工具（`tool` + `args`）、打开页面（`page`）。 */
 export interface HotkeyBinding {
   key: string;
   command?: string;
+  say?: string;
   tool?: string;
   args?: Record<string, unknown>;
   page?: string;
+  id?: string;
+  label?: string;
   [field: string]: unknown;
 }
 
@@ -893,11 +898,13 @@ export type KeySource = "core" | "plugin" | "custom" | "fixed" | "game" | "unkno
 export type GameKeyKind = "open-chat" | "channel" | "send" | "console";
 
 export interface KeyUse {
-  /** 稳定 id：命令就是命令名（kotone.call、voice-input.talk）；快捷指令 quick-message-3、提醒助手 legacy-reminder、Esc escape、
-   * 找不到的 binding.<序号>；游戏的键是 game.<配置 id>.<哪个键> */
+  /** 稳定 id：命令就是命令名（kotone.call、voice-input.talk）；自己加的 custom.<条目 id>（第 3 期以前的快捷指令是 quick-message-3，
+   * 改键、查冲突时还认）、提醒助手 legacy-reminder、Esc escape、找不到的 binding.<序号>；游戏的键是 game.<配置 id>.<哪个键> */
   id: string;
-  /** 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、快捷指令、Esc、游戏的键没有 */
+  /** 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、自己加的、Esc、游戏的键没有 */
   command?: string;
+  /** 自己加的要做什么：跟她说一句（快捷指令）、运行自动化、调工具、打开页面 */
+  action?: "say" | "automation" | "tool" | "page";
   /** 设置里写的键；空 = 没设 */
   key: string;
   /** 规范写法（和录键得到的一样，Ctrl+Alt+Shift+主键）；没设 / 认不出为空 */
@@ -908,9 +915,9 @@ export interface KeyUse {
   /** 插件名或游戏名 */
   ownerName?: string;
   gameKey?: GameKeyKind;
-  /** 后端的中文名（给 Agent 看）；界面按 id 用 messages 里的名字 */
+  /** 后端的中文名（给 Agent 看）；界面按 id 用 messages 里的名字（自己加的用它：玩家起的名字，没起就是要做的事） */
   label: string;
-  /** 快捷指令说的话 / 运行的自动化、频道名、Esc 做什么 */
+  /** 快捷指令跟她说的话 / 运行的自动化、频道名、Esc 做什么 */
   detail?: string;
   /** 在哪改（设置说明里的位置，openLocation 认得）；Esc 没有 */
   page?: string;

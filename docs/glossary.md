@@ -32,7 +32,7 @@
 | 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` | external agent |
 | 提醒助手 | 只给 0.1.x 升级用户保留的旧页面名 | | `LegacyRemindersPage` | Reminder assistant (0.1.x) |
 | 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的。「设置 → 热键」一页列出全部，标来源（Kotone / 插件名 / 自己加的 / 固定的 Esc），冲突标红；**热键只在那一页改**，别的页面（唤醒、系统 → 停下、模型 → 语音识别、语音输入）只显示现在的键和“去「设置 → 热键」改”，提醒助手热键照旧在提醒助手页改；游戏配置里的聊天键不是热键、不列在那里，但参与冲突检查（ADR 040） | `快捷键` | `*Hotkey`、`hotkey_table` | hotkey (Settings → Hotkeys) |
-| 快捷指令 | 绑了热键、按一下就替你跟她说一句预设的话（按了也会接通通话） | `快捷消息`、`快捷短语` | `companion.quickMessages` | quick command |
+| 快捷指令 | 「设置 → 热键」里自己加的、按一下就替你跟她说一句预设的话的热键（按了也会接通通话）。同一处还能加运行自动化的热键（ADR 040 第 3 期）；这些都叫“自己加的” | `快捷消息`、`快捷短语` | `hotkeys.bindings[].say`（旧字段 `assistant.companion.quickMessages` 是镜像） | quick command |
 | 后台的事 / 交给后台 | 她交出去慢慢做的复杂的事，聊天里是一张卡片，做完她说一句 | `子代理`、`子会话`、`后台任务` | `agent.start`、`Subagent` | background task / hand off to the background |
 | 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` | Stop (stop everything); “stop hotkey” |
 | 停止 / 取消 / 打断 | 停止 = 停一件具体的事（这个自动化、播放、本地语音识别）；取消 = 不做还没做的（对话框、下载、这次录音）；打断 = 她说话时被你打断 | | | stop / cancel / interrupt |
@@ -75,7 +75,7 @@
 | 插件 | 装在本体上的 App（ADR 038），界面上的说法见上一节 | plugin |
 | 琴音 | 角色（默认的那个）。讲“谁在听、谁在说、谁在想”时用；玩家可以换角色 | Kotone (the character) |
 | 共享资源 / 管家 | 共享资源：全进程（或全屏、全机）只有一份、又有两个以上的用户要用的东西，例如热键、往游戏里输入、麦克风、扬声器、屏幕上的位置和前台、聊天流、语音识别。管家：本体里拥有它的那一处代码，“能不能用、谁先用”的规矩只写在这里，插件经宿主向它要（ADR 042）。界面上不说 | shared resource / owner |
-| 命令 / 热键表 | 命令：能绑热键的一件事，`<来源>.<命令 id>`（本体的 `kotone.call`、插件 `plugin.toml` 里 `[[commands]]` 登记的 `voice-input.talk`）。热键表：config.json 的 `hotkeys.bindings`，每条 键 + 命令（第 3 期还有工具、页面）；热键的旧字段（`hotkey.key`、`channelCycleHotkey`……）是它的镜像（ADR 040 D1、D8）。界面上不说“命令”，行名就是命令的名字 | command / hotkey table |
+| 命令 / 热键表 | 命令：能绑热键的一件事，`<来源>.<命令 id>`（本体的 `kotone.call`、插件 `plugin.toml` 里 `[[commands]]` 登记的 `voice-input.talk`）。热键表：config.json 的 `hotkeys.bindings`，每条 键 + 命令，或者玩家自己加的（带 `id`、可选 `label`：`say` 跟她说一句、`tool: automation.run` 运行自动化，以后还有调工具、打开页面，ADR 040 第 3 期）；热键的旧字段（`hotkey.key`、`channelCycleHotkey`……、快捷指令 `quickMessages` 前 8 条）是它的镜像（ADR 040 D1、D5、D8）。界面上不说“命令”，行名就是命令的名字；自己加的行名是玩家起的名字，没起就是要做的事 | command / hotkey table |
 
 ## 游戏陪玩的核心概念（ADR 028）
 

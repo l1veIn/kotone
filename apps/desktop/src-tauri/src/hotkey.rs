@@ -15,9 +15,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
-    parse_hotkey, quick_message_slot, HookEvent, HotkeySource, HK_ASSISTANT, HK_AUTOMATION_STOP,
-    HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE, HK_QUICK_MESSAGES, HK_RESEND_LAST,
-    HK_RUNTIME_TOGGLE,
+    parse_hotkey, HookEvent, HotkeySource, HK_ASSISTANT, HK_AUTOMATION_STOP, HK_CHANNEL_CYCLE,
+    HK_PP_CYCLE, HK_PP_TOGGLE, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
 };
 use kotone_core::hotkey_bindings::{legacy_by_id, CMD_TALK};
 use kotone_core::hotkey_commands::{split_command, Edge};
@@ -326,6 +325,11 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
         });
         return;
     }
+    // 自己加的、不用听的（运行自动化……，ADR 040 第 3 期）：随应用登记，识别没在跑也照样按
+    if crate::hotkey_run::is_custom(id) && !crate::hotkey_run::needs_listening(app, id) {
+        crate::hotkey_run::press(app, id);
+        return;
+    }
     dispatch_runtime_hotkey(app, orch, HookEvent::NamedHotkey { id: id.to_string() });
 }
 
@@ -424,17 +428,17 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                     }
                 }
                 HK_LEGACY_REMINDER => orch.on_assistant_hotkey_with_ticket(ticket.core).await,
-                other => match quick_message_slot(other) {
-                    // 快捷消息：替用户说了预设的那句话，不经过语音识别，直接进陪玩流程。
-                    Some(slot) => crate::companion::quick(&app, slot),
-                    // 插件登记的命令：接在“听一句”后面的那个插件的，经本体转给它（ADR 040 D1）
-                    None => match hearing_command_of(&orch, other) {
-                        Some(command) => {
-                            orch.hearing_command(command, Edge::Press, Some(ticket.core))
-                                .await
-                        }
-                        None => kotone_core::log::log(&format!("未知具名热键: {id}")),
-                    },
+                // 自己加的、要听的（快捷指令：替你跟她说一句，不经过语音识别，ADR 040 第 3 期）
+                other if crate::hotkey_run::is_custom(other) => {
+                    crate::hotkey_run::press(&app, other)
+                }
+                // 插件登记的命令：接在“听一句”后面的那个插件的，经本体转给它（ADR 040 D1）
+                other => match hearing_command_of(&orch, other) {
+                    Some(command) => {
+                        orch.hearing_command(command, Edge::Press, Some(ticket.core))
+                            .await
+                    }
+                    None => kotone_core::log::log(&format!("未知具名热键: {id}")),
                 },
             },
             HookEvent::MainKeyMissed { .. } | HookEvent::NamedKeyMissed { .. } => {}
@@ -449,7 +453,8 @@ struct HotkeyInputTicket {
 }
 
 /// `hotkeys.status` 的 `named[]` 和设置页按 id 查状态的顺序（第 1 期起的 id；“说话”占主键位，状态在 `key` 里）。
-/// 登记计划里不在这里的（以后插件新加的命令）接在后面。
+/// 登记计划里不在这里的（插件新加的命令、自己加的 `custom.<id>`）接在后面。第 3 期以前快捷指令的
+/// `quick-message-1`…`8` 固定在这里，现在每条用自己的 id（ADR 040 第 3 期，`docs/tool-service.md`）。
 const KNOWN_NAMED_HOTKEYS: &[&str] = &[
     HK_ASSISTANT,
     HK_LEGACY_REMINDER,
@@ -457,14 +462,6 @@ const KNOWN_NAMED_HOTKEYS: &[&str] = &[
     HK_RESEND_LAST,
     HK_PP_TOGGLE,
     HK_PP_CYCLE,
-    HK_QUICK_MESSAGES[0],
-    HK_QUICK_MESSAGES[1],
-    HK_QUICK_MESSAGES[2],
-    HK_QUICK_MESSAGES[3],
-    HK_QUICK_MESSAGES[4],
-    HK_QUICK_MESSAGES[5],
-    HK_QUICK_MESSAGES[6],
-    HK_QUICK_MESSAGES[7],
     HK_RUNTIME_TOGGLE,
     HK_AUTOMATION_STOP,
 ];
@@ -1143,8 +1140,21 @@ mod tests {
         assert!(!uses_mouse_button("Shift+F9") && !uses_mouse_button(""));
     }
 
+    /// 几条快捷指令（跟她说一句），id 是 `q0`、`q1`……，键 Ctrl+F1……
+    fn quick_messages(count: usize) -> Vec<kotone_core::assistant::QuickMessage> {
+        (0..count)
+            .map(|i| kotone_core::assistant::QuickMessage {
+                id: format!("q{i}"),
+                text: "集合".into(),
+                hotkey: format!("Ctrl+F{}", i + 1),
+                ..Default::default()
+            })
+            .collect()
+    }
+
     /// 计划里要登记的每个具名热键都在状态清单里：设置页按 id 查注册状态，
-    /// 漏一个就会出现「配置了但看不到状态」的静默失效。识别没跑也登记的正好是停下、启停识别。
+    /// 漏一个就会出现「配置了但看不到状态」的静默失效（自己加的接在后面，id 是 `custom.<id>`）。
+    /// 识别没跑也登记的正好是停下、启停识别和不用听的自己加的（运行自动化）。
     #[test]
     fn every_planned_hotkey_has_a_status_slot() {
         let mut settings = kotone_core::settings::Settings {
@@ -1155,27 +1165,28 @@ mod tests {
             runtime_toggle_hotkey: "Ctrl+Alt+K".into(),
             ..Default::default()
         };
-        settings.assistant.companion.quick_messages = (0..HK_QUICK_MESSAGES.len())
-            .map(|i| kotone_core::assistant::QuickMessage {
-                hotkey: format!("Ctrl+F{}", i + 1),
-                ..Default::default()
-            })
-            .collect();
+        settings.assistant.companion.quick_messages = quick_messages(8);
+        settings.assistant.companion.quick_messages[7].automation_id = "auto-1".into();
         let plan = plan_from(&settings);
         for p in &plan {
             assert!(p.error.is_none(), "{} {:?}", p.id, p.error);
             assert!(
-                p.id == MAIN_ID || KNOWN_NAMED_HOTKEYS.contains(&p.id.as_str()),
+                p.id == MAIN_ID
+                    || KNOWN_NAMED_HOTKEYS.contains(&p.id.as_str())
+                    || crate::hotkey_run::is_custom(&p.id),
                 "{} 不在状态清单里",
                 p.id
             );
         }
         let app: Vec<String> = app_entries(&plan).into_iter().map(|e| e.id).collect();
-        assert_eq!(app, vec![HK_AUTOMATION_STOP, HK_RUNTIME_TOGGLE]);
+        assert_eq!(
+            app,
+            vec![HK_AUTOMATION_STOP, HK_RUNTIME_TOGGLE, "custom.q7"]
+        );
         assert_eq!(
             runtime_entries(&plan).len(),
-            KNOWN_NAMED_HOTKEYS.len() - 3,
-            "不含提醒助手和两个应用级"
+            KNOWN_NAMED_HOTKEYS.len() - 3 + 7,
+            "不含提醒助手和两个应用级；7 条跟她说一句随识别登记"
         );
     }
 
@@ -1344,8 +1355,7 @@ mod tests {
         let mut settings = kotone_core::settings::Settings::default();
         // 升级后启用了她：呼叫键和提醒助手热键都在
         settings.ui.legacy_upgrade = kotone_core::settings::LegacyUpgrade::OptedIn;
-        settings.assistant.companion.quick_messages =
-            vec![Default::default(); HK_QUICK_MESSAGES.len()];
+        settings.assistant.companion.quick_messages = quick_messages(8);
         let manifest = kotone_plugin_voice_input::plugin::manifest();
         let plugins = [PluginInfo {
             id: &manifest.id,
@@ -1365,6 +1375,12 @@ mod tests {
         for id in KNOWN_NAMED_HOTKEYS.iter().chain([&HK_RECORD]) {
             let row = legacy_by_id(id).map_or(id.to_string(), |legacy| legacy.command.to_string());
             assert!(ids.contains(&row), "{id} 不在热键表里");
+        }
+        // 自己加的：登记 id 就是表里的行 id
+        for p in plan_from(&settings) {
+            if crate::hotkey_run::is_custom(&p.id) {
+                assert!(ids.contains(&p.id), "{} 不在热键表里", p.id);
+            }
         }
     }
 }

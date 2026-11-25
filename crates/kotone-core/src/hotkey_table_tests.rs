@@ -200,23 +200,57 @@ fn against_quick_messages() {
     let mut settings = Settings::default();
     settings.assistant.companion.quick_messages =
         vec![quick("", "不绑键的"), quick("F8", "集合打龙")];
-    assert_eq!(
-        check_ids(&settings, "F8", Some(HK_ASSISTANT)),
-        vec![HK_QUICK_MESSAGES[1]]
-    );
+    let (first, second) = ("custom.q-不绑键的", "custom.q-集合打龙");
+    assert_eq!(check_ids(&settings, "F8", Some(HK_ASSISTANT)), vec![second]);
+    // 第 1、2 期的 id 还认：`quick-message-2` 是快捷指令的第 2 条（改它自己不算冲突）
+    assert!(check_ids(&settings, "F8", Some("quick-message-2")).is_empty());
     // 两条快捷指令同一个键：互相冲突
     settings.assistant.companion.quick_messages[0].hotkey = "F8".into();
     let table = table_of(&settings);
+    assert_eq!(row(&table, first).conflicts, vec![second]);
+    let row2 = row(&table, second);
+    assert_eq!(row2.source, KeySource::Custom);
+    assert_eq!(row2.action, Some("say"));
+    assert_eq!(row2.detail, "集合打龙");
+    assert_eq!(row2.label, "快捷指令「集合打龙」");
+    assert_eq!(row2.status_id, second);
+    // 快捷指令搬进了热键表（第 3 期）
+    assert_eq!(row2.field, "hotkeys.bindings");
+}
+
+/// 自己加的那一行：名字是玩家起的，没起就用要做的事；运行自动化不用听（识别没跑也登记），跟她说一句要听；
+/// 工具、页面这一步还按不了，列成“找不到”、不登记。
+#[test]
+fn custom_rows_say_what_they_do() {
+    let mut settings = Settings::default();
+    settings.hotkeys.bindings.extend([
+        Binding(serde_json::json!({"key": "F6", "say": "一句很长很长很长很长很长很长的话呀", "id": "a"})),
+        Binding(serde_json::json!({"key": "F7", "tool": "automation.run", "args": {"id": "auto-1"}, "id": "b", "label": "连发"})),
+        Binding(serde_json::json!({"key": "F9", "tool": "game_chat.send", "args": {"text": "gg"}, "id": "c"})),
+    ]);
+    // 直接改了表就照表写回旧字段（不然算“代码直接改了旧字段”，照旧字段对齐）
+    settings.sync_hotkey_mirrors();
+    let table = table_of(&settings);
+    let say = row(&table, "custom.a");
+    assert_eq!(say.label, "快捷指令「一句很长很长很长很长很长很长的话…」");
+    let auto = row(&table, "custom.b");
     assert_eq!(
-        row(&table, HK_QUICK_MESSAGES[0]).conflicts,
-        vec![HK_QUICK_MESSAGES[1]]
+        (auto.label.as_str(), auto.action),
+        ("连发", Some("automation"))
     );
-    assert_eq!(row(&table, HK_QUICK_MESSAGES[1]).source, KeySource::Custom);
-    assert_eq!(row(&table, HK_QUICK_MESSAGES[1]).detail, "集合打龙");
-    assert_eq!(
-        row(&table, HK_QUICK_MESSAGES[1]).field,
-        "assistant.companion.quickMessages.1.hotkey"
-    );
+    assert_eq!(auto.detail, "运行自动化 auto-1");
+    let tool = table
+        .bindings
+        .iter()
+        .find(|b| b.source == KeySource::Unknown)
+        .expect("工具热键第 2 步才按得了");
+    assert_eq!(tool.label, "game_chat.send");
+    let plan = plan_of(&settings);
+    let say = planned(&plan, "custom.a");
+    assert_eq!((say.always, say.hint), (false, Some(HintAt::Bubble)));
+    let auto = planned(&plan, "custom.b");
+    assert_eq!((auto.always, auto.hint), (true, None));
+    assert!(plan.iter().any(|p| p.error.is_some() && p.combo == "F9"));
 }
 
 #[test]
@@ -329,7 +363,7 @@ fn lists_every_hotkey_with_its_source_in_page_order() {
             HK_RESEND_LAST,
             HK_PP_TOGGLE,
             HK_PP_CYCLE,
-            HK_QUICK_MESSAGES[0],
+            "custom.q-集合",
         ]
     );
     let sources: Vec<KeySource> = table.bindings.iter().map(|b| b.source).collect();
@@ -360,7 +394,7 @@ fn legacy_users_only_see_what_they_use() {
     assert!(
         !ids.contains(&HK_ASSISTANT)
             && !ids.contains(&HK_AUTOMATION_STOP)
-            && !ids.contains(&HK_QUICK_MESSAGES[0])
+            && !ids.contains(&"custom.q-集合")
     );
     assert_eq!(row(&table, HK_LEGACY_REMINDER).key, "Alt+F9");
     assert!(
@@ -443,7 +477,10 @@ fn planned<'a>(plan: &'a [Planned], id: &str) -> &'a Planned {
 fn the_plan_follows_the_table_order_and_says_when_each_key_registers() {
     let mut settings = Settings::default();
     settings.set_binding(crate::hotkey_bindings::CMD_CHANNEL_CYCLE, "Shift+CapsLock");
-    settings.assistant.companion.quick_messages = vec![quick("F8", "集合打龙")];
+    settings
+        .hotkeys
+        .bindings
+        .push(crate::hotkey_custom::binding_of(&quick("F8", "集合打龙")));
     settings.sync_hotkey_mirrors();
     let plan = plan_of(&settings);
     let ids: Vec<&str> = plan.iter().map(|p| p.id.as_str()).collect();
@@ -455,7 +492,7 @@ fn the_plan_follows_the_table_order_and_says_when_each_key_registers() {
             HK_AUTOMATION_STOP,
             HK_RECORD,
             HK_CHANNEL_CYCLE,
-            HK_QUICK_MESSAGES[0]
+            "custom.q-集合打龙"
         ]
     );
     assert!(plan.iter().all(|p| p.error.is_none()));
@@ -475,7 +512,7 @@ fn the_plan_follows_the_table_order_and_says_when_each_key_registers() {
     );
     assert_eq!(planned(&plan, HK_CHANNEL_CYCLE).hint, Some(HintAt::Overlay));
     assert_eq!(
-        planned(&plan, HK_QUICK_MESSAGES[0]).hint,
+        planned(&plan, "custom.q-集合打龙").hint,
         Some(HintAt::Bubble)
     );
 }
@@ -503,7 +540,7 @@ fn the_first_one_keeps_a_shared_key_and_esc_is_never_taken() {
     );
     assert!(planned(&plan, HK_RECORD).error.is_none());
     assert_eq!(
-        planned(&plan, HK_QUICK_MESSAGES[0]).error.as_deref(),
+        planned(&plan, "custom.q-集合").error.as_deref(),
         Some("和「语音输入热键」用的是同一个键，没生效")
     );
     // 和游戏聊天键一样的照旧登记（表里标红；写入时才拦）
@@ -625,16 +662,20 @@ fn an_existing_conflict_does_not_block_other_edits() {
     // 老配置里本来就冲突着（停下热键 = 呼叫键）
     let mut before = Settings::default();
     before.set_binding(crate::hotkey_bindings::CMD_STOP, "Ctrl+Backquote");
-    before.assistant.companion.quick_messages = vec![quick("F8", "集合")];
+    before
+        .hotkeys
+        .bindings
+        .push(crate::hotkey_custom::binding_of(&quick("F8", "集合")));
     before.sync_hotkey_mirrors();
     let mut after = before.clone();
     after.language = "en".into();
-    // 前面插一条快捷指令：槽位挪了，键没变，不算新冲突
+    // 前面插一条快捷指令：别的条目挪了位置，键没变，不算新冲突（每条有自己的 id）
+    let at = after.hotkeys.bindings.len() - 1;
     after
-        .assistant
-        .companion
-        .quick_messages
-        .insert(0, quick("", "新的一条"));
+        .hotkeys
+        .bindings
+        .insert(at, crate::hotkey_custom::binding_of(&quick("", "新的一条")));
+    after.sync_hotkey_mirrors();
     assert_eq!(
         new_conflict_error(&sources(&before, &profiles), &sources(&after, &profiles)),
         None

@@ -29,6 +29,7 @@ pub mod history;
 pub mod hotkey;
 pub mod hotkey_bindings;
 pub mod hotkey_commands;
+pub mod hotkey_custom;
 pub mod hotkey_table;
 pub mod inject;
 pub mod input_lock;

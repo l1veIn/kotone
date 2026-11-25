@@ -37,7 +37,9 @@ pub const HK_AUTOMATION_STOP: &str = "automation-stop";
 pub const HK_HINT_VOICE_INPUT: &str = "hint-voice-input";
 /// 被动提示（只观察、不吞键）：语音识别没准备好时按了呼叫键，气泡提示怎么启动。
 pub const HK_HINT_CALL: &str = "hint-call";
-/// 陪玩快捷消息的固定槽位：第 n 条快捷消息（`assistant.companion.quickMessages[n-1]`）。
+/// 第 1、2 期快捷指令的固定槽位 id：第 n 条快捷指令（`assistant.companion.quickMessages[n-1]`）。第 3 期起快捷指令搬进
+/// 热键表、每条用自己的 id（`custom.<id>`），这几个只当外面写的别名认（`hotkeys.conflicts` 的 `except`、改键），
+/// 指快捷指令镜像的第 n 条（[`crate::hotkey_custom::resolve_row`]）。
 pub const HK_QUICK_MESSAGES: [&str; crate::assistant::MAX_QUICK_MESSAGES] = [
     "quick-message-1",
     "quick-message-2",
@@ -49,7 +51,7 @@ pub const HK_QUICK_MESSAGES: [&str; crate::assistant::MAX_QUICK_MESSAGES] = [
     "quick-message-8",
 ];
 
-/// 快捷消息槽位 id → 下标。
+/// 快捷指令槽位 id（别名）→ 下标。
 pub fn quick_message_slot(id: &str) -> Option<usize> {
     HK_QUICK_MESSAGES.iter().position(|slot| *slot == id)
 }

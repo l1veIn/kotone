@@ -242,7 +242,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
-| `companion.status` | 无 | `ready`、`reason`（缺什么：AI 连接与密钥、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`、`quickMessages[]`、当前 profile 的 `notes` 与 `chatRegion` |
+| `companion.status` | 无 | `ready`、`reason`（缺什么：AI 连接与密钥、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`、`quickMessages[]`（热键表里全部“跟她说一句 / 运行自动化”，形状照旧，不止 8 条，ADR 040 第 3 期）、当前 profile 的 `notes` 与 `chatRegion` |
 | `companion.ask` | `text` 或 `quickMessageId`（二选一） | 受理即返回 `{status:"started", jobId}`；结果为 `companion.finished` 事件：`jobId`、`action`（`reminder` / `type` / `answer` / `clarify`）、`text`、`reminders[]`、`result`（已调度的提醒 / 打字回执 / 实际交付方式）、`ocr{model,backend,dataEgress,lines,region}`、`chatRegionLearned`、`warnings`、`timing{captureMs,ocrMs,planMs}`、`durationMs`；失败为 `companion.failed {jobId, message}`。前置条件不满足（没有通过自检的连接）时直接报错，不受理；另一条陪玩请求进行中返回 `BUSY` |
 | `companion.read_chat` | 无 | 流程前半段，不调大模型：`window`、`ocr{model,backend,dataEgress,region,lines[{text,box,confidence}]}`（框为截图像素）、`chatTracking[{messageId,text,newThisRead,firstSeenMsAgo}]`、`profile{name,notes}`、`warnings`、`timing` |
 | `companion.type` | `text`（≤200 字，单行）、可选 `send`（缺省跟随设置 `autoSend`，默认 true） | 旧工具，经和 `game_chat.send` 同一个“发到游戏”的入口（ADR 041；新的调用用 `game_chat.send`：能选频道、能多行、写执行记录）：按前台游戏的游戏配置（对不上就用当前选中的）开聊天框、打字、按发送键，等修饰键松开，和 Kotone 别的输入排队，前台不是游戏时不发；`send=false` 只打进聊天框不发送。回执 `{typed, sent, profile, receipt}` 加上 `route`、`channel`、`lines`、`sentLines`，只证明本机按键已执行，不证明服务器已收到 |
@@ -289,8 +289,8 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `connections.delete` | `id` | 更新后的 `connections[]`（同时删除其 key） |
 | `profiles.list` | 无 | `profiles[]`、`activeProfileId`；激活用 `settings.update {"activeProfileId": …}` |
 | `profiles.save` / `profiles.delete` | `profile` / `id` | 保存（内置 profile 记住被删的内置热词）/ 删除（内置恢复出厂，导入的永久删除） |
-| `hotkeys.status` | 无 | 热键注册状态（失败原因，如被其他程序占用）；`bindings[]`：全部热键（本体的、插件的、快捷指令、固定的 Esc），每项有键、绑的命令（`command`，如 `kotone.call`、`voice-input.talk`）、来源、字段、在哪改（`page`）和 `conflicts`（冲突的 id，可能指 `gameKeys[]` 里游戏配置的聊天键、控制台触发键；ADR 040） |
-| `hotkeys.conflicts` | `key`、`except`（正在改的那一项的 id，可省） | `conflicts[]`：已经占着这个键的热键、Esc、游戏配置的聊天键和控制台触发键（有就别用这个键，ADR 040 D6）；`warnings[]`：与常见游戏键位的冲突提示 |
+| `hotkeys.status` | 无 | 热键注册状态（失败原因，如被其他程序占用）；`bindings[]`：全部热键（本体的、插件的、自己加的、固定的 Esc），每项有键、绑的命令（`command`，如 `kotone.call`、`voice-input.talk`）或者自己加的要做什么（`action`：`say` 跟她说一句即快捷指令、`automation` 运行自动化）、来源、字段、在哪改（`page`）和 `conflicts`（冲突的 id，可能指 `gameKeys[]` 里游戏配置的聊天键、控制台触发键；ADR 040）。**自己加的行 id 是 `custom.<条目 id>`**（`hotkeys.bindings[].id`；ADR 040 第 3 期起，`named[]` 里快捷指令的登记 id 也从 `quick-message-1`…`8` 改成这个，没绑键的不在 `named[]` 里） |
+| `hotkeys.conflicts` | `key`、`except`（正在改的那一项的 id，可省；命令名、`custom.<id>`，第 1 期的 `assistant`、`record` 和快捷指令的 `quick-message-n` 也认） | `conflicts[]`：已经占着这个键的热键、Esc、游戏配置的聊天键和控制台触发键（有就别用这个键，ADR 040 D6）；`warnings[]`：与常见游戏键位的冲突提示 |
 | `input.check` | 无 | 低级键盘钩子与模拟输入（SendInput）自检，不需要先启动运行时 |
 | `elevation.status` | 无 | 是否已提权、能否提权、前台游戏是否以管理员运行 / 独占全屏 |
 | `elevation.restart` | 无 | 先返回 `status=restarting`，再弹系统 UAC：用户同意后本实例退出、新的提权实例接替（新 `instanceId`，用 `app status` 重连）；拒绝则发布 `elevation.restart.failed`，本实例继续运行 |

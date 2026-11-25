@@ -26,6 +26,7 @@ mod game_tools;
 mod games;
 mod history_cmd;
 mod hotkey;
+mod hotkey_run;
 mod hotkey_table_cmd;
 mod key_request;
 mod mcp_servers_cmd;

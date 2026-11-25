@@ -163,7 +163,8 @@ pub fn status(app: &AppHandle) -> Value {
         "check": s.assistant.companion.check,
         "ocr": {"modelId": ocr_model, "state": ocr},
         "autoSend": s.assistant.companion.auto_send,
-        "quickMessages": s.assistant.companion.quick_messages,
+        // 快捷指令在热键表里（ADR 040 第 3 期）：全部“说一句 / 运行自动化”，形状和以前一样
+        "quickMessages": kotone_core::hotkey_custom::quick_messages(&s.hotkeys),
         "profile": {"id": active_profile(&s).id, "notes": active_profile(&s).companion_notes, "chatRegion": active_profile(&s).chat_region},
     })
 }
@@ -594,7 +595,7 @@ async fn plan(
 }
 
 /// 告诉用户一段话（失败提示、追问）：用助手的默认方式，后台进行，不阻塞调用方。
-fn tell(app: &AppHandle, text: String) {
+pub(crate) fn tell(app: &AppHandle, text: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = crate::assistant::deliver_text(&app, text, Vec::new()).await {
@@ -751,35 +752,13 @@ pub async fn run(app: &AppHandle, text: String, source: Source) -> Result<Value,
     }))
 }
 
-/// 快捷指令热键：交给 AI 的一句话（等于替用户说了这句话，不经过语音识别），或直接运行一个
-/// 已保存的自动化（目标是按下热键时的前台窗口，不调用 AI）。失败如实播出。
-pub fn quick(app: &AppHandle, slot: usize) {
+/// 快捷指令（自己加的热键“跟她说一句”，ADR 040 第 3 期）：等于替玩家说了这句话（不经过语音识别），交给她；
+/// 按下热键的那一路在 [`crate::hotkey_run`]。失败如实播出。
+pub fn say(app: &AppHandle, text: String) {
     let s = settings(app);
-    let Some(message) = s.assistant.companion.quick_messages.get(slot).cloned() else {
-        return;
-    };
-    if message.runs_automation() {
-        let result = crate::automation::run_saved(
-            app,
-            "quick-command",
-            message.automation_id.trim(),
-            &message.args,
-            kotone_core::automation::now_ms(),
-        );
-        if let Err(error) = result {
-            kotone_core::log::log(&format!(
-                "companion: quick command {} failed: {error}",
-                slot + 1
-            ));
-            tell(app, format!("快捷指令没能运行：{error}"));
-        }
-        return;
-    }
     if s.agent.in_game && s.assistant.route != kotone_core::assistant::AssistantRoute::Agent {
         // “一句话”交给琴音 Agent（ADR 014 §4）；结果在后台播出。
-        if let Err(error) =
-            crate::agent::submit_from_assistant(app, message.text.clone(), "quick-command")
-        {
+        if let Err(error) = crate::agent::submit_from_assistant(app, text, "quick-command") {
             tell(app, format!("快捷指令没能交出去：{error}"));
             return;
         }
@@ -789,22 +768,17 @@ pub fn quick(app: &AppHandle, slot: usize) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = run(&app, message.text.clone(), Source::QuickMessage).await {
-            kotone_core::log::log(&format!(
-                "companion: quick message {} failed: {error}",
-                slot + 1
-            ));
+        if let Err(error) = run(&app, text, Source::QuickMessage).await {
+            kotone_core::log::log(&format!("companion: quick message failed: {error}"));
             tell(&app, error);
         }
     });
 }
 
-/// 按 ID 找快捷消息的内容（工具 `companion.ask {quickMessageId}`）。
+/// 按 ID 找快捷指令跟她说的话（工具 `companion.ask {quickMessageId}`）。快捷指令在热键表里（第 3 期），
+/// 不止旧字段那 8 条。
 pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
-    settings(app)
-        .assistant
-        .companion
-        .quick_messages
+    kotone_core::hotkey_custom::quick_messages(&settings(app).hotkeys)
         .into_iter()
         .find(|m| m.id == id && !m.runs_automation())
         .map(|m| m.text)
