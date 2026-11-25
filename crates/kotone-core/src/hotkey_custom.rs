@@ -392,6 +392,11 @@ fn taken_ids(hotkeys: &HotkeysConfig) -> HashSet<String> {
         .collect()
 }
 
+/// 新加一条自己加的热键用的 id（表里没用过的 `qm-<n>`；「设置 → 热键」的“加一个”）。
+pub fn new_id(hotkeys: &HotkeysConfig) -> String {
+    fresh_id(&taken_ids(hotkeys))
+}
+
 /// 换掉这一条要做的事（键、话、自动化、名字），条目上别的字段（更新的版本写的）原样留着。
 fn replace_content(binding: &mut Binding, message: &QuickMessage) {
     let Value::Object(fresh) = binding_of(message).0 else {

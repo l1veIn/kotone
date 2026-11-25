@@ -181,28 +181,3 @@ test("game events: the LoL template is off, and an 'ask her' automation saves wi
   await expect(editor.getByTestId("automation-trigger-hold")).toHaveValue("60");
   await expect(editor.getByTestId("automation-prompt")).toHaveValue("提醒我买真眼，一句话");
 });
-
-test("a quick command can run a saved automation with its own args instead of asking the AI", async ({ page }) => {
-  await page.goto("/#/settings?onboarding=never");
-  // 快捷指令在「设置 → 怎么叫她」（ADR 028）
-  await openSettingsTab(page, "call");
-  const companion = page.getByTestId("companion-settings");
-  await expect(companion.getByRole("heading", { name: "快捷指令", exact: true })).toBeVisible();
-  await companion.getByRole("button", { name: "添加", exact: true }).click();
-  await companion.getByLabel("快捷指令 1 类型").click();
-  await page.getByRole("option", { name: "运行自动化", exact: true }).click();
-  await expect(companion.getByLabel("快捷指令 1 自动化")).toHaveText("界面示例：连按某键");
-  await expect(companion.getByLabel("快捷指令 1 内容")).toHaveCount(0);
-  await companion.getByLabel("快捷指令 1 次数").fill("5");
-  await companion.getByLabel("快捷指令 1 次数").blur();
-  await expect.poll(async () => page.evaluate(async () =>
-    (await import("/src/lib/ipc.ts")).getSettings().then((s) => s.assistant.companion.quickMessages[0])))
-    .toMatchObject({ automationId: "preview-auto-1", args: { times: 5 } });
-  // 换回交给 AI：清掉自动化与入参，补回一句话
-  await companion.getByLabel("快捷指令 1 类型").click();
-  await page.getByRole("option", { name: "交给 AI 的一句话", exact: true }).click();
-  await expect(companion.getByLabel("快捷指令 1 内容")).toHaveValue("帮我看看队友说了什么");
-  await expect.poll(async () => page.evaluate(async () =>
-    (await import("/src/lib/ipc.ts")).getSettings().then((s) => s.assistant.companion.quickMessages[0].automationId)))
-    .toBe("");
-});

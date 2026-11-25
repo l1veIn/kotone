@@ -156,7 +156,7 @@ pub const FIELDS: &[Field] = &[
     f("assistant.danmakuColor", "弹幕颜色", "琴音 → 交互 → 声音与弹幕", "#RRGGBB。", NONE, NOW),
     f("assistant.danmakuEmote", "弹幕琴音表情", "琴音 → 交互 → 声音与弹幕", "", &[("none", "不显示"), ("hello", "打招呼"), ("cheering", "加油"), ("pointing", "指"), ("amazed", "惊讶")], NOW),
     f("assistant.companion.autoSend", "替你打字后直接发送", "琴音 → 唤醒 → 快捷指令", "false 时只把字打进聊天框，由你按回车。", NONE, NOW),
-    f("assistant.companion.quickMessages", "快捷指令", "琴音 → 唤醒 → 快捷指令，或设置 → 热键", "旧写法（热键表 hotkeys.bindings 前 8 条“跟她说一句 / 运行自动化”的镜像）：数组，每条 {id, label, text, hotkey} 或 {id, label, hotkey, automationId, args}，最多 8 条。整组替换，会按 id 改进热键表（加、删、改）；第 9 条以后请直接写 hotkeys.bindings。", NONE, NOW),
+    f("assistant.companion.quickMessages", "快捷指令", "设置 → 热键", "旧写法（热键表 hotkeys.bindings 前 8 条“跟她说一句 / 运行自动化”的镜像）：数组，每条 {id, label, text, hotkey} 或 {id, label, hotkey, automationId, args}，最多 8 条。整组替换，会按 id 改进热键表（加、删、改）；第 9 条以后请直接写 hotkeys.bindings。", NONE, NOW),
     f("agent.inGame", "通话交给她", "琴音 → 权限", "true：通话（呼叫键、唤醒词、快捷指令）交给她，多步、能用全部工具；false：旧的单次陪玩。", NONE, NOW),
     f(
         "agent.progressSpeech",

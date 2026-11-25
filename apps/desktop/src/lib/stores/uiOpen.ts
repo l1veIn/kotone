@@ -87,7 +87,8 @@ const CHARACTER_LABELS: Record<string, () => string> = {
   permissions: m.companion_page_tab_permissions, usage: m.companion_page_tab_usage,
 };
 
-function settingsTitle(section: string): string {
+/** 设置的一页叫什么（“设置 · 模型”；原来在设置、现在在角色页的是“{她的名字} · 唤醒”）：热键的“打开页面”也用。 */
+export function settingsTitle(section: string): string {
   if (section === "plugins") return m.shell_sidebar_plugins();
   const character = CHARACTER_LABELS[section];
   if (character) return m.chat_ui_open_title_character({ name: get(companionName), section: character() });

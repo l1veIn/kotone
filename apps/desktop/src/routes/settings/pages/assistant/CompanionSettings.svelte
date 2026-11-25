@@ -1,83 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    companionClearChatRegion, companionStatus,
-    type CompanionStatus, type QuickMessage,
-  } from "../../../../lib/ipc";
+  import { companionClearChatRegion, companionStatus, type CompanionStatus } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
-  import { listAutomations, subscribeAutomations, type Automation } from "../../../../lib/automation";
-  import HotkeyLink from "../../../../lib/components/HotkeyLink.svelte";
+  import { openTarget } from "../../../../lib/stores/navigation";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
-  import SelectField from "$lib/components/settings/SelectField.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
   import { Switch } from "$lib/components/ui/switch";
-  import { CircleAlert, CircleCheck, Plus, Trash2 } from "@lucide/svelte";
-  import ArgsForm from "../automation/ArgsForm.svelte";
+  import { CircleAlert, CircleCheck, Plus } from "@lucide/svelte";
 
   let status = $state<CompanionStatus | null>(null);
-  let automations = $state<Automation[]>([]);
-  let saving = $state(false);
   const config = $derived($settingsStore?.assistant);
-  const quick = $derived(config?.companion?.quickMessages ?? []);
-  const MAX = 8;
 
   export async function refresh() {
     try { status = await companionStatus(); } catch (error) { toast(false, m.companion_quick_status_load_failed({ error: errText(error) })); }
   }
 
-  async function loadAutomations() {
-    try { automations = await listAutomations(); } catch { /* 列表读不到时只是没有可选项 */ }
-  }
-
-  onMount(() => {
-    void refresh();
-    void loadAutomations();
-    let unlisten: (() => void) | null = null;
-    let disposed = false;
-    void subscribeAutomations(() => { void loadAutomations(); }).then((fn) => { if (disposed) fn(); else unlisten = fn; });
-    return () => { disposed = true; unlisten?.(); };
-  });
+  onMount(() => { void refresh(); });
   $effect(() => { config?.connectionId; config?.companionBindings?.connectionId; config?.companion; $settingsStore?.ocr?.activeModelId; void refresh(); });
-
-  async function saveQuick(next: QuickMessage[], message = m.companion_quick_saved()) {
-    if (saving) return;
-    saving = true;
-    try { await patchSettings({ assistant: { companion: { quickMessages: next } } }, message); }
-    finally { saving = false; }
-  }
-
-  function addQuick() {
-    if (quick.length >= MAX) return;
-    const id = `qm-${Date.now().toString(36)}`;
-    // i18n-ignore-start：新快捷指令的默认话，存进配置
-    void saveQuick([...quick, { id, label: "", text: "帮我看看队友说了什么", hotkey: "" }], m.companion_quick_added());
-    // i18n-ignore-end
-  }
-
-  function patchQuick(index: number, patch: Partial<QuickMessage>) {
-    void saveQuick(quick.map((item, i) => (i === index ? { ...item, ...patch } : item)));
-  }
-
-  function removeQuick(index: number) {
-    void saveQuick(quick.filter((_, i) => i !== index), m.companion_quick_removed());
-  }
-
-  /** 切换“交给 AI 的一句话” / “运行自动化”。 */
-  function setKind(index: number, kind: string) {
-    const item = quick[index];
-    if (kind === "automation") {
-      if (!automations.length) { toast(false, m.companion_quick_no_automations()); return; }
-      patchQuick(index, { automationId: automations[0].id, args: {} });
-    } else {
-      // i18n-ignore-start：新快捷指令的默认话，存进配置
-      patchQuick(index, { automationId: "", args: {}, text: item.text.trim() || "帮我看看队友说了什么" });
-      // i18n-ignore-end
-    }
-  }
-
 </script>
 
 {#if config}
@@ -98,7 +39,7 @@
       {/if}
       <SettingsRow label={m.companion_quick_auto_send_label()} description={m.companion_quick_auto_send_desc()}>
         {#snippet control()}
-          <Switch aria-label={m.companion_quick_auto_send_label()} disabled={saving}
+          <Switch aria-label={m.companion_quick_auto_send_label()}
             bind:checked={() => config.companion.autoSend, (checked) => void patchSettings({ assistant: { companion: { autoSend: checked } } }, m.companion_saved())} />
         {/snippet}
       </SettingsRow>
@@ -111,51 +52,13 @@
       {/if}
     </SettingsSection>
 
-    <SettingsSection title={m.companion_quick_title()} id="companion-quick-title"
-      description={m.companion_quick_desc({ max: MAX })}>
+    <!-- 快捷指令在「设置 → 热键」里加、改（ADR 040 第 3 期 D3、D5）：这里只说一句、给“去加” -->
+    <SettingsSection title={m.companion_quick_title()} id="companion-quick-title" description={m.companion_quick_moved()}>
       {#snippet actions()}
-        <Button variant="outline" size="sm" disabled={saving || quick.length >= MAX} onclick={addQuick}><Plus class="size-3.5" />{m.companion_quick_add()}</Button>
+        <Button variant="outline" size="sm" data-testid="companion-quick-goto"
+          onclick={() => openTarget({ page: "advanced", tab: "hotkeys", anchor: "hotkeys-add-say" })}><Plus class="size-3.5" />{m.companion_quick_goto()}</Button>
       {/snippet}
-      {#if !quick.length}
-        <p class="my-0 py-6 text-center text-xs text-muted-foreground">{m.companion_quick_empty()}</p>
-      {/if}
-      {#each quick as item, index (item.id)}
-        {@const runsAutomation = !!item.automationId}
-        {@const target = automations.find((a) => a.id === item.automationId)}
-        <div class="space-y-3 py-3.5" data-testid="quick-message">
-          <div class="flex flex-wrap items-center gap-2">
-            <Input class="h-8 w-28 text-[13px]" placeholder={m.companion_quick_name_placeholder()} value={item.label} aria-label={m.companion_quick_name_aria({ index: index + 1 })}
-              onchange={(event) => patchQuick(index, { label: event.currentTarget.value.trim() })} />
-            <div class="w-40"><SelectField ariaLabel={m.companion_quick_kind_aria({ index: index + 1 })} value={runsAutomation ? "automation" : "ask"} disabled={saving}
-              options={[{ value: "ask", label: m.companion_quick_kind_ask() }, { value: "automation", label: m.companion_quick_kind_automation() }]}
-              onchange={(kind) => setKind(index, kind)} /></div>
-            {#if runsAutomation}
-              <div class="min-w-0 flex-1"><SelectField ariaLabel={m.companion_quick_automation_aria({ index: index + 1 })} value={item.automationId ?? ""} disabled={saving}
-                options={[...(target ? [] : [{ value: item.automationId ?? "", label: m.companion_quick_automation_deleted() }]), ...automations.map((a) => ({ value: a.id, label: a.name }))]}
-                onchange={(automationId) => patchQuick(index, { automationId, args: {} })} /></div>
-            {:else}
-              <Input class="h-8 min-w-0 flex-1 text-[13px]" value={item.text} aria-label={m.companion_quick_text_aria({ index: index + 1 })} maxlength={200}
-                onchange={(event) => {
-                  const text = event.currentTarget.value.trim();
-                  if (!text) { toast(false, m.companion_quick_text_empty()); event.currentTarget.value = item.text; return; }
-                  patchQuick(index, { text });
-                }} />
-            {/if}
-            <Button variant="ghost" size="sm" class="text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={saving} onclick={() => removeQuick(index)}><Trash2 class="size-3.5" />{m.companion_quick_remove()}</Button>
-          </div>
-          {#if runsAutomation && target?.params.length}
-            <div class="rounded-xl border border-hairline bg-muted/40 p-3">
-              <ArgsForm params={target.params} values={item.args ?? {}} disabled={saving} prefix={`${m.companion_quick_args_prefix({ index: index + 1 })} `}
-                onchange={(args) => patchQuick(index, { args })} />
-            </div>
-          {/if}
-          <!-- 快捷指令的键也只在「设置 → 热键」改（ADR 040 D3；说的话、自动化还在这里） -->
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs text-muted-foreground">{m.companion_quick_hotkey_title({ index: index + 1 })}</span>
-            <HotkeyLink id={`custom.${item.id}`} value={item.hotkey} />
-          </div>
-        </div>
-      {/each}
+      {#snippet children()}{/snippet}
     </SettingsSection>
   </div>
 {/if}

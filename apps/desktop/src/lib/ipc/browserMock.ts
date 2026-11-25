@@ -35,6 +35,8 @@ import type {
   HotkeyStatus,
   HotkeyCheck,
   HotkeyTable,
+  HotkeyBinding,
+  HotkeyBindingOptions,
   InputEnvironmentCheck,
   ResourceUsage,
   DiagnosticExportResult,
@@ -44,7 +46,10 @@ import type {
 } from "./contracts";
 import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
 import type { BrowserAction, BrowserBounds, BrowserExtension, BrowserState, BrowserTab } from "../browser";
-import { checkHotkey as checkHotkeyInMock, hotkeyTable, setHotkey as setHotkeyInMock, type HotkeySources } from "./hotkeysMock";
+import {
+  bindingOptions, checkHotkey as checkHotkeyInMock, confirmCustom, customStatus, hotkeyTable, removeCustom, saveCustom,
+  setHotkey as setHotkeyInMock, type HotkeySources,
+} from "./hotkeysMock";
 
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
@@ -909,10 +914,8 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
           key: mock.settings.automationStopHotkey || null,
           error: null,
         },
-        // 自己加的（快捷指令……）每条用自己的 id 登记，接在后面（同后端：第 3 期起是 `custom.<id>`）
-        ...(usesLegacyVoiceInput(mock.settings.ui) ? [] : mock.settings.assistant.companion?.quickMessages ?? [])
-          .filter((message) => message.hotkey.trim())
-          .map((message) => ({ id: `custom.${message.id}`, key: message.hotkey, error: null })),
+        // 自己加的每条用自己的 id 登记，接在后面（同后端：`custom.<id>`；要确认、按不了的不登记，写原因）
+        ...customStatus(mock.settings),
       ],
     };
 }
@@ -988,6 +991,25 @@ export async function checkHotkey(key: string, except?: string): Promise<HotkeyC
 
 export async function setHotkey(id: string, key: string): Promise<Settings> {
   setHotkeyInMock(hotkeySources(), id, key);
+  return clone(mock.settings);
+}
+
+export async function getHotkeyBindingOptions(): Promise<HotkeyBindingOptions> {
+  return clone(bindingOptions(mock.settings));
+}
+
+export async function saveCustomHotkey(entry: HotkeyBinding, confirm: boolean): Promise<Settings> {
+  saveCustom(hotkeySources(), clone(entry), confirm);
+  return clone(mock.settings);
+}
+
+export async function removeCustomHotkey(id: string): Promise<Settings> {
+  removeCustom(hotkeySources(), id);
+  return clone(mock.settings);
+}
+
+export async function confirmHotkey(id: string): Promise<Settings> {
+  confirmCustom(hotkeySources(), id);
   return clone(mock.settings);
 }
 

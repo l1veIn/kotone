@@ -32,6 +32,9 @@ Part A (no input) — PASS / FAIL lines:
   A6. the server's config is changed by hand (an env var) and reloaded → the confirmation is cleared (like the trust and
       "always allow"), not registered;
   A7. the plugin is switched off → its hotkey is off (not registered, no error: the key goes to the game);
+  A9. (run before A6) the commands behind 「设置 → 热键」's “加一个”: `hotkey_binding_options` (发到游戏聊天 first, the
+      third-party tool asks), `save_custom_hotkey` with 允许并保存 (new id, confirmed, registered; a `confirmed` sent
+      along doesn't count), editing only the name keeps the confirmation, `remove_custom_hotkey`;
   A8. isolation: ~/.kotone/config.json unchanged.
 Needs a person (CHECKLIST printed at the end).
 Not covered: exclusive fullscreen (P1: needs a real game), `game_chat.send` bindings typing into a game
@@ -318,6 +321,33 @@ def part_a():
     again = invoke("confirm_hotkey", {"id": "custom.ext"})
     check("A5: confirmed again through the command", "error" not in again
           and (entry_on_disk("ext") or {}).get("confirmed") == ["third-party-action"])
+
+    # A9. 「设置 → 热键」的“加一个”（第 3 期第 3 步）：能选什么，加（允许并保存）、改、删——页面调的那几个命令
+    opts = invoke("hotkey_binding_options").get("ok") or {}
+    names = [t.get("name") for t in opts.get("tools") or []]
+    ours = next((t for t in opts.get("tools") or [] if t.get("name") == tool), {})
+    check("A9: options: 发到游戏聊天 first, the third-party tool asks, automation.run is its own kind, pages listed",
+          names[:1] == ["game_chat.send"] and ours.get("decision") == "confirm" and ours.get("thirdParty") is True
+          and "automation.run" not in names and any(p.get("section") == "models" for p in opts.get("pages") or []),
+          f"{names[:3]} {ours.get('decision')} {ours.get('reason')}")
+    saved = invoke("save_custom_hotkey", {"entry": {"key": "F15", "tool": tool, "args": args, "label": "加一个",
+                                                    "confirmed": ["forged"]}, "confirm": True})
+    new = next((b for b in bindings_now() if isinstance(b, dict) and b.get("label") == "加一个"), {})
+    row = f"custom.{new.get('id')}"
+    st = wait_until(lambda: (lambda s: s if named(s, row)[0] else None)(status()), 10) or status()
+    check("A9: 允许并保存 (save_custom_hotkey + confirm): saved with a new id, confirmed with the tool's effects, registered",
+          "error" not in saved and new.get("id") and new.get("confirmed") == ["third-party-action"]
+          and named(st, row)[0] == "F15", json.dumps({"r": saved.get("error"), "entry": new}, ensure_ascii=False)[:300])
+    renamed = invoke("save_custom_hotkey", {"entry": {"id": new.get("id"), "key": "F15", "tool": tool, "args": args,
+                                                      "label": "改过"}, "confirm": False})
+    edited = entry_on_disk(new.get("id")) or {}
+    check("A9: edit the name only (保存) → still confirmed",
+          "error" not in renamed and edited.get("label") == "改过" and edited.get("confirmed") == ["third-party-action"],
+          json.dumps(edited, ensure_ascii=False))
+    removed = invoke("remove_custom_hotkey", {"id": row})
+    st = status()
+    check("A9: remove → gone from the table and not registered",
+          "error" not in removed and entry_on_disk(new.get("id")) is None and named(st, row)[0] is None)
     return tool
 
 

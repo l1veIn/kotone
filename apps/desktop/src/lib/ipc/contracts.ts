@@ -938,6 +938,28 @@ export interface KeyUse {
   lastRun?: { atMs: number; ok: boolean; message: string };
 }
 
+/** hotkey_binding_options 的一个工具：「设置 → 热键」“加一个 → 调一个工具”能选的（ADR 040 第 3 期）。 */
+export interface BindableTool {
+  name: string;
+  /** 说明的第一句 */
+  title: string;
+  description: string;
+  plugin: string | null;
+  pluginName: string | null;
+  thirdParty: boolean;
+  sideEffects: string[];
+  /** run = 直接能按；confirm = 绑的时候要确认一次（reason 是会做什么）；refused = 不能绑（reason 是原因） */
+  decision: "run" | "confirm" | "refused";
+  reason: string;
+  /** 参数的 JSON Schema（顶层 object） */
+  parameters: Record<string, unknown>;
+}
+
+/** hotkey_binding_options 的一个页面：设置的一页（section）或插件的页面（title、plugin）。 */
+export interface BindablePage { uri: string; section?: string; title?: string; plugin?: string; pluginName?: string }
+
+export interface HotkeyBindingOptions { tools: BindableTool[]; pages: BindablePage[] }
+
 /** get_hotkey_table：「设置 → 热键」那一页 */
 export interface HotkeyTable {
   bindings: KeyUse[];

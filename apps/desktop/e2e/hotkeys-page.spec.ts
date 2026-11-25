@@ -18,6 +18,14 @@ async function addConsoleProfile(page: Page) {
   });
 }
 
+/** 加一条自己加的热键（像「设置 → 热键」的“加一个”那样存进预览后端），界面的设置跟着更新；新的一条 id 是 qm-1、qm-2…… */
+async function addCustom(page: Page, entry: Record<string, unknown>) {
+  await page.evaluate(async (e) => {
+    const [{ saveCustomHotkey }, { settingsStore }] = await Promise.all([import("/src/lib/ipc.ts"), import("/src/lib/stores/ui.ts")]);
+    settingsStore.set(await saveCustomHotkey(e as never, false));
+  }, entry);
+}
+
 /** 像别的地方（她、别的窗口）改了设置一样：存进预览后端，界面的设置跟着更新。 */
 async function patchMock(page: Page, patch: Record<string, unknown>) {
   await page.evaluate(async (p) => {
@@ -53,7 +61,7 @@ test("the call key can't take a game's chat key, the console trigger key or Esc"
 
 test("设置 → 热键 lists every hotkey with its source and edits them in place", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never");
-  await patchMock(page, { assistant: { companion: { quickMessages: [{ id: "q1", label: "", text: "集合打小龙", hotkey: "F8" }] } } });
+  await addCustom(page, { key: "F8", say: "集合打小龙" });
   await openSettingsTab(page, "hotkeys");
   const list = page.getByTestId("hotkeys-page");
   await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(10);
@@ -69,7 +77,7 @@ test("设置 → 热键 lists every hotkey with its source and edits them in pla
   await expectRow("voice-input.channel-cycle", "频道切换热键", "语音输入", "Shift+CapsLock");
   await expectRow("voice-input.resend-last", "重发最近一条热键", "语音输入", "");
   // 快捷指令搬进了热键表（第 3 期），行 id 是 `custom.<它的 id>`；没起名字时名字就是那句话
-  await expectRow("custom.q1", "快捷指令「集合打小龙」", "自己加的", "F8");
+  await expectRow("custom.qm-1", "快捷指令「集合打小龙」", "自己加的", "F8");
   // Esc 不能改：只列出来，没有输入框、没有“去改”
   await expect(page.getByTestId("hotkeys-row-escape")).toContainText("取消这次录音");
   await expect(page.getByTestId("hotkeys-key-escape")).toHaveText("Escape");
@@ -81,13 +89,11 @@ test("设置 → 热键 lists every hotkey with its source and edits them in pla
   await page.screenshot({ path: testInfo.outputPath("hotkeys-page.png"), fullPage: true, animations: "disabled" });
 
   // 在表里改：快捷指令的键（预览把快捷指令的旧字段当存放处），唤醒页跟着显示
-  const quick = page.getByTestId("hotkey-input-custom.q1");
+  const quick = page.getByTestId("hotkey-input-custom.qm-1");
   await quick.fill("F7");
   await quick.press("Enter");
-  await expect(page.getByTestId("hotkey-status-custom.q1")).toHaveText("当前生效：F7");
-  expect((await mockSettings(page)).assistant.companion.quickMessages[0].hotkey).toBe("F7");
-  await openSettingsTab(page, "call");
-  await expect(page.getByTestId("hotkey-link-key-custom.q1")).toHaveText("F7");
+  await expect(page.getByTestId("hotkey-status-custom.qm-1")).toHaveText("当前生效：F7");
+  expect((await mockSettings(page)).hotkeys.bindings.find((b: { id?: string }) => b.id === "qm-1")?.key).toBe("F7");
 
   // 恢复默认：只有 D4 的三个默认键有
   await openSettingsTab(page, "hotkeys");
@@ -151,7 +157,7 @@ test("conflicts are marked red, including a game's chat key and Esc", async ({ p
 
 test("other pages show the current key and 去改 opens its row in 设置 → 热键", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await patchMock(page, { assistant: { companion: { quickMessages: [{ id: "q1", label: "", text: "集合", hotkey: "F8" }] } } });
+  await addCustom(page, { key: "F8", say: "集合" });
   const goTo = async (id: string) => {
     await page.getByTestId(`hotkey-link-goto-${id}`).click();
     await expect(page.getByTestId("advanced-nav-hotkeys")).toHaveAttribute("aria-current", "page");
@@ -163,8 +169,15 @@ test("other pages show the current key and 去改 opens its row in 设置 → �
   await expect(page.getByTestId("hotkey-link-key-kotone.call")).toHaveText("Ctrl + ~");
   await expect(page.getByTestId("settings-call").locator("input[aria-label='呼叫键']")).toHaveCount(0);
   await goTo("kotone.call");
+  // 快捷指令在「设置 → 热键」里加、改（第 3 期）：唤醒页只有一句话和“去加”，点了打开“加一个”（选好“跟她说一句”）
   await openSettingsTab(page, "call");
-  await goTo("custom.q1");
+  await expect(page.getByTestId("hotkey-link-custom.qm-1")).toHaveCount(0);
+  await page.getByTestId("companion-quick-goto").click();
+  await expect(page.getByTestId("advanced-nav-hotkeys")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("custom-hotkey-form")).toBeVisible();
+  await expect(page.getByTestId("custom-kind-say")).toHaveAttribute("aria-checked", "true");
+  await page.getByTestId("custom-cancel").click();
+  await expect(page.getByTestId("custom-hotkey-form")).toHaveCount(0);
   // 设置 → 系统 → 停下
   await openSettingsTab(page, "system");
   await expect(page.getByTestId("hotkey-link-key-kotone.stop")).toHaveText("Ctrl + Shift + F12");

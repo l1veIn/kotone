@@ -36,6 +36,8 @@ import type {
   HotkeyStatus,
   HotkeyCheck,
   HotkeyTable,
+  HotkeyBinding,
+  HotkeyBindingOptions,
   InputEnvironmentCheck,
   ResourceUsage,
   DiagnosticExportResult,
@@ -359,6 +361,33 @@ export async function checkHotkey(key: string, except?: string): Promise<HotkeyC
 export async function setHotkey(id: string, key: string): Promise<Settings> {
   if (!isTauri) return browserMock.setHotkey(id, key);
   return invoke<Settings>("set_hotkey", { id, key });
+}
+
+/** 「设置 → 热键」“加一个”能选的工具（带这时的权限：直接能按 / 要确认 / 不能绑）和页面（ADR 040 第 3 期）。 */
+export async function getHotkeyBindingOptions(): Promise<HotkeyBindingOptions> {
+  if (!isTauri) return browserMock.getHotkeyBindingOptions();
+  return invoke<HotkeyBindingOptions>("hotkey_binding_options");
+}
+
+/**
+ * 加一条 / 改一条自己加的热键（`entry` 是热键表的一条：`say` / `tool` + `args` / `page`，可选 `label`，改的时候带 `id`）。
+ * `confirm` = 玩家按了“允许并保存”：要问的工具同一次确认（D9）。冲突、校验在后端，错误说人话。
+ */
+export async function saveCustomHotkey(entry: HotkeyBinding, confirm: boolean): Promise<Settings> {
+  if (!isTauri) return browserMock.saveCustomHotkey(entry, confirm);
+  return invoke<Settings>("save_custom_hotkey", { entry, confirm });
+}
+
+/** 删掉一条自己加的热键（`id` 是表里那一行的 id，`custom.<id>`）。 */
+export async function removeCustomHotkey(id: string): Promise<Settings> {
+  if (!isTauri) return browserMock.removeCustomHotkey(id);
+  return invoke<Settings>("remove_custom_hotkey", { id });
+}
+
+/** 「设置 → 热键」的确认（D9）：这一条调的工具要问，记下它会做的事，按的时候不再问。只有这里能确认。 */
+export async function confirmHotkey(id: string): Promise<Settings> {
+  if (!isTauri) return browserMock.confirmHotkey(id);
+  return invoke<Settings>("confirm_hotkey", { id });
 }
 
 /** 开始热键捕获（设置页「点击录入」）；结果经 kotone://hotkey-capture 事件推送 */

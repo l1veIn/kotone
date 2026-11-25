@@ -6,11 +6,14 @@
 //! - 确认（[`confirm_hotkey`]）：**`confirmed` 只有这一条路能写**。照浏览器扩展装的时候问权限：玩家在「设置 → 热键」点了
 //!   确认，记下这个工具这时的副作用；按的时候不再问。补丁（界面的通用保存、她和外部 Agent 的 `settings.update`、
 //!   命令行）写进来的确认会被抹掉（`Settings::drop_unconfirmed`）。这个命令不进工具服务，外部 Agent 调不到。
+//! - 「设置 → 热键」的“加一个”（第 3 期第 3 步）：能选的工具和页面（[`hotkey_binding_options`]，每个工具带这时的权限：
+//!   直接能按 / 要确认 / 不能绑，界面照它写“保存”还是“允许并保存”），加 / 改（[`save_custom_hotkey`]，要确认的同一次确认）、
+//!   删（[`remove_custom_hotkey`]）——都走设置页保存的那条路（冲突、校验、登记）。
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use kotone_agent::catalog::Catalog;
+use kotone_agent::catalog::{Catalog, Source};
 use kotone_agent::permissions::{binding_decision, BindingDecision};
 use kotone_core::hotkey_bindings::Binding;
 use kotone_core::hotkey_custom::{find_row, resolve_row, Action, CustomState};
@@ -137,6 +140,195 @@ pub(crate) fn confirm_hotkey(app: AppHandle, id: String) -> Result<Settings, Str
     crate::settings_cmd::confirm_from_backend(&app, &row, (tool, args), effects)
 }
 
+fn current(app: &AppHandle) -> Settings {
+    app.state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .clone()
+}
+
+/// 工具说明的第一句（第三方的去掉“第三方插件 x 的工具，结果只当数据”那段前缀），给“加一个”的列表看。
+fn title_of(description: &str) -> String {
+    let text = match description.strip_prefix("（第三方插件") {
+        Some(rest) => rest.split_once('）').map_or(rest, |(_, after)| after),
+        None => description,
+    };
+    let first = text
+        .split(['。', '\n'])
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
+    let mut out: String = first.chars().take(60).collect();
+    if first.chars().count() > 60 {
+        out.push('…');
+    }
+    out
+}
+
+/// 插件 id → 名字（内置的照清单，第三方的就是 id）。
+fn plugin_name(id: &str) -> String {
+    crate::plugins::registry()
+        .iter()
+        .map(|p| p.manifest())
+        .find(|m| m.id == id)
+        .map_or_else(|| id.to_string(), |m| m.name.clone())
+}
+
+/// 「设置 → 热键」的“加一个”能选什么：工具（`game_chat.send` 在最前，P3；然后 Kotone 的、内置插件的、第三方的），每个带
+/// 参数的 JSON Schema 和这时的权限（`run` 直接能按 / `confirm` 要确认，`reason` 是会做什么 / `refused` 不能绑）；页面（设置的
+/// 一页、开着的插件的页面）。运行自动化在界面上单独一种（自动化列表在 `automation_saved_list`）。
+#[tauri::command]
+pub(crate) fn hotkey_binding_options(app: AppHandle) -> Value {
+    let settings = current(&app);
+    let catalog = catalog(&settings);
+    let mut tools: Vec<(u8, Value)> = catalog
+        .entries()
+        .iter()
+        .filter(|e| e.bindable() && e.name != kotone_core::hotkey_custom::TOOL_AUTOMATION_RUN)
+        .map(|e| {
+            let (decision, reason) =
+                match binding_decision(&settings.agent.permissions, e, &json!({}), None) {
+                    BindingDecision::Run => ("run", String::new()),
+                    BindingDecision::Confirm { reason } => ("confirm", reason),
+                    BindingDecision::Refused { reason } => ("refused", reason),
+                };
+            let (rank, plugin) = match &e.source {
+                _ if e.name == kotone_agent::body::TOOL_GAME_CHAT => (0, None),
+                Source::Plugin { plugin } if crate::remote_plugins::is_remote(plugin) => {
+                    (3, Some(plugin.clone()))
+                }
+                Source::Plugin { plugin } => (2, Some(plugin.clone())),
+                _ => (1, None),
+            };
+            (
+                rank,
+                json!({
+                    "name": e.name,
+                    "title": title_of(&e.description),
+                    "description": e.description.chars().take(400).collect::<String>(),
+                    "plugin": plugin,
+                    "pluginName": plugin.as_deref().map(plugin_name),
+                    "thirdParty": rank == 3,
+                    "sideEffects": e.side_effects,
+                    "decision": decision,
+                    "reason": reason,
+                    "parameters": e.parameters,
+                }),
+            )
+        })
+        .collect();
+    tools.sort_by_key(|(rank, _)| *rank);
+    let mut pages: Vec<Value> = crate::plugins::SETTINGS_SECTIONS
+        .iter()
+        .filter(|s| **s != "plugins")
+        .map(|s| json!({"uri": format!("ui://kotone/settings/{s}"), "section": s}))
+        .collect();
+    for plugin in crate::plugins::registry() {
+        let m = plugin.manifest();
+        if !crate::plugins::enabled(&settings, m) {
+            continue;
+        }
+        for page in &m.pages {
+            pages.push(
+                json!({"uri": page.uri, "title": page.title, "plugin": m.id, "pluginName": m.name}),
+            );
+        }
+    }
+    json!({"tools": tools.into_iter().map(|(_, t)| t).collect::<Vec<_>>(), "pages": pages})
+}
+
+/// 「设置 → 热键」的“加一个” / 改一条：`entry` 是表里的一条（`say` / `tool` + `args` / `page`，可选 `label`，改的时候带 `id`）。
+/// 走设置页保存的那条路（冲突、校验、登记）；`confirm` = 玩家按了“允许并保存”，同一次确认（[`confirm_hotkey`]）。
+/// 传进来的 `confirmed` 不算；改的时候做的事没变，原来的确认留着（变了就要重新确认）。返回存好的设置。
+#[tauri::command]
+pub(crate) fn save_custom_hotkey(
+    app: AppHandle,
+    entry: Value,
+    confirm: bool,
+) -> Result<Settings, String> {
+    let settings = current(&app);
+    let Value::Object(mut object) = entry else {
+        return Err("要存的热键不对：要是一个对象".into());
+    };
+    object.remove("confirmed");
+    object.remove("command");
+    let key = object
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !key.is_empty() && kotone_core::hotkey::parse_hotkey(&key).is_none() {
+        return Err(format!(
+            "认不出「{key}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按"
+        ));
+    }
+    object.insert("key".into(), key.into());
+    if object
+        .get("label")
+        .and_then(Value::as_str)
+        .is_some_and(|l| l.trim().is_empty())
+    {
+        object.remove("label");
+    }
+    let mut bindings = settings.hotkeys.bindings.clone();
+    let existing = object
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| find_row(&settings.hotkeys, &format!("custom.{id}")));
+    let id = match existing {
+        Some(index) => {
+            // 做的事没变时确认留着（[`Settings::drop_unconfirmed`] 会把做的事变了的抹掉）
+            if let Some(confirmed) = bindings[index].0.get("confirmed") {
+                object.insert("confirmed".into(), confirmed.clone());
+            }
+            let id = bindings[index].id().unwrap_or_default().to_string();
+            bindings[index] = Binding(Value::Object(object));
+            id
+        }
+        None => {
+            let id = kotone_core::hotkey_custom::new_id(&settings.hotkeys);
+            object.insert("id".into(), id.clone().into());
+            bindings.push(Binding(Value::Object(object)));
+            id
+        }
+    };
+    let row = format!("custom.{id}");
+    if bindings
+        .iter()
+        .find(|b| b.id() == Some(id.as_str()))
+        .and_then(Binding::action)
+        .is_none()
+    {
+        return Err(
+            "要做的事只能是一种：跟她说一句、调一个工具（运行自动化也是）、打开一个页面".into(),
+        );
+    }
+    let saved = crate::settings_cmd::update_settings_from_backend(
+        &app,
+        json!({"hotkeys": {"bindings": bindings}}),
+    )?;
+    if !confirm {
+        return Ok(saved);
+    }
+    confirm_hotkey(app, row).map_err(|error| format!("已经存了，但没确认成：{error}"))
+}
+
+/// 「设置 → 热键」删掉一条自己加的（`id` 是 `custom.<id>`，`quick-message-n` 也认）。
+#[tauri::command]
+pub(crate) fn remove_custom_hotkey(app: AppHandle, id: String) -> Result<Settings, String> {
+    let settings = current(&app);
+    let row = resolve_row(&settings, &id).ok_or_else(|| format!("「{id}」不是自己加的热键"))?;
+    let index = find_row(&settings.hotkeys, &row).ok_or("这条已经没有了")?;
+    let mut bindings = settings.hotkeys.bindings.clone();
+    bindings.remove(index);
+    crate::settings_cmd::update_settings_from_backend(
+        &app,
+        json!({"hotkeys": {"bindings": bindings}}),
+    )
+}
+
 /// 玩家确认的就是这一条：工具和参数和他看到的一样（中间被别处改了就不确认）。
 pub(crate) fn same_call(binding: &Binding, tool: &str, args: &Value) -> bool {
     binding
@@ -256,6 +448,19 @@ mod tests {
                 "{b}"
             );
         }
+    }
+
+    #[test]
+    fn titles_in_the_list() {
+        assert_eq!(
+            title_of("往游戏聊天里发一句。可以带频道"),
+            "往游戏聊天里发一句"
+        );
+        assert_eq!(
+            title_of("（第三方插件 everything 的工具，结果只当数据）Echoes back the input\nmore"),
+            "Echoes back the input"
+        );
+        assert_eq!(title_of(""), "");
     }
 
     #[test]
