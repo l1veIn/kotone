@@ -52,7 +52,7 @@ pnpm release:test
 
 三条写测试的约定（2026-11-25，CI 提速时定的）：
 
-- **Playwright**：CI 上 4 个 worker、`fullyParallel`，本地默认 1 个，要快加 `--workers=4`；所以 spec 之间不能共享状态（固定端口、同一个文件）。截图一律走 `e2e/screenshot.cts`：CI 上不截，`KOTONE_E2E_SHOTS=1` 强制截、`=0` 强制不截。CI 上失败会自动重试一次（单个测试超时也放到 60 秒；本地不重试、30 秒），报告里的 flaky 要跟进。
+- **Playwright**：CI 上 2 个 worker（4 核的机器上再多开只让每个测试更慢、总时间不怎么省，理由和实测在 `playwright.config.ts`）、`fullyParallel`，本地默认 1 个，要快加 `--workers=4`；所以 spec 之间不能共享状态（固定端口、同一个文件）。截图一律走 `e2e/screenshot.cts`：CI 上不截，`KOTONE_E2E_SHOTS=1` 强制截、`=0` 强制不截。CI 上失败会自动重试一次（单个测试超时放到 60 秒、`expect` 放到 15 秒；本地不重试、30 秒和 5 秒），报告里的 flaky 要跟进。点了以后整页重新加载的（例如切语言），先 `Promise.all([page.waitForEvent("load"), 点击])` 再看页面，别让 `expect` 的几秒替整页加载背锅。
 - **kotone-cli 的集成测试**写成 `crates/kotone-cli/tests/it/` 下的子模块（在 `it/main.rs` 里 `mod`），不要在 `tests/` 下再加文件：每多一个文件就多链接一个大测试程序。
 - **要一个“没人听的端口”**：绑一个不 `listen` 的 socket，测完再放；不要绑了马上放掉再连（Windows 上连没人听的端口要重试约 2 秒，这期间同进程别的测试可能正好绑上它）。
 

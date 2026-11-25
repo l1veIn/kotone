@@ -4,6 +4,8 @@
 // 为什么：CI 上每次都是冷的（没有 node_modules/.vite）。一个 worker 时第一个测试自己扛冷启动（CI 上约 11 秒）；
 // 4 个 worker 一起打开页面，本机冷启动全量跑 6 次里有 2 次头 4 个测试一起卡满 30 秒超时（about 卡在 page.goto 等 load，
 // agent-chat 卡在页面里 import 模块），后面的测试都正常。先单独加载一次、给足时间，就不让头一波测试替冷启动背锅。
+// 英文界面不用另外预热：两种语言的文案模块是 src/lib/paraglide/messages/_index.js 静态引入的，中文首页这一次就把
+// messages/en.js 一起编了；切语言的整页重新加载要的模块和第一次一模一样，vite 都编过（2026-11-26 抓过两次的请求）。
 // webServer 在 globalSetup 之前起好（Playwright 先跑插件的 setup，再跑 globalSetup）。
 import { chromium, type FullConfig } from "@playwright/test";
 

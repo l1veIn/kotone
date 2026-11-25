@@ -10,7 +10,10 @@ test("the interface is Chinese by default and can switch to English and back", a
 
   await openSettingsTab(page, "appearance");
   await expect(page.getByTestId("appearance-locale-zh-CN")).toHaveAttribute("aria-pressed", "true");
-  await page.getByTestId("appearance-locale-en").click();
+  // 点了就整页重新加载（changeLocale → location.reload()），`<html lang>` 要等全部模块重新拿一遍、跑完才变：
+  // 先等新页面的 load（和 page.goto 一样算在测试的超时里），不让 expect 的几秒替整页加载背锅
+  // （CI 上 4 个 worker 挤 4 个核，整页加载过了 5 秒，run 45665909267）
+  await Promise.all([page.waitForEvent("load"), page.getByTestId("appearance-locale-en").click()]);
 
   // 重新加载以后是英文（回到打开设置时的那一页）
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
@@ -23,7 +26,7 @@ test("the interface is Chinese by default and can switch to English and back", a
   await expect(page.getByTestId("advanced-companion-moved")).toContainText("Wake-up, interaction, permissions and usage");
   await screenshot(page, { path: testInfo.outputPath("settings-en.png") });
 
-  await page.getByTestId("appearance-locale-zh-CN").click();
+  await Promise.all([page.waitForEvent("load"), page.getByTestId("appearance-locale-zh-CN").click()]);
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
   await expect(page.getByTestId("settings-nav-advanced")).toContainText("设置");
 });
