@@ -321,6 +321,16 @@ pub enum HookEvent {
     /// 「钩子活着但主键被放行」只能靠它区分于「钩子被 Windows 静默摘除」——
     /// 0.1.6 第四步排障：webview 聚焦时 CapsLock 落进 DOM 无钩子上报。
     MainKeyMissed { ctrl: bool, alt: bool, shift: bool },
+    /// 诊断：某个具名热键的键按下了，但修饰键对不上、也没有别的热键要它（没吞键、不触发业务）。
+    /// 和 [`HookEvent::MainKeyMissed`] 一样，用来区分“钩子活着但修饰键卡住 / 按错”和“钩子被摘了”；
+    /// `id` 是第一个用这个键的具名热键。只在按着修饰键时报（不带修饰键按是平常打字 / 放技能），
+    /// 按住不放的重复按下只报一次。被动提示键不报。ADR 040 第 4 步删主键位以前补上。
+    NamedKeyMissed {
+        id: String,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+    },
 }
 
 /// 两个热键组合是否冲突（解析后 spec 相等；解析失败不视为冲突，由注册路径报错）
@@ -360,6 +370,8 @@ pub struct HookMatcher {
     passive: Vec<String>,
     /// 当前被按住（已命中 down 未 up）的具名热键 id，用于重复 down 过滤与成对处理 up
     named_down: Vec<String>,
+    /// 修饰键对不上、报过 [`HookEvent::NamedKeyMissed`] 的那个主键（按住不放的重复按下不再报，松开时清掉）
+    named_missed: Option<u32>,
     // 修饰键实时按下态
     ctrl: bool,
     alt: bool,
@@ -390,6 +402,7 @@ impl HookMatcher {
             named_specs: Vec::new(),
             passive: Vec::new(),
             named_down: Vec::new(),
+            named_missed: None,
             ctrl: false,
             alt: false,
             shift: false,
@@ -459,6 +472,7 @@ impl HookMatcher {
         self.named_specs.clear();
         self.passive.clear();
         self.named_down.clear();
+        self.named_missed = None;
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -468,6 +482,7 @@ impl HookMatcher {
             self.main_matched = false;
             self.hold_fired = false;
             self.named_down.clear();
+            self.named_missed = None;
             self.esc_down = false;
             self.esc_matched = false;
         }
@@ -557,7 +572,33 @@ impl HookMatcher {
         // （如「启动 / 停止 Kotone」）必须在主热键未注册时（runtime 未运行）也能用，
         // 因此不受 `enabled`（主键使能）约束；未命中时落回主键分支。
         // 声明顺序即优先级；不同具名键也可同 vk 不同修饰键，先声明者先匹配。
+        //
+        // 一次物理按下只按按下那一刻的修饰键算（和主键位一样）：按住不放时先松开 / 换了修饰键，
+        // 后面的重复按下仍归按下时命中的那一个（吞、不再触发），没命中的仍算没命中（放行、不触发），
+        // 不会换成同一个键的另一个热键；按住的热键照样等这个键松开才算松开。
+        if down {
+            if let Some((id, _, _)) = self
+                .named_specs
+                .iter()
+                .find(|(id, ns, _)| ns.vk == vk && self.named_down.iter().any(|d| d == id))
+            {
+                // 已命中按住的重复 down：吞（被动键放行）但不重复触发
+                return MatchOutcome {
+                    swallow: !self.is_passive(id),
+                    event: None,
+                    captured: None,
+                };
+            }
+            if self.named_missed == Some(vk) {
+                return PASS; // 没命中的那次按下还按着：重复按下照样放行，报过的诊断不再报
+            }
+        }
+        let main_held = self.enabled && self.main_down && vk == self.spec.vk;
+        let mut missed: Option<String> = None;
         for i in 0..self.named_specs.len() {
+            if main_held {
+                break; // 这个键正作为主键按着：重复按下和松开都归主键分支
+            }
             let (id, ns, mode) = &self.named_specs[i];
             if vk != ns.vk {
                 continue;
@@ -565,14 +606,6 @@ impl HookMatcher {
             // 被动提示键：事件照发，键照常传给游戏。
             let swallow = !self.is_passive(id);
             if down {
-                if self.named_down.iter().any(|existing| existing == id) {
-                    // 已命中按住的重复 down：吞（被动键放行）但不重复触发
-                    return MatchOutcome {
-                        swallow,
-                        event: None,
-                        captured: None,
-                    };
-                }
                 let matched = self.ctrl == ns.ctrl && self.alt == ns.alt && self.shift == ns.shift;
                 if matched {
                     self.named_down.push(id.clone());
@@ -588,7 +621,10 @@ impl HookMatcher {
                         captured: None,
                     };
                 }
-                // 未命中：落到后续具名键 / 主键分支（同 vk 不同修饰键场景）
+                // 未命中：落到后续具名键 / 主键分支（同 vk 不同修饰键场景）；都没人要时报诊断（被动提示键不算）
+                if missed.is_none() && swallow {
+                    missed = Some(id.clone());
+                }
             } else if self.named_down.iter().any(|existing| existing == id) {
                 self.named_down.retain(|existing| existing != id);
                 return MatchOutcome {
@@ -601,6 +637,32 @@ impl HookMatcher {
                 };
             }
             // 非本键按下的 up：落到后续具名键 / 主键分支
+        }
+        if !down && self.named_missed == Some(vk) {
+            self.named_missed = None;
+            return PASS;
+        }
+
+        // 具名热键的键按下了、修饰键对不上，主键也不是它（主键自己报 MainKeyMissed）、也不是 Esc：
+        // 键照常放行；按着修饰键时报诊断（不带修饰键按是平常打字 / 放技能，不记，免得刷满诊断记录）
+        if let Some(id) = missed {
+            let main_owns = self.enabled && vk == self.spec.vk;
+            if !main_owns && vk != VK_ESCAPE {
+                self.named_missed = Some(vk);
+                if !(self.ctrl || self.alt || self.shift) {
+                    return PASS;
+                }
+                return MatchOutcome {
+                    swallow: false,
+                    event: Some(HookEvent::NamedKeyMissed {
+                        id,
+                        ctrl: self.ctrl,
+                        alt: self.alt,
+                        shift: self.shift,
+                    }),
+                    captured: None,
+                };
+            }
         }
 
         // 主键（enabled=false = 未注册主热键：全部放行，仅上面的具名热键和会话中的 Esc 取消仍然生效——
@@ -1125,7 +1187,17 @@ mod tests {
         down(&mut m, VK_LCONTROL);
         down(&mut m, VK_LSHIFT);
         let r = down(&mut m, VK_F1 + 8);
-        assert_eq!(r, PASS);
+        // 不吞、不触发，只报诊断（ADR 040 第 4 步准备）
+        assert!(!r.swallow);
+        assert_eq!(
+            r.event,
+            Some(HookEvent::NamedKeyMissed {
+                id: HK_CHANNEL_CYCLE.into(),
+                ctrl: true,
+                alt: false,
+                shift: true
+            })
+        );
         up(&mut m, VK_F1 + 8);
         up(&mut m, VK_LSHIFT);
         up(&mut m, VK_LCONTROL);
@@ -1232,7 +1304,17 @@ mod tests {
         down(&mut m, VK_LCONTROL);
         down(&mut m, VK_LMENU);
         let r = down(&mut m, VK_F1 + 8);
-        assert_eq!(r, PASS);
+        // 不吞、不触发，只报诊断（ADR 040 第 4 步准备）
+        assert!(!r.swallow);
+        assert_eq!(
+            r.event,
+            Some(HookEvent::NamedKeyMissed {
+                id: HK_RESEND_LAST.into(),
+                ctrl: true,
+                alt: true,
+                shift: false
+            })
+        );
         up(&mut m, VK_F1 + 8);
         up(&mut m, VK_LMENU);
         up(&mut m, VK_LCONTROL);
@@ -1408,3 +1490,7 @@ mod tests {
         assert_eq!(up(&mut m, VK_F1 + 8).event, None);
     }
 }
+
+#[cfg(test)]
+#[path = "hotkey_press_tests.rs"]
+mod press_tests;

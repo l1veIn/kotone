@@ -276,7 +276,7 @@ fn make_llhook_sink(
         match ev {
             HookEvent::NamedHotkey { id } => route_named_hotkey(&app, &orch, &id),
             // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
-            HookEvent::MainKeyMissed { .. } => {}
+            HookEvent::MainKeyMissed { .. } | HookEvent::NamedKeyMissed { .. } => {}
             event => dispatch_runtime_hotkey(&app, &orch, event),
         }
     })
@@ -437,7 +437,7 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                     },
                 },
             },
-            HookEvent::MainKeyMissed { .. } => {}
+            HookEvent::MainKeyMissed { .. } | HookEvent::NamedKeyMissed { .. } => {}
         }
     });
 }

@@ -909,7 +909,9 @@ async fn cmd_listen_hotkey(
                         }
                     }
                     // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
-                    HookEvent::MainKeyMissed { .. } | HookEvent::NamedHold { .. } => {}
+                    HookEvent::MainKeyMissed { .. }
+                    | HookEvent::NamedKeyMissed { .. }
+                    | HookEvent::NamedHold { .. } => {}
                 }
             }
         })
