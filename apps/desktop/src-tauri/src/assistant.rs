@@ -1676,12 +1676,16 @@ mod tests {
             if ticket != self.generation() {
                 return Err("播报已取消".into());
             }
-            if self
-                .full
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                .is_ok()
-            {
-                return Err("本地语音队列已满或服务已停止".into());
+            // 大于 0 才减 1；不用 fetch_update（新工具链弃用）/ try_update（旧工具链没有）
+            let mut left = self.full.load(Ordering::SeqCst);
+            while left > 0 {
+                match self
+                    .full
+                    .compare_exchange(left, left - 1, Ordering::SeqCst, Ordering::SeqCst)
+                {
+                    Ok(_) => return Err("本地语音队列已满或服务已停止".into()),
+                    Err(now) => left = now,
+                }
             }
             self.started.fetch_add(1, Ordering::SeqCst);
             let playing = std::time::Instant::now();
