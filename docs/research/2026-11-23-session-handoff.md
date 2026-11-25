@@ -772,6 +772,10 @@
 - 真机（不按键、不动前台、不出声；新编的 `kotone.exe`）：`mcp_app_resources_real.py` 22/22、`hotkey_tools_real.py` 20/20、`lol_tools_real.py --chat-only` 11/11、`mcp_app_real.py` 34/34。各路子代理今天跑过的：`focus_steal_real.py` 28/28、`message_popup_real.py` 20/20、`interpreter_asr_real.py` 6/6、`interpreter_e2e.py` 16/16、`voice_chat_real.py` 7/7（真 DeepSeek + VB-CABLE）。
 - 没跑（要玩家让出前台或会出声）：见上面“要玩家让出前台跑的真机”。
 
+### RC
+
+玩家：“完事之后推送、合并、打包rc”。版本号改成 0.2.0-rc.9（`69dad3bb`，`pnpm release:verify` 过、`release:test` 8/8，CHANGELOG 的 Unreleased 归进“0.2.0-rc.9 — 2026-11-25”）。分支 `claude/plugins` 推送到 `69dad3bb`，`main` 快进到同一个提交并推送（`c8c0b8b4..69dad3bb`，会触发 CI；没打 tag，所以不触发发布流程）。本机打了 NSIS 安装包 `target/release/bundle/nsis/Kotone_0.2.0-rc.9_x64-setup.exe`（24,321,011 字节，SHA-256 `034a1d1bba4e43f11064af9b6b62c338bd3def3a46e460ed05ed7e2780af90dd`，`pnpm -C apps/desktop tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json`，没有更新签名）。正式版程序 `target/release/kotone.exe` 跑 `mcp_app_resources_real.py --exe` 22/22（英雄联盟 App 是真打包）。没有上传、没有发布。
+
 ### 下一步
 
 1. 玩家在场时做“还要玩家的”三样；真人按过以后做 ADR 040 第 2 期第 4 步（删“主键位”旧路径）。
