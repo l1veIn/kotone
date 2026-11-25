@@ -3,23 +3,24 @@ import type { HotkeyCheck, KeyUse, Settings } from "./ipc/contracts";
 import { pluginText } from "./plugins";
 import { m } from "./paraglide/messages.js";
 
+/** 本体的命令和不是命令的几项（插件的命令用插件自己的文案：`plugin_<插件>_command_<命令>_name`）。 */
 const NAMES: Record<string, () => string> = {
-  assistant: m.voice_hotkey_name_call,
-  "automation-stop": m.voice_hotkey_name_automation_stop,
-  "runtime-toggle": m.voice_hotkey_name_runtime_toggle,
+  "kotone.call": m.voice_hotkey_name_call,
+  "kotone.stop": m.voice_hotkey_name_automation_stop,
+  "kotone.speech-toggle": m.voice_hotkey_name_runtime_toggle,
   "legacy-reminder": m.voice_hotkey_name_legacy_reminder,
   escape: m.hotkeys_escape,
-  record: m.voice_hotkey_name_record,
-  "channel-cycle": m.voice_hotkey_name_channel_cycle,
-  "resend-last": m.voice_hotkey_name_resend_last,
-  "post-process-toggle": m.voice_hotkey_name_post_process_toggle,
-  "post-process-cycle": m.voice_hotkey_name_post_process_cycle,
 };
 
 /** 快捷指令的格子号（`quick-message-3` → 3）；不是快捷指令为 null。 */
 export function quickMessageNumber(id: string): number | null {
   const slot = /^quick-message-(\d+)$/.exec(id);
   return slot ? Number(slot[1]) : null;
+}
+
+/** 文案键里的一段：连字符换成下划线（`channel-cycle` → `channel_cycle`）。 */
+function keyPart(id: string): string {
+  return id.replace(/[^A-Za-z0-9_]/g, "_");
 }
 
 /** 一个占着键的东西叫什么：热键的名字，或者“《英雄联盟》的打开聊天框键”这样的游戏配置里的键。 */
@@ -33,20 +34,26 @@ export function keyUseName(use: KeyUse): string {
   }
   const number = quickMessageNumber(use.id);
   if (number !== null) return m.voice_hotkey_name_quick_message({ number });
-  return NAMES[use.id]?.() ?? use.label;
+  if (use.source === "plugin" && use.owner && use.command) {
+    const command = use.command.slice(use.owner.length + 1);
+    return pluginText(use.owner, `command_${keyPart(command)}_name`, use.label);
+  }
+  return NAMES[use.command ?? use.id]?.() ?? use.label;
 }
 
-/** 这一项是谁的：Kotone、插件名、自己加的、固定。 */
+/** 这一项是谁的：Kotone、插件名、自己加的、固定、找不到。 */
 export function keyUseSource(use: KeyUse): string {
   if (use.source === "plugin") return pluginText(use.owner ?? "", "name", use.ownerName ?? use.owner ?? "");
   if (use.source === "custom") return m.hotkeys_source_custom();
   if (use.source === "fixed") return m.hotkeys_source_fixed();
+  if (use.source === "unknown") return m.hotkeys_source_unknown();
   return m.hotkeys_source_core();
 }
 
-/** 一行底下的补充：快捷指令说的话、Esc 做什么。 */
+/** 一行底下的补充：快捷指令说的话、Esc 做什么、找不到的为什么。 */
 export function keyUseDetail(use: KeyUse, settings: Settings | null): string {
   if (use.id === "escape") return m.hotkeys_escape_detail();
+  if (use.source === "unknown") return m.hotkeys_unknown_detail();
   const number = quickMessageNumber(use.id);
   if (number === null) return "";
   const message = settings?.assistant.companion?.quickMessages?.[number - 1];

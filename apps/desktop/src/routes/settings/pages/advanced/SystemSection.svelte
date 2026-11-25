@@ -18,8 +18,7 @@
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
   import { startPageOf, usesLegacyVoiceInput } from "../../../../lib/ipc/contracts";
   import { companionName } from "$lib/stores/companion";
-  import { updateSettings } from "../../../../lib/ipc";
-  import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import HotkeyLink from "../../../../lib/components/HotkeyLink.svelte";
   import { Download } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -179,8 +178,7 @@
         description={m.system_stop_description({ name: $companionName })}>
         <SettingsRow label={m.system_stop_hotkey()} description={m.system_stop_hotkey_description()} stacked testid="hotkey-section-automation-stop">
           {#snippet control()}
-            <HotkeyField id="automation-stop" title={m.system_stop_hotkey()} value={$settingsStore.automationStopHotkey ?? ""} placeholder={m.system_stop_hotkey_placeholder()} compact
-              onSave={async (key) => { settingsStore.set(await updateSettings({ automationStopHotkey: key })); }} />
+            <HotkeyLink id="kotone.stop" value={$settingsStore.automationStopHotkey ?? ""} />
           {/snippet}
         </SettingsRow>
       </SettingsSection>

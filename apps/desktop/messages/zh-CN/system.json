@@ -223,7 +223,6 @@
   "system_stop_description": "停止{name}正在做的事和所有自动化。四种方式：她操作游戏时按 Esc、停下热键、说“停下”、托盘菜单「停下」。",
   "system_stop_hotkey": "停下热键",
   "system_stop_hotkey_description": "Kotone 没在听的时候也有效；自动化按住的键会一起松开。",
-  "system_stop_hotkey_placeholder": "如 Ctrl+Shift+F12",
   "system_compat_title": "Windows 兼容性",
   "system_compat_hotkey_backend": "热键实现",
   "system_compat_hotkey_backend_description": "除非特定游戏收不到热键，否则保持“自动”。当前：{current}",
@@ -523,7 +522,7 @@
   "system_mcp_problem_removed": "从 mcp.json 删掉了「{id}」",
   "hotkeys_tab": "热键",
   "hotkeys_title": "全部热键",
-  "hotkeys_description": "Kotone 里所有的热键：Kotone 自己的、插件的、你自己加的快捷指令，还有固定的 Esc。这一页只能看，点“去改”到设置它的地方。游戏配置里的聊天键不是热键，不列在这里；热键和它们一样时会标成冲突（在游戏里按这个键会被 Kotone 拿走）。",
+  "hotkeys_description": "Kotone 里所有的热键都在这里改：Kotone 自己的、插件的、你自己加的快捷指令；Esc 是固定的。每一行都能录一个新键（或者在框里打），和别的热键、Esc、游戏配置里的聊天键撞了就不存，会说清楚和谁撞了。游戏的聊天键不是热键，不列在这里。",
   "hotkeys_search": "搜索热键（名字、键、来源）",
   "hotkeys_search_empty": "没有和“{query}”对得上的热键",
   "hotkeys_source_core": "Kotone",
@@ -541,5 +540,10 @@
   "hotkeys_game_channel": "《{game}》的「{channel}」频道键",
   "hotkeys_game_send": "《{game}》的发送键",
   "hotkeys_game_console": "《{game}》的控制台触发键",
-  "hotkeys_load_failed": "读热键失败：{error}"
+  "hotkeys_load_failed": "读热键失败：{error}",
+  "hotkeys_change_in_table": "去「设置 → 热键」改",
+  "hotkeys_source_unknown": "找不到",
+  "hotkeys_unknown_detail": "这个版本找不到这个命令（插件没装或被删了，或者是更新的版本加的），不生效",
+  "hotkeys_reset_default": "恢复默认（{key}）",
+  "hotkeys_reset_done": "{title}恢复成默认的 {key}"
 }

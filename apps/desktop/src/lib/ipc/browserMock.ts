@@ -44,7 +44,7 @@ import type {
 } from "./contracts";
 import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
 import type { BrowserAction, BrowserBounds, BrowserExtension, BrowserState, BrowserTab } from "../browser";
-import { checkHotkey as checkHotkeyInMock, hotkeyTable, type HotkeySources } from "./hotkeysMock";
+import { checkHotkey as checkHotkeyInMock, hotkeyTable, setHotkey as setHotkeyInMock, type HotkeySources } from "./hotkeysMock";
 
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
@@ -113,6 +113,15 @@ const mock: MockStore = {
     browser: { enabled: true, extensions: [] },
     agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
     plugins: {},
+    // 热键表（ADR 040 D8）：预览是老用户，旧字段里的键都在表里（含以前默认的 Shift+CapsLock 频道切换）
+    hotkeys: {
+      bindings: [
+        { key: "Ctrl+Backquote", command: "kotone.call" },
+        { key: "Ctrl+Shift+F12", command: "kotone.stop" },
+        { key: "CapsLock", command: "voice-input.talk" },
+        { key: "Shift+CapsLock", command: "voice-input.channel-cycle" },
+      ],
+    },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -900,6 +909,12 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
           key: mock.settings.automationStopHotkey || null,
           error: null,
         },
+        // 快捷指令按槽位登记（同后端 KNOWN_NAMED_HOTKEYS）
+        ...Array.from({ length: 8 }, (_, index) => ({
+          id: `quick-message-${index + 1}`,
+          key: usesLegacyVoiceInput(mock.settings.ui) ? null : mock.settings.assistant.companion?.quickMessages?.[index]?.hotkey || null,
+          error: null,
+        })),
       ],
     };
 }
@@ -971,6 +986,11 @@ export async function getHotkeyTable(): Promise<HotkeyTable> {
 
 export async function checkHotkey(key: string, except?: string): Promise<HotkeyCheck> {
   return clone(checkHotkeyInMock(hotkeySources(), key, except));
+}
+
+export async function setHotkey(id: string, key: string): Promise<Settings> {
+  setHotkeyInMock(hotkeySources(), id, key);
+  return clone(mock.settings);
 }
 
 /** 开始热键捕获（设置页「点击录入」）；结果经 kotone://hotkey-capture 事件推送 */

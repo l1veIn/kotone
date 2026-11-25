@@ -1,8 +1,8 @@
-// ADR 040 第 1 期：冲突只在后端查一次（游戏配置的聊天键、控制台触发键、Esc 也算），
-// 「设置 → 热键」一页只读列出全部热键。浏览器预览里的后端是 ipc/hotkeysMock.ts（照 kotone_core::hotkey_table 写）；
-// 真正的冲突规矩在 Rust 里有单元测试（crates/kotone-core/src/hotkey_table_tests.rs）。
+// ADR 040：冲突只在后端查一次（游戏配置的聊天键、控制台触发键、Esc 也算，第 1 期）；「设置 → 热键」列出全部热键，
+// 热键只在这一页改，别的页面只显示现在的键和“去改”（第 2 期第 3 步，D3）。浏览器预览里的后端是 ipc/hotkeysMock.ts
+// （照 kotone_core::hotkey_table / hotkey_table_cmd.rs 写）；真正的规矩在 Rust 里有单元测试。
 import { expect, test, type Page } from "@playwright/test";
-import { openSettingsTab } from "./nav";
+import { openSettingsTab, openVoiceInput } from "./nav";
 
 const mockSettings = (page: Page) => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings());
 
@@ -18,7 +18,7 @@ async function addConsoleProfile(page: Page) {
   });
 }
 
-/** 像别的地方（她、别的页面）改了设置一样：存进预览后端，界面的设置跟着更新。 */
+/** 像别的地方（她、别的窗口）改了设置一样：存进预览后端，界面的设置跟着更新。 */
 async function patchMock(page: Page, patch: Record<string, unknown>) {
   await page.evaluate(async (p) => {
     const [{ updateSettings }, { settingsStore }] = await Promise.all([import("/src/lib/ipc.ts"), import("/src/lib/stores/ui.ts")]);
@@ -29,8 +29,8 @@ async function patchMock(page: Page, patch: Record<string, unknown>) {
 test("the call key can't take a game's chat key, the console trigger key or Esc", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await addConsoleProfile(page);
-  await openSettingsTab(page, "call");
-  const input = page.getByTestId("hotkey-input-assistant");
+  await openSettingsTab(page, "hotkeys");
+  const input = page.getByTestId("hotkey-input-kotone.call");
   for (const [key, conflict] of [
     ["Enter", "《League of Legends》的打开聊天框键"],
     ["Shift+Enter", "《League of Legends》的「所有人」频道键"],
@@ -45,48 +45,73 @@ test("the call key can't take a game's chat key, the console trigger key or Esc"
   // 修饰键不同就不冲突：Ctrl+Enter 不是游戏的 Enter
   await input.fill("Ctrl+Enter");
   await input.press("Enter");
-  await expect(page.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+Enter");
+  await expect(page.getByTestId("hotkey-status-kotone.call")).toContainText("当前生效：Ctrl+Enter");
+  // 后端那一道：绕过界面直接存冲突的键也不让存，说清楚和谁撞了
+  const refused = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).setHotkey("kotone.stop", "CapsLock").then(() => "", (e: Error) => e.message));
+  expect(refused).toBe("「CapsLock」已经是「语音输入热键」的热键：先在「设置 → 热键」把它换掉，或者换一个键。");
 });
 
-test("设置 → 热键 lists every hotkey with its source; fixed keys are read-only", async ({ page }, testInfo) => {
+test("设置 → 热键 lists every hotkey with its source and edits them in place", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never");
   await patchMock(page, { assistant: { companion: { quickMessages: [{ id: "q1", label: "", text: "集合打小龙", hotkey: "F8" }] } } });
   await openSettingsTab(page, "hotkeys");
   const list = page.getByTestId("hotkeys-page");
   await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(10);
   const expectRow = async (id: string, name: string, source: string, key: string) => {
-    const row = page.getByTestId(`hotkeys-row-${id}`);
-    await expect(row, id).toContainText(name);
+    await expect(page.getByTestId(`hotkeys-row-${id}`), id).toContainText(name);
     await expect(page.getByTestId(`hotkeys-source-${id}`), id).toHaveText(source);
-    await expect(page.getByTestId(`hotkeys-key-${id}`), id).toHaveText(key);
+    await expect(page.getByTestId(`hotkey-input-${id}`), id).toHaveValue(key);
   };
-  await expectRow("assistant", "呼叫键", "Kotone", "Ctrl + ~");
-  await expectRow("automation-stop", "停下热键", "Kotone", "Ctrl + Shift + F12");
-  await expectRow("runtime-toggle", "启动 / 停止本地语音识别热键", "Kotone", "未设置");
-  await expectRow("escape", "Esc", "固定", "Escape");
-  await expectRow("record", "语音输入热键", "语音输入", "CapsLock");
-  await expectRow("channel-cycle", "频道切换热键", "语音输入", "Shift + CapsLock");
-  await expectRow("resend-last", "重发最近一条热键", "语音输入", "未设置");
+  await expectRow("kotone.call", "呼叫键", "Kotone", "Ctrl+Backquote");
+  await expectRow("kotone.stop", "停下热键", "Kotone", "Ctrl+Shift+F12");
+  await expectRow("kotone.speech-toggle", "启动 / 停止本地语音识别热键", "Kotone", "");
+  await expectRow("voice-input.talk", "语音输入热键", "语音输入", "CapsLock");
+  await expectRow("voice-input.channel-cycle", "频道切换热键", "语音输入", "Shift+CapsLock");
+  await expectRow("voice-input.resend-last", "重发最近一条热键", "语音输入", "");
   await expectRow("quick-message-1", "快捷指令 1 热键", "自己加的", "F8");
   await expect(page.getByTestId("hotkeys-row-quick-message-1")).toContainText("集合打小龙");
+  // Esc 不能改：只列出来，没有输入框、没有“去改”
   await expect(page.getByTestId("hotkeys-row-escape")).toContainText("取消这次录音");
-  // Esc 不能改：没有“去改”；游戏的聊天键不进表；0.2 新用户没有提醒助手热键
-  await expect(page.getByTestId("hotkeys-goto-escape")).toHaveCount(0);
+  await expect(page.getByTestId("hotkeys-key-escape")).toHaveText("Escape");
   await expect(page.getByTestId("hotkeys-row-escape")).toContainText("不能改");
+  await expect(page.getByTestId("hotkeys-row-escape").locator("input")).toHaveCount(0);
   await expect(page.locator("[data-testid^='hotkeys-row-game.']")).toHaveCount(0);
   await expect(page.getByTestId("hotkeys-row-legacy-reminder")).toHaveCount(0);
   await expect(list.locator("[data-conflict='true']")).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("hotkeys-page.png"), fullPage: true, animations: "disabled" });
 
+  // 在表里改：快捷指令的键（存在那一条快捷指令里），唤醒页跟着显示
+  const quick = page.getByTestId("hotkey-input-quick-message-1");
+  await quick.fill("F7");
+  await quick.press("Enter");
+  await expect(page.getByTestId("hotkey-status-quick-message-1")).toHaveText("当前生效：F7");
+  expect((await mockSettings(page)).assistant.companion.quickMessages[0].hotkey).toBe("F7");
+  await openSettingsTab(page, "call");
+  await expect(page.getByTestId("hotkey-link-key-quick-message-1")).toHaveText("F7");
+
+  // 恢复默认：只有 D4 的三个默认键有
+  await openSettingsTab(page, "hotkeys");
+  await expect(page.getByTestId("hotkeys-reset-kotone.call")).toHaveCount(0);
+  await expect(page.getByTestId("hotkeys-reset-voice-input.channel-cycle")).toHaveCount(0);
+  const call = page.getByTestId("hotkey-input-kotone.call");
+  await call.fill("Alt+F8");
+  await call.press("Enter");
+  await expect(page.getByTestId("hotkey-status-kotone.call")).toHaveText("当前生效：Alt+F8");
+  await page.getByTestId("hotkeys-reset-kotone.call").click();
+  await expect(page.getByText("呼叫键恢复成默认的 Ctrl + ~", { exact: true })).toBeVisible();
+  await expect(call).toHaveValue("Ctrl+Backquote");
+  const saved = await mockSettings(page);
+  expect(saved.assistant.hotkey).toBe("Ctrl+Backquote");
+  expect(saved.hotkeys?.bindings).toContainEqual({ key: "Ctrl+Backquote", command: "kotone.call" });
+
   // 搜索：名字、键、来源
   const search = page.getByTestId("hotkeys-search");
   await search.fill("caps");
   await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(2);
-  await expect(page.getByTestId("hotkeys-row-record")).toBeVisible();
-  await expect(page.getByTestId("hotkeys-row-channel-cycle")).toBeVisible();
+  await expect(page.getByTestId("hotkeys-row-voice-input.talk")).toBeVisible();
+  await expect(page.getByTestId("hotkeys-row-voice-input.channel-cycle")).toBeVisible();
   await search.fill("自己加的");
   await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(1);
-  await expect(page.getByTestId("hotkeys-row-quick-message-1")).toBeVisible();
   await search.fill("语音输入");
   await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(5);
   await search.fill("没有这个键");
@@ -106,47 +131,65 @@ test("conflicts are marked red, including a game's chat key and Esc", async ({ p
   await patchMock(page, { automationStopHotkey: "Enter", resendLastHotkey: "Ctrl+Backquote", runtimeToggleHotkey: "Ctrl+Escape", togglePostProcessingHotkey: "F23" });
   await openSettingsTab(page, "hotkeys");
   const red = (id: string) => expect(page.getByTestId(`hotkeys-row-${id}`), id).toHaveAttribute("data-conflict", "true");
-  for (const id of ["automation-stop", "assistant", "resend-last", "runtime-toggle", "escape", "post-process-toggle"]) await red(id);
-  await expect(page.getByTestId("hotkeys-row-record")).toHaveAttribute("data-conflict", "false");
-  await expect(page.getByTestId("hotkeys-conflict-automation-stop")).toHaveText(
+  for (const id of ["kotone.stop", "kotone.call", "voice-input.resend-last", "kotone.speech-toggle", "escape", "voice-input.post-process-toggle"]) await red(id);
+  await expect(page.getByTestId("hotkeys-row-voice-input.talk")).toHaveAttribute("data-conflict", "false");
+  await expect(page.getByTestId("hotkeys-conflict-kotone.stop")).toHaveText(
     "和《League of Legends》的打开聊天框键、《通用（任意前台窗口）》的打开聊天框键、《Dota 2》的打开聊天框键冲突");
-  await expect(page.getByTestId("hotkeys-conflict-assistant")).toHaveText("和重发最近一条热键冲突");
-  await expect(page.getByTestId("hotkeys-conflict-resend-last")).toHaveText("和呼叫键冲突");
-  await expect(page.getByTestId("hotkeys-conflict-runtime-toggle")).toHaveText("和Esc冲突");
+  await expect(page.getByTestId("hotkeys-conflict-kotone.call")).toHaveText("和重发最近一条热键冲突");
+  await expect(page.getByTestId("hotkeys-conflict-voice-input.resend-last")).toHaveText("和呼叫键冲突");
+  await expect(page.getByTestId("hotkeys-conflict-kotone.speech-toggle")).toHaveText("和Esc冲突");
   await expect(page.getByTestId("hotkeys-conflict-escape")).toHaveText("和启动 / 停止本地语音识别热键冲突");
-  await expect(page.getByTestId("hotkeys-conflict-post-process-toggle")).toHaveText("和《Dota 2》的控制台触发键冲突");
+  await expect(page.getByTestId("hotkeys-conflict-voice-input.post-process-toggle")).toHaveText("和《Dota 2》的控制台触发键冲突");
   await page.screenshot({ path: testInfo.outputPath("hotkeys-conflicts.png"), fullPage: true, animations: "disabled" });
-  // 改掉以后（别的页面改了键）表跟着变
-  await page.getByTestId("hotkeys-goto-resend-last").click();
-  const resend = page.getByTestId("hotkey-input-resend-last");
+  // 在表里改掉：标红跟着消失
+  const resend = page.getByTestId("hotkey-input-voice-input.resend-last");
   await resend.fill("Ctrl+F7");
   await resend.press("Enter");
-  await expect(page.getByTestId("hotkey-status-resend-last")).toContainText("Ctrl+F7");
-  await openSettingsTab(page, "hotkeys");
-  await expect(page.getByTestId("hotkeys-row-assistant")).toHaveAttribute("data-conflict", "false");
+  await expect(page.getByTestId("hotkey-status-voice-input.resend-last")).toContainText("Ctrl+F7");
+  await expect(page.getByTestId("hotkeys-row-kotone.call")).toHaveAttribute("data-conflict", "false");
 });
 
-test("每行的“去改”跳到现在改它的那个页面", async ({ page }) => {
+test("other pages show the current key and 去改 opens its row in 设置 → 热键", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await patchMock(page, { assistant: { companion: { quickMessages: [{ id: "q1", label: "", text: "集合", hotkey: "F8" }] } } });
-  const go = async (id: string) => {
-    await openSettingsTab(page, "hotkeys");
-    await page.getByTestId(`hotkeys-goto-${id}`).click();
+  const goTo = async (id: string) => {
+    await page.getByTestId(`hotkey-link-goto-${id}`).click();
+    await expect(page.getByTestId("advanced-nav-hotkeys")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId(`hotkeys-row-${id}`)).toHaveAttribute("data-focused", "true");
+    await expect(page.getByTestId(`hotkey-input-${id}`)).toBeVisible();
   };
-  await go("assistant");
-  await expect(page.getByTestId("assistant-nav-call")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("hotkey-input-assistant")).toBeVisible();
-  await go("quick-message-1");
-  await expect(page.getByTestId("assistant-nav-call")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("hotkey-input-quick-message-1")).toBeVisible();
-  await go("automation-stop");
-  await expect(page.getByTestId("advanced-nav-system")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("hotkey-input-automation-stop")).toBeVisible();
-  await go("runtime-toggle");
-  await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
-  await go("record");
-  await expect(page.getByTestId("voice-tab-general")).toHaveAttribute("aria-current", "page");
-  await go("channel-cycle");
-  await expect(page.getByTestId("voice-tab-general")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("hotkey-input-channel-cycle")).toBeVisible();
+  // 唤醒：呼叫键、快捷指令的键
+  await openSettingsTab(page, "call");
+  await expect(page.getByTestId("hotkey-link-key-kotone.call")).toHaveText("Ctrl + ~");
+  await expect(page.getByTestId("settings-call").locator("input[aria-label='呼叫键']")).toHaveCount(0);
+  await goTo("kotone.call");
+  await openSettingsTab(page, "call");
+  await goTo("quick-message-1");
+  // 设置 → 系统 → 停下
+  await openSettingsTab(page, "system");
+  await expect(page.getByTestId("hotkey-link-key-kotone.stop")).toHaveText("Ctrl + Shift + F12");
+  await goTo("kotone.stop");
+  // 设置 → 模型 → 语音识别（本地识别时）
+  await openSettingsTab(page, "models");
+  await goTo("kotone.speech-toggle");
+  // 语音输入：说话、其他热键
+  await openVoiceInput(page);
+  await expect(page.getByTestId("hotkey-link-key-voice-input.talk")).toHaveText("CapsLock");
+  await goTo("voice-input.talk");
+  await openVoiceInput(page);
+  await goTo("voice-input.resend-last");
+});
+
+test("the reminder assistant hotkey stays on its own page (D10)", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never&mockLegacyUpgrade=dismissed&mockLegacyReminder=configured");
+  await openSettingsTab(page, "hotkeys");
+  const row = page.getByTestId("hotkeys-row-legacy-reminder");
+  await expect(row).toContainText("提醒助手热键");
+  await expect(page.getByTestId("hotkeys-key-legacy-reminder")).toHaveText("Alt + F9");
+  await expect(row.locator("input")).toHaveCount(0);
+  // 只用语音输入的老用户没有呼叫键、停下热键
+  await expect(page.getByTestId("hotkeys-row-kotone.call")).toHaveCount(0);
+  await expect(page.getByTestId("hotkeys-row-kotone.stop")).toHaveCount(0);
+  await page.getByTestId("hotkeys-goto-legacy-reminder").click();
+  await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
 });

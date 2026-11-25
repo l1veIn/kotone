@@ -18,8 +18,8 @@
     checkHotkey,
     listModels,
     listProfiles,
+    setHotkey,
     updateSettings,
-    companionBindingPatch,
     companionBindings,
   } from "../../lib/ipc";
   import { hasLegacyReminders } from "../../lib/ipc/contracts";
@@ -138,7 +138,7 @@
   async function refreshWarnings(key: string) {
     const version = ++checkVersion;
     try {
-      const check = await checkHotkey(key, "assistant");
+      const check = await checkHotkey(key, "kotone.call");
       if (version !== checkVersion) return;
       staticWarnings = check.warnings;
       conflict = firstConflictName(check);
@@ -173,12 +173,11 @@
     saving = true;
     try {
       // 还没查完就点了：保存前再问一次后端
-      const late = callKey ? firstConflictName(await checkHotkey(callKey, "assistant")) : null;
+      const late = callKey ? firstConflictName(await checkHotkey(callKey, "kotone.call")) : null;
       if (late) { conflict = late; toast(false, m.shell_onboarding_call_key_conflict_toast({ conflict: late })); return; }
+      // 第一次设呼叫键（ADR 040 D3 的例外）：写进「设置 → 热键」那张表，和在那一页改一样
       if (callKeyTouched || (companionBindings($settingsStore?.assistant)?.hotkey ?? "") !== callKey) {
-        settingsStore.set(await updateSettings({
-          assistant: companionBindingPatch($settingsStore?.assistant, { hotkey: callKey }),
-        }));
+        settingsStore.set(await setHotkey("kotone.call", callKey));
       }
       onDone("chat", m.shell_onboarding_first_prompt());
     } catch (error) {

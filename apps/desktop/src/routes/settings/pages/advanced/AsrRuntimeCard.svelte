@@ -6,11 +6,11 @@
    * 本地识别才有 未启动 / 准备中 / 已启动 / 出问题了。换回在线识别时这些收起，启动热键和自动启动的值保留。
    * 换模型、下载在下面的“模型切换”；“按新设置重新启动”在页面最上面的提示条里。
    */
-  import { startRuntime, stopRuntime, updateSettings, type ModelInfo } from "$lib/ipc";
+  import { startRuntime, stopRuntime, type ModelInfo } from "$lib/ipc";
   import { LOCAL_ASR_LABELS } from "$lib/ipc/contracts";
   import { asrStore, runtimeStore } from "$lib/stores/runtime";
   import { errText, patchSettings, settingsStore, toast } from "$lib/stores/ui";
-  import HotkeyField from "$lib/components/HotkeyField.svelte";
+  import HotkeyLink from "$lib/components/HotkeyLink.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import { Button } from "$lib/components/ui/button";
   import { m } from "$lib/paraglide/messages.js";
@@ -80,8 +80,7 @@
       <div class="py-3.5" data-testid="asr-toggle-hotkey">
         <p class="m-0 text-[13px] font-medium text-foreground">{m.voice_asr_toggle_hotkey_title()}</p>
         <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{m.voice_asr_toggle_hotkey_desc()}</p>
-        <HotkeyField id="runtime-toggle" title={m.voice_hotkey_name_runtime_toggle()} value={$settingsStore?.runtimeToggleHotkey ?? ""} placeholder={m.voice_hotkey_placeholder({ example: "Ctrl+Alt+K" })} compact
-          onSave={async (key) => { settingsStore.set(await updateSettings({ runtimeToggleHotkey: key })); }} />
+        <div class="mt-1.5"><HotkeyLink id="kotone.speech-toggle" value={$settingsStore?.runtimeToggleHotkey ?? ""} /></div>
       </div>
       <div class="py-3.5">
         <ToggleField checked={$settingsStore?.ui.autoStart ?? false} label={m.voice_asr_autostart_label()} testid="asr-autostart"

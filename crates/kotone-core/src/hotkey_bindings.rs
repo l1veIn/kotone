@@ -49,8 +49,6 @@ pub struct Legacy {
     pub old_default: &'static str,
     /// 旧字段（点分路径）；呼叫键对 0.1.x 升级后启用了她的人是 `assistant.companionBindings.hotkey`。
     pub field: &'static str,
-    /// 现在改它的地方（设置说明里的位置；界面第 2 期第 3 步改成「设置 → 热键」）。
-    pub page: &'static str,
 }
 
 pub const LEGACY: &[Legacy] = &[
@@ -59,56 +57,48 @@ pub const LEGACY: &[Legacy] = &[
         id: "assistant",
         old_default: DEFAULT_CALL_HOTKEY,
         field: "assistant.hotkey",
-        page: "琴音 → 唤醒 → 呼叫键",
     },
     Legacy {
         command: CMD_STOP,
         id: "automation-stop",
         old_default: "Ctrl+Shift+F12",
         field: "automationStopHotkey",
-        page: "设置 → 系统 → 停下",
     },
     Legacy {
         command: CMD_SPEECH_TOGGLE,
         id: "runtime-toggle",
         old_default: "",
         field: "runtimeToggleHotkey",
-        page: "设置 → 模型 → 语音识别",
     },
     Legacy {
         command: CMD_TALK,
         id: "record",
         old_default: "CapsLock",
         field: "hotkey.key",
-        page: "插件 → 语音输入 → 输入",
     },
     Legacy {
         command: CMD_CHANNEL_CYCLE,
         id: "channel-cycle",
         old_default: "Shift+CapsLock",
         field: "channelCycleHotkey",
-        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
     Legacy {
         command: CMD_RESEND_LAST,
         id: "resend-last",
         old_default: "",
         field: "resendLastHotkey",
-        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
     Legacy {
         command: CMD_PP_TOGGLE,
         id: "post-process-toggle",
         old_default: "",
         field: "togglePostProcessingHotkey",
-        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
     Legacy {
         command: CMD_PP_CYCLE,
         id: "post-process-cycle",
         old_default: "",
         field: "cyclePostProcessingHotkey",
-        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
 ];
 

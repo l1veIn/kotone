@@ -247,9 +247,13 @@ test("7 · online ↔ local in 设置 → 模型 → 语音识别: the start UI 
   await expect(card).toHaveAttribute("data-asr-state", "local-running");
   await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-running");
   await expect.poll(async () => (await settingsOf(page)).ui.autoStart).toBe(true);
-  await page.getByTestId("hotkey-input-runtime-toggle").fill("Ctrl+Alt+K");
-  await page.getByTestId("hotkey-input-runtime-toggle").press("Enter");
+  // 启动热键在「设置 → 热键」改（ADR 040 D3），这里只显示
+  await page.evaluate(async () => {
+    const [{ setHotkey }, { settingsStore }] = await Promise.all([import("/src/lib/ipc.ts"), import("/src/lib/stores/ui.ts")]);
+    settingsStore.set(await setHotkey("kotone.speech-toggle", "Ctrl+Alt+K"));
+  });
   await expect.poll(async () => (await settingsOf(page)).runtimeToggleHotkey).toBe("Ctrl+Alt+K");
+  await expect(page.getByTestId("hotkey-link-key-kotone.speech-toggle")).toHaveText("Ctrl + Alt + K");
   await page.screenshot({ path: testInfo.outputPath("w9-local.png") });
 
   for (let round = 0; round < 2; round++) {
@@ -260,7 +264,7 @@ test("7 · online ↔ local in 设置 → 模型 → 语音识别: the start UI 
     expect((await settingsOf(page)).runtimeToggleHotkey).toBe("Ctrl+Alt+K");
     await page.getByTestId(`model-row-${xAsr}`).click();
     await expect(card).toHaveAttribute("data-asr-state", "local-running");
-    await expect(page.getByTestId("hotkey-input-runtime-toggle")).toHaveValue("Ctrl+Alt+K");
+    await expect(page.getByTestId("hotkey-link-key-kotone.speech-toggle")).toHaveText("Ctrl + Alt + K");
   }
   // 语音输入页的卡片跟着变，但只显示
   await openVoiceInput(page);

@@ -272,6 +272,8 @@ test("an upgraded user explicitly picks a separate call key and keeps the old re
     hotkey: "Ctrl+Alt+F10",
     connectionId: expect.stringMatching(/^deepseek-/),
   });
+  // 第一次设的呼叫键写进「设置 → 热键」那张表（ADR 040 D3 的例外）
+  expect(next.hotkeys?.bindings).toContainEqual({ key: "Ctrl+Alt+F10", command: "kotone.call" });
   expect(next.connections).toContainEqual(original.connections[0]);
   expect(next.sttEngine).toBe(original.sttEngine);
   expect(next.activeModelId).toBe(original.activeModelId);

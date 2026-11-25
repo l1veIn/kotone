@@ -197,7 +197,7 @@
       captureCleanup = null;
       if (result.kind === "combo") {
         currentKey = result.combo;
-        void checkHotkey(result.combo, "record").then((check) => (hotkeyWarnings = check.warnings)).catch(() => (hotkeyWarnings = []));
+        void checkHotkey(result.combo, "voice-input.talk").then((check) => (hotkeyWarnings = check.warnings)).catch(() => (hotkeyWarnings = []));
       } else if (result.kind === "error") toast(false, result.message);
     });
   }
@@ -208,7 +208,7 @@
     saving = true;
     try {
       // 冲突由后端查（ADR 040 D6）
-      const conflict = firstConflictName(await checkHotkey(currentKey, "record"));
+      const conflict = firstConflictName(await checkHotkey(currentKey, "voice-input.talk"));
       if (conflict) { toast(false, m.voice_guide_hotkey_conflict({ conflict })); return; }
       settingsStore.set(await updateSettings({
         activeProfileId: selectedProfileId,

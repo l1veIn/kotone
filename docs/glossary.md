@@ -31,7 +31,7 @@
 | 扩展 | 内置浏览器里装的 Chrome / Edge 扩展（已解压的扩展文件夹，例如去广告），在“设置 → 浏览器”里加、删、开关。“插件”只指她身上的本事，所以浏览器里的不叫插件 | `浏览器插件` | `browser.extensions` | extension |
 | 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` | external agent |
 | 提醒助手 | 只给 0.1.x 升级用户保留的旧页面名 | | `LegacyRemindersPage` | Reminder assistant (0.1.x) |
-| 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的。「设置 → 热键」一页列出全部，标来源（Kotone / 插件名 / 自己加的 / 固定的 Esc），冲突标红；游戏配置里的聊天键不是热键、不列在那里，但参与冲突检查（ADR 040） | `快捷键` | `*Hotkey`、`hotkey_table` | hotkey (Settings → Hotkeys) |
+| 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的。「设置 → 热键」一页列出全部，标来源（Kotone / 插件名 / 自己加的 / 固定的 Esc），冲突标红；**热键只在那一页改**，别的页面（唤醒、系统 → 停下、模型 → 语音识别、语音输入）只显示现在的键和“去「设置 → 热键」改”，提醒助手热键照旧在提醒助手页改；游戏配置里的聊天键不是热键、不列在那里，但参与冲突检查（ADR 040） | `快捷键` | `*Hotkey`、`hotkey_table` | hotkey (Settings → Hotkeys) |
 | 快捷指令 | 绑了热键、按一下就替你跟她说一句预设的话（按了也会接通通话） | `快捷消息`、`快捷短语` | `companion.quickMessages` | quick command |
 | 后台的事 / 交给后台 | 她交出去慢慢做的复杂的事，聊天里是一张卡片，做完她说一句 | `子代理`、`子会话`、`后台任务` | `agent.start`、`Subagent` | background task / hand off to the background |
 | 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` | Stop (stop everything); “stop hotkey” |

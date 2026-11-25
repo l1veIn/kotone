@@ -109,6 +109,14 @@ mod tests {
             serde_json::from_str(include_str!("../messages/en.json")).unwrap();
         let m = manifest();
         assert_eq!(zh["plugin_voice_input_name"], m.name.as_str());
+        // 热键表里那一行的名字（ADR 040）：界面文字和清单里给她看的一样
+        for command in &m.commands {
+            let key = format!(
+                "plugin_voice_input_command_{}_name",
+                command.id.replace('-', "_")
+            );
+            assert_eq!(zh[&key], command.name.as_str(), "{key}");
+        }
         assert_eq!(zh["plugin_voice_input_description"], m.description.as_str());
         for key in zh.keys() {
             assert!(key.starts_with("plugin_voice_input_"), "{key}");

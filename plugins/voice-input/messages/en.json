@@ -11,5 +11,10 @@
   "plugin_voice_input_asr_online_error": "Not ready: {error}",
   "plugin_voice_input_asr_not_downloaded": "The local model isn't downloaded yet",
   "plugin_voice_input_asr_local_error": "{label}: {error}",
-  "plugin_voice_input_asr_open_models": "Change it in Settings → Models"
+  "plugin_voice_input_asr_open_models": "Change it in Settings → Models",
+  "plugin_voice_input_command_talk_name": "Voice input hotkey",
+  "plugin_voice_input_command_channel_cycle_name": "Switch channel hotkey",
+  "plugin_voice_input_command_resend_last_name": "Resend last message hotkey",
+  "plugin_voice_input_command_post_process_toggle_name": "Text processing on/off hotkey",
+  "plugin_voice_input_command_post_process_cycle_name": "Switch text processing pipeline hotkey"
 }

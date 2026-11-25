@@ -3,10 +3,10 @@
   // 回声消除（ADR 033），下面接快捷指令等（ADR 028）。
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
-  import { companionBindingPatch, companionBindings, updateSettings } from "../../../../lib/ipc";
+  import { companionBindings } from "../../../../lib/ipc";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
   import SelectField from "$lib/components/settings/SelectField.svelte";
-  import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import HotkeyLink from "../../../../lib/components/HotkeyLink.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
@@ -32,8 +32,8 @@
     <SettingsSection title={m.companion_call_title({ name })} id="assistant-hotkey-title" description={m.companion_call_desc({ name })}>
       <SettingsRow label={m.companion_call_hotkey_label()} description={m.companion_call_hotkey_desc()} stacked>
         {#snippet control()}
-          <HotkeyField id="assistant" title={m.companion_call_hotkey_label()} value={bindings.hotkey} placeholder={m.companion_call_hotkey_placeholder()} compact
-            onSave={async (hotkey) => { settingsStore.set(await updateSettings({ assistant: companionBindingPatch(config, { hotkey }) })); }} />
+          <!-- 热键只在「设置 → 热键」改（ADR 040 D3） -->
+          <HotkeyLink id="kotone.call" value={bindings.hotkey} />
         {/snippet}
       </SettingsRow>
       <SettingsRow label={m.companion_call_idle_label()} description={m.companion_call_idle_desc({ name })}>

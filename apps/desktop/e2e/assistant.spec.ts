@@ -51,7 +51,8 @@ test("呼叫琴音 has one key (default ~) and no input-mode choice; the chat of
   await expect(page.getByText("按住说话")).toHaveCount(0);
   await openSettingsTab(page, "call");
   await expect(page.getByTestId("assistant-interaction")).toHaveCount(0);
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
+  // 呼叫键只显示现在的键和“去改”（ADR 040 D3：热键只在「设置 → 热键」改）
+  await expect(page.getByTestId("hotkey-link-key-kotone.call")).toHaveText("Ctrl + ~");
   await expect(page.getByTestId("settings-call")).not.toContainText("陪玩热键");
   await expect(page.getByTestId("settings-call")).toContainText("呼叫键");
   // 聊天里的“去看看”跳到分组：琴音 → 交互 → 声音与弹幕；旧写法「设置 → 她怎么回答 → 声音与弹幕」也落到这里
@@ -134,16 +135,18 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await page.getByTestId("composer-model-menu").getByRole("menuitem").first().click();
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.assistant.connectionId))).not.toBe("");
   await expect(model).not.toHaveText("选模型");
-  // 呼叫键在角色页的「唤醒」（原「设置 → 怎么叫她」）
+  // 呼叫键在「设置 → 热键」改（ADR 040 D3）；角色页的「唤醒」点“去改”过去
   await openSettingsTab(page, "call");
-  const talk = page.getByTestId("settings-call");
-  await talk.getByTestId("hotkey-capture-assistant").click();
+  await page.getByTestId("hotkey-link-goto-kotone.call").click();
+  await expect(page.getByTestId("hotkeys-row-kotone.call")).toHaveAttribute("data-focused", "true");
+  const talk = page.getByTestId("hotkeys-row-kotone.call");
+  await talk.getByTestId("hotkey-capture-kotone.call").click();
   await page.keyboard.press("CapsLock");
   await expect(page.getByText("呼叫键与语音输入热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
-  await talk.getByTestId("hotkey-capture-assistant").click();
+  await talk.getByTestId("hotkey-capture-kotone.call").click();
   await page.keyboard.press("Control+F9");
-  await expect(talk.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
-  await expect(talk.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+F9");
+  await expect(talk.getByTestId("hotkey-input-kotone.call")).toHaveValue("Ctrl+F9");
+  await expect(talk.getByTestId("hotkey-status-kotone.call")).toContainText("当前生效：Ctrl+F9");
 
   // 声音与弹幕在角色页的「交互」（原「设置 → 她怎么回答」）
   await openSettingsTab(page, "reply");
@@ -162,9 +165,9 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   expect(saved.assistant.connectionId).not.toBe("");
   expect(saved.hotkey.key).toBe("CapsLock");
 
-  // 语音输入的热键和呼叫键互相做冲突检测
-  await openVoiceInput(page);
-  const named = page.getByTestId("hotkey-input-post-process-toggle");
+  // 语音输入的热键和呼叫键互相做冲突检测（都在「设置 → 热键」）
+  await openSettingsTab(page, "hotkeys");
+  const named = page.getByTestId("hotkey-input-voice-input.post-process-toggle");
   await named.fill("Ctrl+F9");
   await named.press("Enter");
   await expect(page.getByText("文字处理开关热键与呼叫键（Ctrl+F9）冲突，请换一个", { exact: true })).toBeVisible();

@@ -23,16 +23,16 @@ fn voice_commands() -> &'static [CommandSpec] {
         };
         vec![
             spec("talk", "语音输入热键", CommandKind::Hold),
-            spec("channel-cycle", "切换频道热键", CommandKind::Press),
-            spec("resend-last", "重发上一句热键", CommandKind::Press),
+            spec("channel-cycle", "频道切换热键", CommandKind::Press),
+            spec("resend-last", "重发最近一条热键", CommandKind::Press),
             spec(
                 "post-process-toggle",
-                "开关文字处理热键",
+                "文字处理开关热键",
                 CommandKind::Press,
             ),
             spec(
                 "post-process-cycle",
-                "切换文字处理方案热键",
+                "切换文字处理流程热键",
                 CommandKind::Press,
             ),
         ]
@@ -77,17 +77,27 @@ fn check_ids(settings: &Settings, key: &str, except: Option<&str>) -> Vec<String
     check(&src, key, except)
         .conflicts
         .into_iter()
-        .map(|c| c.id)
+        .map(|c| short_id(&c.id))
         .collect()
+}
+
+/// 表里的行 id 是命令的完整名（`kotone.call`）；下面的检查用第 1 期的短 id（`assistant`）写，读起来短。
+fn short_id(id: &str) -> String {
+    crate::hotkey_bindings::legacy_for(id).map_or_else(|| id.to_string(), |l| l.id.to_string())
 }
 
 fn table_of(settings: &Settings) -> HotkeyTable {
     let profiles = profiles();
-    table(&Sources {
+    let mut table = table(&Sources {
         settings,
         profiles: &profiles,
         plugins: plugins_on(),
-    })
+    });
+    for row in &mut table.bindings {
+        row.id = short_id(&row.id);
+        row.conflicts = row.conflicts.iter().map(|c| short_id(c)).collect();
+    }
+    table
 }
 
 fn row<'a>(table: &'a HotkeyTable, id: &str) -> &'a KeyUse {
@@ -635,5 +645,41 @@ fn an_existing_conflict_does_not_block_other_edits() {
     assert_eq!(
         new_conflict_error(&sources(&before, &profiles), &sources(&after, &profiles)),
         None
+    );
+}
+
+/// 表里的行 id 是命令的完整名（第 2 期第 3 步）；登记计划和 `hotkeys.status` 照旧用第 1 期的 id。
+/// 改键前查冲突时，`except` 写命令名、表里的 id、第 1 期的 id 都认（外部 Agent 照旧文档写 `assistant`）。
+#[test]
+fn rows_are_named_by_command_and_old_ids_still_work() {
+    use crate::hotkey_bindings::{CMD_CALL, CMD_CHANNEL_CYCLE, CMD_SPEECH_TOGGLE, CMD_STOP};
+    let settings = Settings::default();
+    let profiles = profiles();
+    let src = Sources {
+        settings: &settings,
+        profiles: &profiles,
+        plugins: plugins_on(),
+    };
+    let rows = bindings(&src);
+    let ids: Vec<&str> = rows.iter().take(3).map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec![CMD_CALL, CMD_STOP, CMD_SPEECH_TOGGLE]);
+    let talk = rows.iter().find(|r| r.id == CMD_TALK).unwrap();
+    assert_eq!(
+        (talk.page.as_str(), talk.default_key.as_str()),
+        (HOTKEYS_PAGE, "CapsLock")
+    );
+    let channel = rows.iter().find(|r| r.id == CMD_CHANNEL_CYCLE).unwrap();
+    assert_eq!(channel.default_key, "", "新装不带频道切换（D4）");
+    for except in [CMD_TALK, HK_RECORD] {
+        assert!(
+            check(&src, "CapsLock", Some(except)).conflicts.is_empty(),
+            "{except}"
+        );
+    }
+    assert_eq!(
+        planned(&registration_plan(&src), HK_RECORD)
+            .command
+            .as_deref(),
+        Some(CMD_TALK)
     );
 }

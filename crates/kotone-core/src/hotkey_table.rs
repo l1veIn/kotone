@@ -12,7 +12,9 @@
 use serde::Serialize;
 
 use crate::hotkey::{combos_conflict, parse_hotkey, HK_QUICK_MESSAGES, VK_ESCAPE};
-use crate::hotkey_bindings::{legacy_for, normalized, Binding, CMD_CALL, CMD_STOP};
+use crate::hotkey_bindings::{
+    legacy_by_id, legacy_for, normalized, Binding, CMD_CALL, CMD_STOP, DEFAULT_BINDINGS,
+};
 use crate::hotkey_commands::{core_commands, CommandKind, CommandSpec, CORE_SOURCE};
 use crate::profile::GameProfile;
 use crate::settings::{LegacyUpgrade, Settings};
@@ -23,6 +25,8 @@ pub const HK_RECORD: &str = "record";
 pub const HK_LEGACY_REMINDER: &str = "legacy-reminder";
 /// Esc：固定的键，不能改。
 pub const KEY_ESCAPE: &str = "escape";
+/// 热键在哪改（ADR 040 D3：只在这一页改；提醒助手热键照旧在提醒助手页，D10）。
+pub const HOTKEYS_PAGE: &str = "设置 → 热键";
 /// 热键和 Esc 撞上时的话（ADR 040 实施记录，主会话定的第 4 条）。
 pub const ESC_REASON: &str = "Esc 留给停下她和取消收音，换一个键";
 
@@ -62,8 +66,9 @@ pub enum GameKey {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyUse {
-    /// 稳定 id：热键和设置页、`hotkeys.status` 的 `named[].id` 一样（`assistant`、`record`、`quick-message-3`……；
-    /// 没有旧 id 的命令就是命令的完整名）；Esc 是 `escape`；游戏的键是 `game.<配置 id>.<哪个键>`（频道再加 `.<频道 id>`）。
+    /// 稳定 id：命令就是命令的完整名（`kotone.call`、`voice-input.talk`）；快捷指令 `quick-message-3`、提醒助手热键
+    /// `legacy-reminder`、Esc `escape`、找不到的 `binding.<序号>`；游戏的键是 `game.<配置 id>.<哪个键>`（频道再加 `.<频道 id>`）。
+    /// （`hotkeys.status` 的 `named[].id` 照旧是第 1 期的 id：`assistant`、`channel-cycle`……，对照表 `hotkey_bindings::LEGACY`。）
     pub id: String,
     /// 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、快捷指令、Esc、游戏的键没有。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,6 +103,12 @@ pub struct KeyUse {
     /// 和谁冲突（别的项的 id）；只在 [`table`] 的结果里填。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<String>,
+    /// 新装时的键（ADR 040 D4：只有呼叫键、停下热键、说话有）；表里“恢复默认”用。
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub default_key: String,
+    /// 登记状态里的 id（`hotkeys.status` 的 `named[].id`；说话是 `record`，状态在 `key` 里）；Esc、游戏的键、找不到的没有。
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub status_id: String,
     /// 按住（按下、松开都要）；登记用，不给界面。
     #[serde(skip)]
     pub hold: bool,
@@ -182,6 +193,8 @@ fn row(id: &str, key: &str, label: &str, source: KeySource) -> KeyUse {
         field: String::new(),
         enabled: true,
         conflicts: Vec::new(),
+        default_key: String::new(),
+        status_id: String::new(),
         hold: false,
         listens: false,
     }
@@ -206,13 +219,20 @@ fn command_row(
         command: Some(name.into()),
         owner: plugin.map(|p| p.id.into()),
         owner_name: plugin.map(|p| p.name.into()),
-        page: legacy.map_or("设置 → 热键", |l| l.page).into(),
+        // 热键都在「设置 → 热键」改（ADR 040 D3）
+        page: HOTKEYS_PAGE.into(),
         field: field.into(),
         enabled: plugin.map_or(true, |p| p.enabled),
         hold: spec.kind == CommandKind::Hold,
         listens: spec.listens,
+        default_key: DEFAULT_BINDINGS
+            .iter()
+            .find(|(command, _)| *command == name)
+            .map(|(_, key)| key.to_string())
+            .unwrap_or_default(),
+        status_id: legacy.map_or(name, |l| l.id).into(),
         ..row(
-            legacy.map_or(name, |l| l.id),
+            name,
             s.binding_key(name),
             &spec.name,
             if plugin.is_some() {
@@ -245,6 +265,7 @@ pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
             field: "assistant.hotkey".into(),
             hold: s.assistant.interaction_mode
                 == crate::assistant::AssistantInteractionMode::PushToTalk,
+            status_id: HK_LEGACY_REMINDER.into(),
             ..row(
                 HK_LEGACY_REMINDER,
                 s.legacy_reminder_hotkey(),
@@ -277,10 +298,11 @@ pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
             };
             out.push(KeyUse {
                 detail,
-                page: "琴音 → 唤醒 → 快捷指令".into(),
+                page: HOTKEYS_PAGE.into(),
                 field: format!("assistant.companion.quickMessages.{index}.hotkey"),
                 // 按了也会接通通话：要语音识别（ADR 040 实施记录，主会话定的第 2 条）
                 listens: true,
+                status_id: id.to_string(),
                 ..row(
                     id,
                     &message.hotkey,
@@ -322,7 +344,7 @@ fn unknown_row(index: usize, binding: &Binding) -> KeyUse {
         .unwrap_or_else(|| format!("第 {} 条", index + 1));
     KeyUse {
         command: binding.command_name().map(str::to_string),
-        page: "设置 → 热键".into(),
+        page: HOTKEYS_PAGE.into(),
         field: "hotkeys.bindings".into(),
         enabled: false,
         ..row(
@@ -403,6 +425,8 @@ pub fn game_keys(profiles: &[GameProfile], active_profile_id: Option<&str>) -> V
                 enabled: true,
                 conflicts: Vec::new(),
                 command: None,
+                default_key: String::new(),
+                status_id: String::new(),
                 hold: false,
                 listens: false,
             });
@@ -445,8 +469,12 @@ pub fn check(src: &Sources<'_>, key: &str, except: Option<&str>) -> HotkeyCheck 
             src.settings.active_profile_id.as_deref(),
         ))
         .filter(|item| {
-            let is_self =
-                except.is_some_and(|e| item.id == e || item.command.as_deref() == Some(e));
+            // 正在改的那一项：表里的 id、命令名，或者第 1 期的 id（外部 Agent 照旧文档写 `assistant`、`record`）
+            let is_self = except.is_some_and(|e| {
+                item.id == e
+                    || item.command.as_deref() == Some(e)
+                    || legacy_by_id(e).is_some_and(|l| item.command.as_deref() == Some(l.command))
+            });
             !is_self && item.collides(key)
         })
         .collect();
@@ -518,7 +546,12 @@ pub fn registration_plan(src: &Sources<'_>) -> Vec<Planned> {
             _ => HintAt::Bubble,
         });
         plan.push(Planned {
-            id: row.id.clone(),
+            // 登记 id 照旧用第 1 期的（钩子、`hotkeys.status` 的 `named[]` 都按它）；没有旧 id 的命令用完整名
+            id: row
+                .command
+                .as_deref()
+                .and_then(legacy_for)
+                .map_or_else(|| row.id.clone(), |l| l.id.to_string()),
             command: row.command.clone(),
             combo: row.key.clone(),
             hold: row.hold,

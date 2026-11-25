@@ -95,7 +95,7 @@ const RECORD_SOUNDS: &[(&str, &str)] = &[
 
 pub const FIELDS: &[Field] = &[
     // ---- 语音输入（说话 → 识别 → 原话打进游戏聊天框；不经过 Agent）----
-    f("hotkey.key", "语音输入热键", "插件 → 语音输入 → 输入", "按键名，如 CapsLock、F8、Ctrl+Alt+Q。改之前可用 hotkeys.conflicts 查冲突。", NONE, NOW),
+    f("hotkey.key", "语音输入热键", "设置 → 热键", "按键名，如 CapsLock、F8、Ctrl+Alt+Q。改之前可用 hotkeys.conflicts 查冲突。", NONE, NOW),
     f("hotkey.mode", "热键方式", "插件 → 语音输入 → 输入", "按住说话还是按一下开始、再按一下结束。", &[("hold", "按住说话，松开结束"), ("toggle", "按一下开始，再按一下结束")], NOW),
     f("interactionMode", "语音输入方式", "插件 → 语音输入 → 交互模式", "识别完以后怎么处理。", &[("push-to-talk", "对讲机：按住说话，松开发送"), ("dictation", "录音笔：按一下开始，再按一下结束，预览确认后发送"), ("one-shot", "说一句就走：按一下开始，说完自动停、自动发送"), ("solo", "独奏模式：持续收音，说一句发一句，再按一下停止")], NOW),
     f("autoSend", "识别后自动发送", "插件 → 语音输入 → 交互模式", "true 时识别完直接发到游戏聊天，不等确认。", NONE, NOW),
@@ -110,12 +110,12 @@ pub const FIELDS: &[Field] = &[
     f("engineOptions.*", "引擎选项", "设置 → 模型", "各引擎的附加选项，如 sherpa-streaming 的 provider（cpu）。", NONE, VOICE),
     f("hotwordsScore", "热词加权", "设置 → 调参", "游戏配置里热词的识别加权，常用 1–5。", NONE, VOICE),
     f("activeProfileId", "当前游戏配置", "游戏列表", "游戏配置 ID，用 profiles.list 查。热词随游戏配置变化。", NONE, VOICE),
-    f("channelCycleHotkey", "切换频道热键", "插件 → 语音输入 → 输入 → 其他热键", "语音输入时在游戏的聊天频道之间切换；空 = 不用。", NONE, NOW),
-    f("resendLastHotkey", "重发上一句热键", "插件 → 语音输入 → 输入 → 其他热键", "把语音输入上一句发成功的话再发一次；空 = 不用。", NONE, NOW),
-    f("togglePostProcessingHotkey", "开关文字处理热键", "插件 → 语音输入 → 输入 → 其他热键", "空 = 不用。", NONE, NOW),
-    f("cyclePostProcessingHotkey", "切换文字处理方案热键", "插件 → 语音输入 → 输入 → 其他热键", "空 = 不用。", NONE, NOW),
-    f("runtimeToggleHotkey", "启动 / 停止本地语音识别热键", "设置 → 模型 → 语音识别", "只在用本地语音识别时显示和生效：按一下启动（把本地模型加载进内存），再按一下停止。在线识别打开 Kotone 就能用，没有启动这回事；换成在线识别时这个值保留，换回本地时还在。空 = 不用。", NONE, NOW),
-    f("automationStopHotkey", "停下热键", "设置 → 系统 → 停下", "停下：立刻停止她正在做的事（操作游戏、后台的事）和所有自动化，按住的键一起松开。也可以按 Esc（她操作游戏时）、说“停下”或用托盘菜单「停下」。空 = 不用（托盘仍能停）。", NONE, NOW),
+    f("channelCycleHotkey", "频道切换热键", "设置 → 热键", "语音输入时在游戏的聊天频道之间切换；空 = 不用。", NONE, NOW),
+    f("resendLastHotkey", "重发最近一条热键", "设置 → 热键", "把语音输入上一句发成功的话再发一次；空 = 不用。", NONE, NOW),
+    f("togglePostProcessingHotkey", "文字处理开关热键", "设置 → 热键", "空 = 不用。", NONE, NOW),
+    f("cyclePostProcessingHotkey", "切换文字处理流程热键", "设置 → 热键", "空 = 不用。", NONE, NOW),
+    f("runtimeToggleHotkey", "启动 / 停止本地语音识别热键", "设置 → 热键", "只在用本地语音识别时显示和生效：按一下启动（把本地模型加载进内存），再按一下停止。在线识别打开 Kotone 就能用，没有启动这回事；换成在线识别时这个值保留，换回本地时还在。空 = 不用。", NONE, NOW),
+    f("automationStopHotkey", "停下热键", "设置 → 热键", "停下：立刻停止她正在做的事（操作游戏、后台的事）和所有自动化，按住的键一起松开。也可以按 Esc（她操作游戏时）、说“停下”或用托盘菜单「停下」。空 = 不用（托盘仍能停）。", NONE, NOW),
     f("hotkeyBackend", "热键实现方式", "设置 → 系统", "游戏里热键不灵时可以换。", &[("auto", "自动"), ("llhook", "低层键盘钩子"), ("register", "系统热键注册")], NOW),
     f("hotkeys.bindings", "热键表", "设置 → 热键", "全部热键存在这里：数组，每条 {key, command}。command 是 <来源>.<命令>：kotone.call 呼叫、kotone.stop 停下、kotone.speech-toggle 启动 / 停止本地语音识别、voice-input.talk 说话、voice-input.channel-cycle 切换频道、voice-input.resend-last 重发上一句、voice-input.post-process-toggle 开关文字处理、voice-input.post-process-cycle 切换文字处理方案。整组替换；只改一个键时照旧写 hotkey.key、channelCycleHotkey、assistant.hotkey 这些字段也行，会改进表里。改成和别的热键、Esc、游戏配置的聊天键一样的键会被拒绝（已经冲突着、这次没动的不拦）。看全部热键和冲突用 hotkeys.status，改之前用 hotkeys.conflicts 查。", NONE, NOW),
     f("postProcessing.enabled", "文字处理开关", "插件 → 语音输入 → 文字处理", "语音输入的识别结果发送前是否经过文字处理（屏蔽词、润色、翻译等）。", NONE, NOW),
@@ -134,8 +134,8 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
     // ---- 游戏陪玩（角色 / Agent）：呼叫 = 呼叫键、唤醒词、聊天页的呼叫按钮 ----
-    f("assistant.hotkey", "呼叫键", "琴音 → 唤醒 → 呼叫键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在气泡里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
-    f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "琴音 → 唤醒 → 呼叫键", "仅 0.1.x 升级用户启用琴音后使用；按一下在气泡里听，说完自动交给她。", NONE, NOW),
+    f("assistant.hotkey", "呼叫键", "设置 → 热键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在气泡里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
+    f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "设置 → 热键", "仅 0.1.x 升级用户启用琴音后使用；按一下在气泡里听，说完自动交给她。", NONE, NOW),
     f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手；呼叫键固定为说完自动提交）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
     f("assistant.connectionId", "API 连接", "聊天页 → 她用的模型，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
     f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "聊天页 → 她用的模型", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
@@ -156,7 +156,7 @@ pub const FIELDS: &[Field] = &[
     f("assistant.danmakuColor", "弹幕颜色", "琴音 → 交互 → 声音与弹幕", "#RRGGBB。", NONE, NOW),
     f("assistant.danmakuEmote", "弹幕琴音表情", "琴音 → 交互 → 声音与弹幕", "", &[("none", "不显示"), ("hello", "打招呼"), ("cheering", "加油"), ("pointing", "指"), ("amazed", "惊讶")], NOW),
     f("assistant.companion.autoSend", "替你打字后直接发送", "琴音 → 唤醒 → 快捷指令", "false 时只把字打进聊天框，由你按回车。", NONE, NOW),
-    f("assistant.companion.quickMessages", "快捷指令", "琴音 → 唤醒 → 快捷指令", "数组：每条绑一个热键，发一句话给琴音或直接运行一个已保存的自动化。整组替换。", NONE, NOW),
+    f("assistant.companion.quickMessages", "快捷指令", "琴音 → 唤醒 → 快捷指令，或设置 → 热键", "数组：每条绑一个热键，发一句话给琴音或直接运行一个已保存的自动化。整组替换。", NONE, NOW),
     f("agent.inGame", "通话交给她", "琴音 → 权限", "true：通话（呼叫键、唤醒词、快捷指令）交给她，多步、能用全部工具；false：旧的单次陪玩。", NONE, NOW),
     f(
         "agent.progressSpeech",

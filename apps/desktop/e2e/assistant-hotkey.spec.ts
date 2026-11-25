@@ -1,12 +1,14 @@
 import { expect, test } from "@playwright/test";
-import { openChat, openSettingsTab, openVoiceInput } from "./nav";
+import { openChat, openSettingsTab } from "./nav";
 
-test("the call key uses the same editable, captured and clearable hotkey field as other hotkeys", async ({ page }) => {
+// 热键都在「设置 → 热键」改（ADR 040 D3）：每一行是同一个可录、可打、可清的热键框。
+
+test("the call key row in 设置 → 热键 is editable, captured and clearable like every other hotkey", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await openSettingsTab(page, "call");
-  const input = page.getByTestId("hotkey-input-assistant");
-  const capture = page.getByTestId("hotkey-capture-assistant");
-  const status = page.getByTestId("hotkey-status-assistant");
+  await openSettingsTab(page, "hotkeys");
+  const input = page.getByTestId("hotkey-input-kotone.call");
+  const capture = page.getByTestId("hotkey-capture-kotone.call");
+  const status = page.getByTestId("hotkey-status-kotone.call");
   // 呼叫琴音默认是 Ctrl + ~（单独的 ~ 是英雄联盟的“只攻击英雄”键）
   await expect(input).toHaveValue("Ctrl+Backquote");
   await expect(status).toHaveText("当前生效：Ctrl+Backquote");
@@ -22,56 +24,50 @@ test("the call key uses the same editable, captured and clearable hotkey field a
   await page.evaluate(() => window.dispatchEvent(new MouseEvent("mousedown", {button: 3, ctrlKey: true})));
   await expect(input).toHaveValue("Ctrl+Mouse4");
   await expect(status).toHaveText("当前生效：Ctrl+Mouse4");
-  await page.getByTestId("hotkey-clear-assistant").click();
+  await page.getByTestId("hotkey-clear-kotone.call").click();
   await expect(input).toHaveValue("");
   await expect(status).toHaveText("未设置");
   await input.fill("F24");
-  await page.getByTestId("hotkey-save-assistant").click();
+  await page.getByTestId("hotkey-save-kotone.call").click();
   await expect(status).toHaveText("当前生效：F24");
-  await openVoiceInput(page);
-  await openSettingsTab(page, "call");
+  // 离开再回来还在；唤醒页显示同一个键
+  await openChat(page);
+  await openSettingsTab(page, "hotkeys");
   await expect(input).toHaveValue("F24");
   await expect(status).toHaveText("当前生效：F24");
+  await openSettingsTab(page, "call");
+  await expect(page.getByTestId("hotkey-link-key-kotone.call")).toHaveText("F24");
 });
 
-test("leaving the call key during capture cannot save a later key or leave capture active", async ({ page }) => {
+test("leaving the hotkeys page during capture cannot save a later key or leave capture active", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await openSettingsTab(page, "call");
-  await page.getByTestId("hotkey-capture-assistant").click();
-  await openVoiceInput(page);
+  await openSettingsTab(page, "hotkeys");
+  await page.getByTestId("hotkey-capture-kotone.call").click();
+  await openChat(page);
   await page.keyboard.press("F9");
-  await page.getByTestId("hotkey-capture-post-process-toggle").click();
+  await openSettingsTab(page, "hotkeys");
+  await expect(page.getByTestId("hotkey-input-kotone.call")).toHaveValue("Ctrl+Backquote");
+  await page.getByTestId("hotkey-capture-voice-input.post-process-toggle").click();
   await page.keyboard.press("F10");
-  await expect(page.getByTestId("hotkey-input-post-process-toggle")).toHaveValue("F10");
-  await openSettingsTab(page, "call");
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
+  await expect(page.getByTestId("hotkey-input-voice-input.post-process-toggle")).toHaveValue("F10");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant.hotkey).toBe("Ctrl+Backquote");
   expect(saved.togglePostProcessingHotkey).toBe("F10");
-});
-
-test("leaving the companion settings cancels an in-progress call key capture", async ({ page }) => {
-  await page.goto("/#/settings?onboarding=never");
-  await openSettingsTab(page, "call");
-  await page.getByTestId("hotkey-capture-assistant").click();
-  await openChat(page);
-  await page.keyboard.press("F9");
-  await openSettingsTab(page, "call");
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
-  await page.getByTestId("hotkey-capture-assistant").click();
-  await page.keyboard.press("F10");
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("F10");
+  // 再录一次呼叫键照常
+  await page.getByTestId("hotkey-capture-kotone.call").click();
+  await page.keyboard.press("F11");
+  await expect(page.getByTestId("hotkey-input-kotone.call")).toHaveValue("F11");
 });
 
 test("one capture owner receives input when another hotkey row tries to record", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await openVoiceInput(page);
-  await page.getByTestId("hotkey-capture-post-process-toggle").click();
-  await page.getByTestId("hotkey-capture-post-process-cycle").click();
+  await openSettingsTab(page, "hotkeys");
+  await page.getByTestId("hotkey-capture-voice-input.post-process-toggle").click();
+  await page.getByTestId("hotkey-capture-voice-input.post-process-cycle").click();
   await expect(page.getByText("已有热键录入进行中，请先完成或按 Esc 取消", { exact: true })).toBeVisible();
   await page.keyboard.press("F9");
-  await expect(page.getByTestId("hotkey-input-post-process-toggle")).toHaveValue("F9");
-  await expect(page.getByTestId("hotkey-input-post-process-cycle")).toHaveValue("");
+  await expect(page.getByTestId("hotkey-input-voice-input.post-process-toggle")).toHaveValue("F9");
+  await expect(page.getByTestId("hotkey-input-voice-input.post-process-cycle")).toHaveValue("");
 });
 
 test("aborting while the native capture starts waits for cleanup before accepting a new owner", async ({ page }) => {

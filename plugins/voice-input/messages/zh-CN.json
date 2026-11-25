@@ -11,5 +11,10 @@
   "plugin_voice_input_asr_online_error": "没准备好：{error}",
   "plugin_voice_input_asr_not_downloaded": "本地模型还没下载",
   "plugin_voice_input_asr_local_error": "{label}：{error}",
-  "plugin_voice_input_asr_open_models": "去 设置 → 模型 换"
+  "plugin_voice_input_asr_open_models": "去 设置 → 模型 换",
+  "plugin_voice_input_command_talk_name": "语音输入热键",
+  "plugin_voice_input_command_channel_cycle_name": "频道切换热键",
+  "plugin_voice_input_command_resend_last_name": "重发最近一条热键",
+  "plugin_voice_input_command_post_process_toggle_name": "文字处理开关热键",
+  "plugin_voice_input_command_post_process_cycle_name": "切换文字处理流程热键"
 }

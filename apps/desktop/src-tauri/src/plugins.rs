@@ -773,11 +773,14 @@ mod tests {
         assert!(vi.tools().is_empty());
         assert!(owner("game_chat.send").is_none());
 
-        let mut s = kotone_core::settings::Settings {
-            channel_cycle_hotkey: "Shift+CapsLock".into(),
-            resend_last_hotkey: "Alt+F6".into(),
-            ..Default::default()
-        };
+        // 语音输入的键存在热键表里（ADR 040 D8）
+        let mut s = kotone_core::settings::Settings::default();
+        s.set_binding(
+            kotone_core::hotkey_bindings::CMD_CHANNEL_CYCLE,
+            "Shift+CapsLock",
+        );
+        s.set_binding(kotone_core::hotkey_bindings::CMD_RESEND_LAST, "Alt+F6");
+        s.sync_hotkey_mirrors();
         assert!(voice_input_on(&s));
         s.plugins.entry("voice-input".into()).or_default().enabled = Some(false);
         assert!(!voice_input_on(&s));

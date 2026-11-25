@@ -1361,8 +1361,10 @@ mod tests {
         .into_iter()
         .map(|b| b.id)
         .collect();
+        // 表里的行按命令名，状态按第 1 期的 id：对照表接得上
         for id in KNOWN_NAMED_HOTKEYS.iter().chain([&HK_RECORD]) {
-            assert!(ids.iter().any(|known| known == id), "{id} 不在热键表里");
+            let row = legacy_by_id(id).map_or(id.to_string(), |legacy| legacy.command.to_string());
+            assert!(ids.contains(&row), "{id} 不在热键表里");
         }
     }
 }

@@ -85,8 +85,8 @@
     {:else if section === "sound"}
       <SoundSection />
     {:else if section === "hotkeys"}
-      <!-- 全部热键（ADR 040 D2）：只读列出，冲突标红，“去改”跳到原来改它的地方 -->
-      <HotkeysSection />
+      <!-- 全部热键（ADR 040 D2、D3）：只在这里改；别的页面的“去改”带着行 id 过来（anchor = hotkey-<id>） -->
+      <HotkeysSection focus={anchor?.id.startsWith("hotkey-") ? anchor.id : null} />
     {:else if section === "tuning"}
       <TuningSection />
     {:else if section === "system"}

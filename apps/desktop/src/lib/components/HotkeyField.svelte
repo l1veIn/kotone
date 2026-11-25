@@ -8,9 +8,11 @@
   import { m } from "$lib/paraglide/messages.js";
 
   let {
-    id, title, value, placeholder = m.voice_hotkey_placeholder({ example: "Ctrl+F9" }), disabled = false, compact = false, onSave,
+    id, statusId, title, value, placeholder = m.voice_hotkey_placeholder({ example: "Ctrl+F9" }), disabled = false, compact = false, onSave,
   }: {
     id: string;
+    /** 登记状态里的 id（`getHotkeyStatus().named[].id`，不写就是 `id`）；`record`（说话）的状态在主键那几项里。 */
+    statusId?: string;
     title: string;
     value: string;
     placeholder?: string;
@@ -41,10 +43,18 @@
   async function refreshStatus() {
     const version = ++refreshVersion;
     try {
-      const next = (await getHotkeyStatus()).named.find((item) => item.id === id) ?? null;
-      if (disposed || version !== refreshVersion) return null;
-      status = next;
-      statusError = next ? "" : m.voice_hotkey_status_unknown();
+      const all = await getHotkeyStatus();
+      const lookup = statusId ?? id;
+      const next = lookup === "record"
+        ? { id: lookup, key: all.key, error: all.error }
+        : all.named.find((item) => item.id === lookup) ?? null;
+      if (disposed) return null;
+      // 晚到的旧结果不改界面；但保存后那一次的结果照样交回去（热键表这类异步重读的地方，
+      // 键一变又触发一次刷新，不能因此说“暂时无法确认是否生效”）
+      if (version === refreshVersion) {
+        status = next;
+        statusError = next ? "" : m.voice_hotkey_status_unknown();
+      }
       return next;
     } catch (error) {
       if (!disposed && version === refreshVersion) {

@@ -2,9 +2,12 @@
 //! 宿主登记热键（`hotkey.rs`）、`hotkeys.status` / `hotkeys.conflicts` 工具都经这里读
 //! [`kotone_core::hotkey_table`]——表、冲突、谁先登记都只在那里算一次，前端只显示结果。
 
+use kotone_core::hotkey_bindings::legacy_by_id;
+use kotone_core::hotkey_commands::split_command;
 use kotone_core::hotkey_table::{self, HotkeyCheck, HotkeyTable, Planned, PluginInfo, Sources};
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::Settings;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 use crate::SharedState;
@@ -98,4 +101,84 @@ pub(crate) async fn check_hotkey(
     tauri::async_runtime::spawn_blocking(move || check(&app, &key, except.as_deref()))
         .await
         .map_err(|e| format!("查热键冲突失败：{e}"))
+}
+
+/// 「设置 → 热键」里改一个键（ADR 040 D3：热键只在这一页改；新手引导第一次设呼叫键也走这里）。
+/// `id` 是表里那一行的 id（命令名、`quick-message-n`；第 1 期的 id 也认），`key` 空 = 清掉。
+/// 走和设置页保存同一条路：新造成的冲突不让存，说清楚和谁撞了；存了马上重新登记。
+#[tauri::command]
+pub(crate) fn set_hotkey(app: AppHandle, id: String, key: String) -> Result<Settings, String> {
+    let current = app.state::<SharedState>().settings.read().unwrap().clone();
+    let patch = hotkey_patch(&current, &id, key.trim())?;
+    crate::settings_cmd::update_settings_from_backend(&app, patch)
+}
+
+/// 改一个键的设置补丁：命令写热键表（整组替换，别的条目原样），快捷指令写它那一条的键（第 3 期才搬进表）。
+fn hotkey_patch(current: &Settings, id: &str, key: &str) -> Result<Value, String> {
+    if !key.is_empty() && kotone_core::hotkey::parse_hotkey(key).is_none() {
+        return Err(format!(
+            "认不出「{key}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按"
+        ));
+    }
+    if let Some(slot) = kotone_core::hotkey::quick_message_slot(id) {
+        let mut quick = current.assistant.companion.quick_messages.clone();
+        let message = quick
+            .get_mut(slot)
+            .ok_or_else(|| format!("没有第 {} 条快捷指令了，刷新一下再改", slot + 1))?;
+        message.hotkey = key.to_string();
+        return Ok(json!({"assistant": {"companion": {"quickMessages": quick}}}));
+    }
+    let command = legacy_by_id(id).map_or(id, |legacy| legacy.command);
+    if split_command(command).is_none() {
+        return Err(match id {
+            hotkey_table::KEY_ESCAPE => "Esc 是固定的，不能改".to_string(),
+            hotkey_table::HK_LEGACY_REMINDER => "提醒助手热键在「提醒助手」页改".to_string(),
+            _ => format!("「{id}」在这里改不了"),
+        });
+    }
+    let mut next = current.clone();
+    next.set_binding(command, key);
+    Ok(json!({"hotkeys": {"bindings": next.hotkeys.bindings}}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kotone_core::hotkey_bindings::{CMD_CALL, CMD_CHANNEL_CYCLE, CMD_TALK};
+
+    #[test]
+    fn a_hotkey_change_is_a_settings_patch() {
+        let mut settings = Settings::default();
+        settings.assistant.companion.quick_messages = vec![Default::default()];
+        // 命令：整组替换热键表，别的条目原样
+        let patch = hotkey_patch(&settings, CMD_CHANNEL_CYCLE, "Alt+C").unwrap();
+        let bindings = &patch["hotkeys"]["bindings"];
+        assert_eq!(bindings.as_array().unwrap().len(), 4);
+        assert_eq!(
+            bindings[3],
+            json!({"key": "Alt+C", "command": CMD_CHANNEL_CYCLE})
+        );
+        // 第 1 期的 id 也认；空 = 清掉
+        let patch = hotkey_patch(&settings, "record", "").unwrap();
+        assert!(patch["hotkeys"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["command"] != CMD_TALK));
+        assert_eq!(
+            hotkey_patch(&settings, CMD_CALL, "F9").unwrap()["hotkeys"]["bindings"][0]["key"],
+            "F9"
+        );
+        // 快捷指令：写它那一条的键
+        let patch = hotkey_patch(&settings, "quick-message-1", "F8").unwrap();
+        assert_eq!(
+            patch["assistant"]["companion"]["quickMessages"][0]["hotkey"],
+            "F8"
+        );
+        assert!(hotkey_patch(&settings, "quick-message-2", "F8").is_err());
+        // 改不了的、认不出的键
+        assert!(hotkey_patch(&settings, "escape", "F8").is_err());
+        assert!(hotkey_patch(&settings, "legacy-reminder", "F8").is_err());
+        assert!(hotkey_patch(&settings, CMD_TALK, "NotAKey").is_err());
+    }
 }

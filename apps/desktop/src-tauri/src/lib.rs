@@ -474,6 +474,7 @@ pub fn run() {
             check_input_environment,
             hotkey_table_cmd::get_hotkey_table,
             hotkey_table_cmd::check_hotkey,
+            hotkey_table_cmd::set_hotkey,
             start_hotkey_capture,
             cancel_hotkey_capture,
             restart_as_admin,

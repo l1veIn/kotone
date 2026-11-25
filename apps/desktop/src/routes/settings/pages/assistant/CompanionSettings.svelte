@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    companionClearChatRegion, companionStatus, updateSettings,
+    companionClearChatRegion, companionStatus,
     type CompanionStatus, type QuickMessage,
   } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
   import { listAutomations, subscribeAutomations, type Automation } from "../../../../lib/automation";
-  import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import HotkeyLink from "../../../../lib/components/HotkeyLink.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
@@ -149,11 +149,11 @@
                 onchange={(args) => patchQuick(index, { args })} />
             </div>
           {/if}
-          <HotkeyField id={`quick-message-${index + 1}`} title={m.companion_quick_hotkey_title({ index: index + 1 })} value={item.hotkey} placeholder={m.companion_quick_hotkey_placeholder()} compact disabled={saving}
-            onSave={async (hotkey) => {
-              const next = quick.map((q, i) => (i === index ? { ...q, hotkey } : q));
-              settingsStore.set(await updateSettings({ assistant: { companion: { quickMessages: next } } }));
-            }} />
+          <!-- 快捷指令的键也只在「设置 → 热键」改（ADR 040 D3；说的话、自动化还在这里） -->
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs text-muted-foreground">{m.companion_quick_hotkey_title({ index: index + 1 })}</span>
+            <HotkeyLink id={`quick-message-${index + 1}`} value={item.hotkey} />
+          </div>
         </div>
       {/each}
     </SettingsSection>

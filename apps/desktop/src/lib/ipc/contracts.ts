@@ -893,7 +893,8 @@ export type KeySource = "core" | "plugin" | "custom" | "fixed" | "game" | "unkno
 export type GameKeyKind = "open-chat" | "channel" | "send" | "console";
 
 export interface KeyUse {
-  /** 稳定 id：热键同设置页 / `named[].id`（assistant、record、quick-message-3…）；Esc 是 escape；游戏的键是 game.<配置 id>.<哪个键> */
+  /** 稳定 id：命令就是命令名（kotone.call、voice-input.talk）；快捷指令 quick-message-3、提醒助手 legacy-reminder、Esc escape、
+   * 找不到的 binding.<序号>；游戏的键是 game.<配置 id>.<哪个键> */
   id: string;
   /** 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、快捷指令、Esc、游戏的键没有 */
   command?: string;
@@ -914,8 +915,12 @@ export interface KeyUse {
   /** 在哪改（设置说明里的位置，openLocation 认得）；Esc 没有 */
   page?: string;
   field?: string;
-  /** false = 插件关着，这个键现在没登记 */
+  /** false = 插件关着（或命令找不到），这个键现在没登记 */
   enabled: boolean;
+  /** 新装时的键（ADR 040 D4：呼叫键、停下热键、说话）；表里“恢复默认”用 */
+  defaultKey?: string;
+  /** 登记状态里的 id（`getHotkeyStatus().named[].id`；说话是 `record`，状态在 `key` 里） */
+  statusId?: string;
   /** 和谁冲突（别的项的 id，可能是 gameKeys 里的） */
   conflicts?: string[];
 }

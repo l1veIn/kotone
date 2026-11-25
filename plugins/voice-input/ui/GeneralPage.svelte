@@ -4,7 +4,7 @@
    * 语音输入热键、交互模式、悬浮窗、其他热键。说话、原话打进游戏聊天框，不经过角色（Agent）。
    * 麦克风搬到「设置 → 声音」，游戏在「游戏列表」——这里只显示一行共享设置。
    */
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import {
     updateSettings,
     listAudioDevices,
@@ -12,20 +12,18 @@
     getElevationStatus,
     restartAsAdmin,
     getHotkeyStatus,
-    checkHotkey,
     type AudioDevice,
     type ElevationStatus,
     type GameProfile,
     type HotkeyStatus,
     type InteractionMode,
   } from "$lib/ipc";
-  import { captureHotkey } from "$lib/hotkeyCapture";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { firstConflictName } from "$lib/hotkeyNames";
+  import HotkeyLink from "$lib/components/HotkeyLink.svelte";
   import {
     settingsStore,
     fullscreenWarningStore,
@@ -139,18 +137,12 @@
 
   // ---------- 热键 & 交互模式（自快捷键页并入） ----------
 
+  // 语音输入热键只在「设置 → 热键」改（ADR 040 D3）；这里显示现在的键、登记失败的原因
   let hotkeyStatus = $state<HotkeyStatus | null>(null);
-  /** 热键编辑草稿（保存前不动后端） */
-  let hotkeyDraft = $state("");
-  /** 热键录入捕获中（「点击录入」按钮态） */
-  let capturing = $state(false);
-  /** 进行中捕获的 cleanup（组件销毁兜底取消） */
-  let captureCleanup: (() => void) | null = null;
 
   onMount(async () => {
     try {
       hotkeyStatus = await getHotkeyStatus();
-      hotkeyDraft = $settingsStore?.hotkey.key ?? "CapsLock";
     } catch (e) {
       toast(false, m.voice_hotkey_status_read_failed({ error: errText(e) }));
     }
@@ -196,65 +188,6 @@
     }
   }
 
-  async function saveHotkey() {
-    const key = hotkeyDraft.trim();
-    if (!key) {
-      toast(false, m.voice_general_hotkey_empty());
-      return;
-    }
-    try {
-      // 冲突由后端查（ADR 040 D6）：别的热键、Esc、游戏配置的聊天键和控制台触发键
-      const conflict = firstConflictName(await checkHotkey(key, "record"));
-      if (conflict) {
-        toast(false, m.voice_general_hotkey_conflict({ conflict }));
-        return;
-      }
-      // 热键变更后端自动重注册（lib.rs update_settings）；模式沿用当前值
-      settingsStore.set(
-        await updateSettings({ hotkey: { key, mode: $settingsStore?.hotkey.mode ?? "toggle" } }),
-      );
-      hotkeyDraft = $settingsStore?.hotkey.key ?? key;
-      hotkeyStatus = await getHotkeyStatus().catch(() => null);
-      if (hotkeyStatus?.error) toast(false, m.voice_general_hotkey_not_effective({ error: hotkeyStatus.error }));
-      else toast(true, hotkeyStatus?.registered ? m.voice_general_hotkey_saved_active({ key }) : m.voice_general_hotkey_saved_pending({ pending: $asrLocalStore ? m.voice_hotkey_pending_local() : m.voice_hotkey_pending_ready(), key }));
-    } catch (e) {
-      toast(false, m.voice_general_hotkey_save_failed({ error: errText(e) }));
-    } finally {
-      try {
-        hotkeyStatus = await getHotkeyStatus();
-      } catch {
-        /* 状态刷新失败不覆盖保存反馈 */
-      }
-    }
-  }
-
-  /**
-   * 「点击录入」：LL 钩子捕获下一个按键组合（共享 helper 见 lib/hotkeyCapture.ts）。
-   */
-  async function startCapture() {
-    if (capturing) return;
-    capturing = true;
-    captureCleanup = await captureHotkey((r) => {
-      capturing = false;
-      captureCleanup = null;
-      if (r.kind === "combo") {
-        hotkeyDraft = r.combo;
-        void saveHotkey();
-      } else if (r.kind === "cancelled") {
-        toast(false, m.voice_hotkey_capture_cancelled());
-      } else if (r.kind === "timeout") {
-        toast(false, m.voice_hotkey_capture_timeout());
-      } else {
-        toast(false, r.message);
-      }
-    });
-  }
-
-  // 组件销毁时兜底取消进行中的捕获（避免钩子停在捕获模式）
-  onDestroy(() => {
-    captureCleanup?.();
-  });
-
 </script>
 
 <SettingsPage embedded title={m.voice_tab_input()} testid="general-page">
@@ -291,28 +224,13 @@
 
     <div id="voice-hotkey" class="scroll-mt-16">
     <SettingsSection title={m.voice_hotkey_name_record()}>
-      <SettingsRow label={m.voice_hotkey_name_record()} description={m.voice_general_hotkey_desc()} stacked for="hotkey-input">
+      <SettingsRow label={m.voice_hotkey_name_record()} description={m.voice_general_hotkey_desc()} stacked>
         {#snippet control()}
-          <div class="flex flex-wrap items-center gap-2">
-            <input
-              id="hotkey-input"
-              bind:value={hotkeyDraft}
-              disabled={capturing}
-              class="h-8 w-36 rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/30 disabled:opacity-50"
-              placeholder={m.voice_hotkey_placeholder({ example: "CapsLock / Alt+V" })}
-              spellcheck="false"
-            />
-            <Button size="sm" variant="outline" class={capturing ? "animate-pulse border-primary/60 text-primary" : ""} disabled={capturing} onclick={() => void startCapture()}>
-              {capturing ? m.voice_hotkey_capturing() : m.voice_hotkey_capture()}
-            </Button>
-            <Button size="sm" disabled={capturing} onclick={() => void saveHotkey()}>{m.voice_general_hotkey_save()}</Button>
-            <span class="text-xs text-muted-foreground">{m.voice_general_hotkey_current({ key: $settingsStore?.hotkey.key ?? "…" })}</span>
-          </div>
+          <HotkeyLink id="voice-input.talk" value={$settingsStore?.hotkey.key ?? ""} />
           {#if hotkeyStatus?.error}
             <div class="mt-3 rounded-xl border border-destructive/40 bg-destructive/8 p-3">
               <p class="m-0 text-xs font-medium text-destructive">{m.voice_general_hotkey_register_failed()}</p>
               <p class="mt-0.5 mb-0 text-[11px] break-all text-muted-foreground">{hotkeyStatus.error}</p>
-              <Button size="xs" variant="destructive" class="mt-2" onclick={() => void saveHotkey()}>{m.voice_general_hotkey_reregister()}</Button>
             </div>
           {/if}
         {/snippet}
