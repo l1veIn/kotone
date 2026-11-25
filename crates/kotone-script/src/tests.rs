@@ -5,6 +5,8 @@ struct Fake {
     clock: AtomicU64,
     keys: Mutex<Vec<(u64, KeyAction, String)>>,
     typed: Mutex<Vec<String>>,
+    /// `chat()`：(时刻, 文字, 频道)
+    chatted: Mutex<Vec<(u64, String, Option<String>)>>,
     said: Mutex<Vec<String>>,
     /// 从这个时刻起左上角变黑。
     dark_from: u64,
@@ -78,6 +80,7 @@ impl Fake {
             clock: AtomicU64::new(1_000),
             keys: Mutex::default(),
             typed: Mutex::default(),
+            chatted: Mutex::default(),
             said: Mutex::default(),
             dark_from: u64::MAX,
             unfocused: (0, 0),
@@ -117,6 +120,13 @@ impl ScriptHost for Fake {
     }
     fn type_text(&self, text: &str) -> Result<(), String> {
         self.typed.lock().unwrap().push(text.into());
+        Ok(())
+    }
+    fn chat(&self, text: &str, channel: Option<&str>) -> Result<(), String> {
+        self.chatted
+            .lock()
+            .unwrap()
+            .push((self.now_ms(), text.into(), channel.map(String::from)));
         Ok(())
     }
     fn brightness(&self, _: Region) -> Result<f64, String> {
@@ -732,8 +742,9 @@ fn builtin_auto_click_hold_and_sequence() {
     assert_eq!(pressed, ["Q", "W", "E", "Q", "W", "E"]);
 }
 
+/// 定时喊话经本体的“发到游戏”入口（ADR 041 D1）：不再自己按回车（聊天键归游戏配置，CS2 是 U）。
 #[test]
-fn builtin_chat_repeat_opens_types_and_sends() {
+fn builtin_chat_repeat_sends_through_the_entry() {
     let host = Fake::new();
     let report = go_builtin(
         "builtin-chat-repeat",
@@ -741,9 +752,37 @@ fn builtin_chat_repeat_opens_types_and_sends() {
         serde_json::json!({"text": "来人", "times": 2, "interval_seconds": 5}),
     );
     assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
-    assert_eq!(host.typed.lock().unwrap().clone(), ["来人", "来人"]);
-    let keys: Vec<String> = host.keys().into_iter().map(|(_, _, k)| k).collect();
-    assert_eq!(keys, ["Enter", "Enter", "Enter", "Enter"]);
+    let chatted = host.chatted.lock().unwrap().clone();
+    assert_eq!(chatted.len(), 2);
+    assert!(chatted.iter().all(|(_, t, c)| t == "来人" && c.is_none()));
+    assert_eq!(chatted[1].0 - chatted[0].0, 5000);
+    assert!(host.keys().is_empty() && host.typed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn chat_counts_as_an_input_and_checks_its_arguments() {
+    let host = Fake::new();
+    let report = go(
+        r#"chat("gg", { channel = "all" }) chat("第一行\n第二行")"#,
+        &host,
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(report.keys, 2);
+    let chatted = host.chatted.lock().unwrap().clone();
+    assert_eq!(chatted[0].1, "gg");
+    assert_eq!(chatted[0].2.as_deref(), Some("all"));
+    assert_eq!(chatted[1].1, "第一行\n第二行", "分行交给入口");
+    assert!(chatted[1].0 - chatted[0].0 >= Limits::default().min_key_interval_ms);
+    for bad in [
+        "chat('')",
+        "chat('gg', { channel = 'party' })",
+        "chat(ocr(region(0, 0, 1, 1)))",
+    ] {
+        assert!(
+            matches!(go(bad, &Fake::new()).outcome, Outcome::Error(_)),
+            "{bad}"
+        );
+    }
 }
 
 #[test]

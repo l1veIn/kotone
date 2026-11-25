@@ -4226,7 +4226,7 @@ async fn wake_session_without_speech_is_cancelled_quietly() {
         .any(|(name, _)| name == "kotone://vad-no-speech"));
 }
 
-// ---------- ADR 041 第 1 期复现（发到游戏：一把输入锁） ----------
+// ---------- ADR 041 第 1 期（发到游戏：一把输入锁） ----------
 
 /// 把“开聊天框 / 打字 / 发送”三步记进同一份流水、每步之间停一下的注入器（照 `send_sequence` 的
 /// 回车 → 20ms → 文字 → 100ms → 回车，停顿放大一点让重叠稳定出现）。
@@ -4249,13 +4249,12 @@ impl Injector for SequenceInjector {
     }
 }
 
-/// ADR 041 第 1 期复现（共享资源评估第二节问题 3）：语音输入识别完往聊天框打字的同时，`game_chat.send`
-/// 也在打字。桌面端 `companion::type_text` 的做法是 `state.injector.clone()` → `spawn_blocking(injector.send(..))`，
-/// 和编排器拿的是同一个注入器（`lib.rs` 把 `injector.clone()` 交给 `Orchestrator::new`）；语音输入只占自己的
-/// 发送权（`claim_send`），注入器本身不加锁，所以两段“开框—打字—发送”会交错。
-/// 修完（第 1 期）：另一路改成调入口（和语音输入共用一把输入锁），两段一前一后，再去掉 ignore。
+/// ADR 041 第 1 期（共享资源评估第二节问题 3）：语音输入识别完往聊天框打字的同时，`game_chat.send` 也在打字。
+/// 修之前：桌面端 `companion::type_text` 直接对编排器拿着的同一个注入器 `send`，两边之间没有锁，
+/// 流水是 `open:A, open:B, text:A, text:B, send:A, send:B`（提交 0e57079d 的复现）。
+/// 修完：别的发话人和语音输入调的是同一个入口（桌面端用 `with_send_to_game` 交给编排器的那一份，这里就是
+/// 编排器自己那一份），共用一把输入锁，两段一前一后。发话人是谁不影响排队；这里用 Player，免得去读游戏配置。
 #[tokio::test]
-#[ignore = "ADR 041 第 1 期复现，修完去掉"]
 async fn adr041_voice_input_and_game_chat_send_do_not_interleave() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let injector: Arc<dyn Injector> = Arc::new(SequenceInjector { log: log.clone() });
@@ -4275,17 +4274,17 @@ async fn adr041_voice_input_and_game_chat_send_do_not_interleave() {
         );
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    let other = injector.clone();
-    tokio::task::spawn_blocking(move || {
-        other.send(
+    let other = orch.send_to_game().clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        other.send(kotone_core::send_to_game::ChatRequest::new(
             "我去下路",
-            &GameProfile::builtin_generic(),
-            CancelToken::default(),
-        )
+            kotone_core::send_to_game::Speaker::Player,
+        ))
     })
     .await
     .unwrap()
     .unwrap();
+    assert!(outcome.sent);
     voice.await.unwrap().unwrap();
     let log = log.lock().unwrap().clone();
     let one_after_another = |first: &str, second: &str| -> Vec<String> {

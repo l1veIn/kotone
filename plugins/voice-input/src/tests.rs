@@ -1,54 +1,10 @@
 //! 语音输入的单元测试（从 `kotone-core` 的 `orchestrator/tests.rs` 搬来，名字和内容不变）。
 
-use kotone_core::profile::GameProfile;
-
 use crate::records::{trim_speech_pcm, HistoryDraft};
-use crate::send::resolve_send_strategy;
 
-// ---------- 发送频道解析（ADR-008） ----------
-
-#[test]
-fn resolve_send_strategy_uses_selected_channel() {
-    let lol = GameProfile::builtin_lol();
-    let sel = Some(("lol".to_string(), "all".to_string()));
-    let s = resolve_send_strategy(&lol, &sel);
-    assert_eq!(s.id, "all");
-    assert_eq!(s.open_chat_key, "Shift+Enter");
-}
-
-#[test]
-fn resolve_send_strategy_falls_back_when_profile_switched() {
-    // 频道残留属于 lol，但当前 profile 已是 generic → 默认频道
-    let generic = GameProfile::builtin_generic();
-    let sel = Some(("lol".to_string(), "all".to_string()));
-    let s = resolve_send_strategy(&generic, &sel);
-    assert!(s.is_default);
-    assert_eq!(s.open_chat_key, generic.open_chat_key);
-    // 未选择（None）同样回落默认
-    let s2 = resolve_send_strategy(&lol_clone(), &None);
-    assert_eq!(s2.id, "team");
-}
-
-fn lol_clone() -> GameProfile {
-    GameProfile::builtin_lol()
-}
-
-#[test]
-fn wire_profile_makes_the_selected_channel_the_default() {
-    let mut dota = GameProfile::builtin_dota2();
-    dota.channels[0].console_command = Some("say_team".into());
-    dota.channels[1].console_command = Some("say".into());
-    let sel = Some(("dota2".to_string(), "all".to_string()));
-    let wire = dota.for_channel(&resolve_send_strategy(&dota, &sel));
-    assert_eq!(wire.open_chat_key, "Shift+Enter");
-    let sent = wire.channel_strategy(None);
-    assert_eq!(sent.id, "all");
-    assert_eq!(sent.console_command, "say");
-    // 没选频道：默认频道（队伍）
-    let wire = dota.for_channel(&resolve_send_strategy(&dota, &None));
-    assert_eq!(wire.open_chat_key, "Enter");
-    assert_eq!(wire.channel_strategy(None).console_command, "say_team");
-}
+// 发送频道解析（ADR-008）的测试随规则搬进了本体的入口：
+// kotone-core/src/send_to_game/tests.rs 的 a_voice_channel_chosen_in_another_game_falls_back_to_the_default、
+// the_chosen_channel_picks_the_console_command。
 
 // ---------- 历史音频 VAD 裁剪（trim_speech_pcm / push_speech_range） ----------
 

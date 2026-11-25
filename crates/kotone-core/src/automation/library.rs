@@ -627,6 +627,73 @@ pub const BUILTIN_PROGRAM_IDS: &[&str] = &[
     "builtin-color-then-key",
 ];
 
+const CHAT_REPEAT_ID: &str = "builtin-chat-repeat";
+
+/// 定时喊话经本体的“发到游戏”入口（ADR 041 D1）：聊天键、频道归游戏配置，等修饰键、一把输入锁都在入口里。
+const CHAT_REPEAT_SOURCE: &str = r#"
+for i = 1, args.times do
+  chat(args.text)
+  if i < args.times then
+    wait(args.interval_seconds * 1000)
+  end
+end
+"#;
+
+/// 0.2.0-rc.8 及以前装的那份：自己按“回车—打字—回车”，开聊天框的键写在参数 `open_key` 里、发送写死回车
+/// （CS2 是 U 开框，写死的回车不对）。没被改过的换成上面那份（[`refresh_builtin`]）。
+const CHAT_REPEAT_SOURCE_BEFORE_ADR041: &str = r#"
+for i = 1, args.times do
+  key(args.open_key)
+  wait(200)
+  type_text(args.text)
+  wait(100)
+  key("Enter")
+  if i < args.times then
+    wait(args.interval_seconds * 1000)
+  end
+end
+"#;
+
+/// 早先装的内置程序里，程序一字没改过、现在的定义变了的：换成现在的程序和说明，参数照现在的定义，
+/// 玩家改过的缺省值（同名参数）保留。改过程序的不动（那是玩家自己的了）。返回换了哪些。
+fn refresh_builtin(automations: &mut [Automation], now: u64) -> Vec<String> {
+    let current = builtin_programs(now);
+    let mut refreshed = Vec::new();
+    for stored in automations.iter_mut() {
+        let old = match stored.id.as_str() {
+            CHAT_REPEAT_ID => CHAT_REPEAT_SOURCE_BEFORE_ADR041,
+            _ => continue,
+        };
+        let AutomationBody::Program(program) = &stored.action else {
+            continue;
+        };
+        // 装的时候存的是 `source.trim() + "\n"`（[`program`]）
+        if program.source.trim() != old.trim() {
+            continue;
+        }
+        let Some(next) = current.iter().find(|a| a.id == stored.id) else {
+            continue;
+        };
+        let params = next
+            .params
+            .iter()
+            .map(|p| {
+                let mut p = p.clone();
+                if let Some(kept) = stored.params.iter().find(|s| s.name == p.name) {
+                    p.default = kept.default.clone();
+                }
+                p
+            })
+            .collect();
+        stored.params = params;
+        stored.description = next.description.clone();
+        stored.action = next.action.clone();
+        stored.updated_at_ms = now;
+        refreshed.push(stored.id.clone());
+    }
+    refreshed
+}
+
 fn builtin_programs(now: u64) -> Vec<Automation> {
     use serde_json::json;
     let key = |default: &str| {
@@ -711,27 +778,15 @@ end
             now,
         ),
         program(
-            "builtin-chat-repeat",
+            CHAT_REPEAT_ID,
             "每隔几秒在聊天里发一句",
-            "定时喊话：打开聊天框、打一句话、回车发出，隔一会儿再发，发够次数为止。别刷屏。",
+            "定时喊话：往游戏聊天里发一句（聊天键和频道用游戏配置里的），隔一会儿再发，发够次数为止。别刷屏。",
             vec![
                 param("text", "发什么", "", ParamKind::Text { max_length: 100 }, json!("组队来人")),
-                param("open_key", "打开聊天框的键", "", ParamKind::Key, json!("Enter")),
                 param("interval_seconds", "每隔几秒", "", number(5.0, 1_800.0), json!(60)),
                 param("times", "发几次", "", number(1.0, 20.0), json!(3)),
             ],
-            r#"
-for i = 1, args.times do
-  key(args.open_key)
-  wait(200)
-  type_text(args.text)
-  wait(100)
-  key("Enter")
-  if i < args.times then
-    wait(args.interval_seconds * 1000)
-  end
-end
-"#,
+            CHAT_REPEAT_SOURCE,
             now,
         ),
         program(
@@ -921,10 +976,11 @@ impl AutomationLibrary {
             .into_iter()
             .filter(|a| !state.builtin.contains(&a.id))
             .collect();
-        if missing.is_empty() {
+        let mut next = state.clone();
+        let refreshed = refresh_builtin(&mut next.automations, now);
+        if missing.is_empty() && refreshed.is_empty() {
             return Ok(false);
         }
-        let mut next = state.clone();
         for automation in missing {
             next.builtin.push(automation.id.clone());
             if next.automations.len() < MAX_AUTOMATIONS
@@ -1073,6 +1129,97 @@ mod tests {
         let reopened = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
         assert!(!reopened.ensure_builtin().unwrap());
         assert!(reopened.get(BUILTIN_REMIND_ID).is_none());
+    }
+
+    /// ADR 041：老用户手里那份“定时喊话”（自己按回车）没改过的换成经入口的 `chat()`，改过的不动。
+    #[test]
+    fn an_unedited_old_chat_repeat_is_refreshed_and_an_edited_one_is_kept() {
+        let old_params = || {
+            vec![
+                param(
+                    "text",
+                    "发什么",
+                    "",
+                    ParamKind::Text { max_length: 100 },
+                    json!("组队来人"),
+                ),
+                param(
+                    "open_key",
+                    "打开聊天框的键",
+                    "",
+                    ParamKind::Key,
+                    json!("Enter"),
+                ),
+                param(
+                    "interval_seconds",
+                    "每隔几秒",
+                    "",
+                    number(5.0, 1_800.0),
+                    json!(60),
+                ),
+                param("times", "发几次", "", number(1.0, 20.0), json!(3)),
+            ]
+        };
+        let installed = |source: &str| {
+            let mut a = program(
+                CHAT_REPEAT_ID,
+                "每隔几秒在聊天里发一句",
+                "旧说明",
+                old_params(),
+                source,
+                1,
+            );
+            a.params[0].default = Some(json!("来个辅助")); // 玩家改过缺省的话
+            a
+        };
+        let all_ids: Vec<String> = [BUILTIN_REMIND_ID, BUILTIN_LOL_SCOUT_ID]
+            .iter()
+            .chain(BUILTIN_PROGRAM_IDS)
+            .map(|s| s.to_string())
+            .collect();
+        let write = |path: &std::path::Path, a: Automation| {
+            let stored = StoredAutomations {
+                version: 1,
+                next_id: 1,
+                automations: vec![a],
+                builtin: all_ids.clone(),
+            };
+            std::fs::write(path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("automations.json");
+
+        write(&path, installed(CHAT_REPEAT_SOURCE_BEFORE_ADR041));
+        let library = AutomationLibrary::open(path.clone()).unwrap();
+        assert!(library.ensure_builtin().unwrap(), "换了要写盘");
+        let a = library.get(CHAT_REPEAT_ID).unwrap();
+        let AutomationBody::Program(p) = &a.action else {
+            panic!()
+        };
+        assert!(p.source.contains("chat(args.text)") && !p.source.contains("key("));
+        let names: Vec<&str> = a.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["text", "interval_seconds", "times"],
+            "开聊天框的键归游戏配置"
+        );
+        assert_eq!(
+            a.params[0].default,
+            Some(json!("来个辅助")),
+            "玩家改过的缺省值保留"
+        );
+        assert!(!library.ensure_builtin().unwrap(), "只换一次");
+        let reopened = AutomationLibrary::open(path.clone()).unwrap();
+        assert!(!reopened.ensure_builtin().unwrap());
+
+        let edited = CHAT_REPEAT_SOURCE_BEFORE_ADR041.replace("wait(200)", "wait(300)");
+        write(&path, installed(&edited));
+        let library = AutomationLibrary::open(path).unwrap();
+        assert!(!library.ensure_builtin().unwrap());
+        let AutomationBody::Program(p) = &library.get(CHAT_REPEAT_ID).unwrap().action else {
+            panic!()
+        };
+        assert!(p.source.contains("wait(300)"), "玩家改过的程序不动");
     }
 
     #[test]

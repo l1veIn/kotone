@@ -4,7 +4,9 @@
 //!   和 MCP 客户端 `kotone-mcp`（2026-11-25）；
 //! - 不碰 Tauri、桌面端、她（`kotone-agent`、`kotone-ai`）、本体的其他部分（工具服务、识别、语音、文字识别……），
 //!   也不依赖别的插件（插件之间不直接调用）；
-//! - 全进程只有一份的东西（Esc 和呼叫键的低级钩子、输入闸门）只经宿主，插件的源码里不出现。
+//! - 全进程只有一份的东西（Esc 和呼叫键的低级钩子、输入闸门）只经宿主，插件的源码里不出现；
+//! - 往游戏里打字、模拟按键鼠标只经宿主的“发到游戏”入口（ADR 041 D4：所有按键共用一把输入锁，插件直接调
+//!   系统适配层的打字注入就绕开了它）。
 
 use std::path::{Path, PathBuf};
 
@@ -129,6 +131,41 @@ fn plugins_never_touch_process_global_hooks() {
                 assert!(
                     !text.contains(word),
                     "{} 用了 {word}：全进程只有一份的钩子 / 闸门只经宿主（ADR 038“怎么定的”）",
+                    file.display()
+                );
+            }
+        }
+    }
+}
+
+/// 往游戏里按键的原语和注入器（ADR 041 D4、ADR 038 2026-11-25 修订）。插件要往游戏聊天里发话经宿主的入口
+/// （语音输入：`Orchestrator::send_to_game`），自己调这些就和别人的按键交错了。
+const INPUT_PRIMITIVES: &[&str] = &[
+    "inject::send_unicode",
+    "inject::key_down_up",
+    "inject::key_down",
+    "inject::key_up",
+    "inject::mouse_",
+    "send_sequence",
+    "WindowsInjector",
+    "SendInput",
+    "keybd_event",
+    "dyn Injector",
+    "impl Injector",
+    "injector()",
+];
+
+#[test]
+fn plugins_never_press_keys_themselves() {
+    for (dir, _) in plugins() {
+        let mut files = Vec::new();
+        rust_files(&repo().join("plugins").join(&dir).join("src"), &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            for word in INPUT_PRIMITIVES {
+                assert!(
+                    !text.contains(word),
+                    "{} 用了 {word}：往游戏里打字 / 按键只经宿主的“发到游戏”入口（ADR 041 D4，一把输入锁）",
                     file.display()
                 );
             }

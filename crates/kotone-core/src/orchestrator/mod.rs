@@ -23,9 +23,11 @@ use crate::assistant::{
 use crate::audio::{AudioBackend, AudioHandle};
 use crate::automation::AutomationScheduler;
 use crate::inject::{CancelToken, FocusBackend, Injector, TargetWindow};
+use crate::input_lock::InputLock;
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
 use crate::postprocess::ProcessingCancelToken;
 use crate::profile::{self, GameProfile};
+use crate::send_to_game::{GameChat, SendToGame};
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
@@ -141,7 +143,10 @@ pub struct Orchestrator {
     audio: Arc<dyn AudioBackend>,
     before_capture: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     after_capture: Option<Arc<dyn Fn() + Send + Sync>>,
-    injector: Arc<dyn Injector>,
+    /// 发到游戏的入口（ADR 041）：语音输入打字只经它。缺省用构造时的注入器和焦点后端自己建一份
+    /// （带自己的一把输入锁，命令行 / 测试用）；桌面端用 [`Self::with_send_to_game`] 换成和
+    /// `game_chat.send`、`game.act`、按键程序共用一把锁的那一份。
+    send_to_game: Arc<dyn SendToGame>,
     focus: Arc<dyn FocusBackend>,
     emitter: Arc<dyn Emitter>,
     /// 自引用（Weak）：VAD 判停时 pump 需要触发 end()（与热键结束同路径）
@@ -180,6 +185,12 @@ impl Orchestrator {
         focus: Arc<dyn FocusBackend>,
         emitter: Arc<dyn Emitter>,
     ) -> Self {
+        let send_to_game: Arc<dyn SendToGame> = Arc::new(GameChat::new(
+            injector,
+            focus.clone(),
+            InputLock::new(),
+            settings.clone(),
+        ));
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 state: OrchestratorState::Idle,
@@ -208,7 +219,7 @@ impl Orchestrator {
             audio,
             before_capture: None,
             after_capture: None,
-            injector,
+            send_to_game,
             focus,
             emitter,
             me: RwLock::new(None),
@@ -223,6 +234,12 @@ impl Orchestrator {
             secrets: None,
             vad_factory: None,
         }
+    }
+
+    /// 换成宿主那一份发到游戏的入口（和别的发话人、`game.act`、按键程序共用一把输入锁）。
+    pub fn with_send_to_game(mut self, send_to_game: Arc<dyn SendToGame>) -> Self {
+        self.send_to_game = send_to_game;
+        self
     }
 
     pub fn with_secrets(mut self, store: Arc<dyn crate::connection::SecretStore>) -> Self {

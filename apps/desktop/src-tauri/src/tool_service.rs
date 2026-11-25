@@ -255,6 +255,18 @@ impl AppHost for DesktopHost {
         Box::pin(async move { crate::tool_config::invoke(&self.app, &tool, args).await })
     }
 
+    fn invoke_until(
+        &self,
+        tool: &str,
+        args: Value,
+        deadline: std::time::Instant,
+    ) -> HostInvokeFuture<'_> {
+        let tool = tool.to_string();
+        Box::pin(async move {
+            crate::tool_config::invoke_until(&self.app, &tool, args, Some(deadline)).await
+        })
+    }
+
     /// 插件做成 MCP App 的页面（ADR 039 D5，`plugin_apps.rs`）：`kotone.exe mcp` 的 `resources/list`。
     fn resources(&self) -> Vec<Value> {
         let Some(state) = self.app.try_state::<crate::SharedState>() else {

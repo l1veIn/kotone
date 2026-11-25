@@ -8,7 +8,7 @@
 //! - **护栏**（[`Limits`]）：总时长、执行步数（中断回调，防死循环）、按键总数、两次按键最小间隔；
 //!   取消标记随时生效；游戏窗口失去焦点时按键与打字先暂停等待。
 //! - **数据不是指令**：`ocr()` 返回不透明的 `ScreenText`，只能问 `:has("文字")` / `:count()` /
-//!   `:find("文字")`（位置），拿不到字符串，因此屏幕上的字无法拼进 `type_text` / `say` 的内容。
+//!   `:find("文字")`（位置），拿不到字符串，因此屏幕上的字无法拼进 `type_text` / `chat` / `say` 的内容。
 //! - **找色 / 找图 / 找字**：`find_color` / `find_image` 参照 AutoHotkey 的 `PixelSearch` /
 //!   `ImageSearch`（区域、颜色、`variation` 容差、透明色、第一个匹配），`find_text` 对区域做 OCR；
 //!   都返回窗口比例坐标，可直接交给 `click`。
@@ -92,6 +92,9 @@ pub trait ScriptHost: Send + Sync {
     fn game_focused(&self) -> bool;
     fn key(&self, action: KeyAction, key: &str) -> Result<(), String>;
     fn type_text(&self, text: &str) -> Result<(), String>;
+    /// 往游戏聊天里发话（经本体的“发到游戏”入口，ADR 041：游戏配置的聊天键和频道、等修饰键、一把输入锁）。
+    /// `channel` 是 `"team"` / `"all"`，None = 默认频道；多行时一行发一条。
+    fn chat(&self, text: &str, channel: Option<&str>) -> Result<(), String>;
     /// 区域平均亮度（0..=255）。
     fn brightness(&self, region: Region) -> Result<f64, String>;
     /// 某点颜色（窗口比例坐标）。
@@ -252,6 +255,9 @@ impl State {
         Ok(())
     }
 }
+
+/// `chat()` 一次最多几个字（10 行 × 200 字；行数和每行字数由宿主的入口查）。
+const MAX_CHAT_CHARS: usize = 2000;
 
 fn host_err(e: String) -> mlua::Error {
     mlua::Error::runtime(e)
@@ -617,6 +623,30 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
             }
             s.before_input()?;
             s.host.type_text(&text).map_err(host_err)
+        })?,
+    )?;
+
+    let s = state.clone();
+    g.set(
+        "chat",
+        lua.create_function(move |_, (text, opts): (String, Option<Table>)| {
+            let text = text.trim().to_string();
+            if text.is_empty() || text.chars().count() > MAX_CHAT_CHARS {
+                return Err(mlua::Error::runtime(format!(
+                    "要发的话为空或超过 {MAX_CHAT_CHARS} 字"
+                )));
+            }
+            let channel: Option<String> = opt(&opts, "channel")?;
+            if channel
+                .as_deref()
+                .is_some_and(|c| c != "team" && c != "all")
+            {
+                return Err(mlua::Error::runtime(
+                    "channel 只能是 \"team\"（队伍）或 \"all\"（所有人）",
+                ));
+            }
+            s.before_input()?;
+            s.host.chat(&text, channel.as_deref()).map_err(host_err)
         })?,
     )?;
 

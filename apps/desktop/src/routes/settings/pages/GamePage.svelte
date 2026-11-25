@@ -8,7 +8,7 @@
    * - Tauri 走系统保存/打开对话框 + export_hotwords/import_hotwords IPC；
    *   dev:web 走 Blob 下载 / <input type=file> + 前端同款 parse/merge；
    * - 已删除：前台检测（detect_foreground_game IPC 已连删）、测试发送按钮
-   *   （simulate_send IPC 保留——悬浮条错误重试在用）。
+   *   （simulate_send IPC 也删了：没人调用，悬浮条的错误重试用的是 confirm_send；ADR 041 第 1 期）。
    * - 琴音与自动化：allowAutomationInput（缺省开）、computerUse（让琴音操作，缺省先问）、
    *   launchPath（琴音打开游戏用）；
    * - 控制台通道（ADR 032 决定 3）：profile 声明了 consoleChat 才显示开关。开关不随“保存”走，

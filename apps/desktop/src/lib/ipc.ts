@@ -185,12 +185,6 @@ export async function cancelSession(): Promise<void> {
   return invoke<void>("cancel_session");
 }
 
-/** 手动触发发送（调试/测试用） */
-export async function simulateSend(text: string, profileId?: string): Promise<void> {
-  if (!isTauri) return browserMock.simulateSend(text, profileId);
-  return invoke<void>("simulate_send", { text, profileId: profileId ?? null });
-}
-
 // ---------- 提权（UIPI 方案） ----------
 
 /** 导出 profile 热词到 UTF-8 文本（每行一词条），返回条数 */

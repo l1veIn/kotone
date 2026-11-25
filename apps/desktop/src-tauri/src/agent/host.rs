@@ -106,13 +106,22 @@ impl BuiltinHost for DesktopBuiltins {
         crate::plugins::call(&self.app, tool, arguments, crate::plugins::Caller::Her).await
     }
 
-    /// 本体用 ToolSpec 登记的工具（ADR 039 D2：`game_chat.send`）：执行记录记在这段对话下。
+    /// 本体用 ToolSpec 登记的工具（ADR 039 D2：`game_chat.send`）：执行记录记在这段对话下；
+    /// 截止时间用入口自己的默认值（ADR 041）。
     async fn body_tool(
         &self,
         tool: &str,
         arguments: &Value,
     ) -> Result<kotone_plugin_api::ToolResult, String> {
-        crate::companion::body_tool(&self.app, tool, arguments, &self.session).await
+        crate::game_chat::body_tool(
+            &self.app,
+            tool,
+            arguments,
+            &self.session,
+            kotone_core::send_to_game::Speaker::Companion,
+            None,
+        )
+        .await
     }
 
     async fn exec(

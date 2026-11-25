@@ -649,8 +649,8 @@ async fn saved_automations_run_through_automation_run() {
 #[tokio::test]
 async fn builtins_validate_then_reach_the_host() {
     let f = fixture(Policy::default(), Answer::Deny);
-    // game_chat.send 是本体用 ToolSpec 登记的（ADR 039 D2）：要打的字由桌面端执行时检查
-    // （body.rs 的 chat_text_is_one_short_line，外部 Agent 经工具服务调也一样），这里只看它照样交给桌面
+    // game_chat.send 是本体用 ToolSpec 登记的（ADR 039 D2）：参数由桌面端执行时交给发到游戏的入口检查
+    // （body.rs 的 chat_request、kotone-core send_to_game 的 split_lines，外部 Agent 经工具服务调也一样），这里只看它照样交给桌面
     let out = call(
         &f.port,
         "game_chat.send",

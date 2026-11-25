@@ -365,7 +365,7 @@ impl ToolService {
             return Err(host_failed(format!("{}（{tool}）", crate::host::NO_HOST)));
         }
         let started = Instant::now();
-        let future: HostInvokeFuture<'_> = self.host.invoke(tool, args);
+        let future: HostInvokeFuture<'_> = self.host.invoke_until(tool, args, ctx.deadline);
         let value = self.race_host(ctx, future, tool, timeout_ms, |error| match error {
             HostError::InvalidArguments(message) => invalid_args(message),
             HostError::Busy(message) => ToolError::new(ErrorCode::Busy, message),

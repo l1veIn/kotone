@@ -47,8 +47,8 @@ mod windows_imp {
     };
 
     use kotone_core::inject::{
-        send_sequence, CancelToken, ClipboardTransaction, FocusBackend, InjectError, Injector,
-        SendOps, TargetWindow,
+        send_sequence, CancelToken, ClipboardTransaction, FocusBackend, ForegroundInfo,
+        InjectError, Injector, SendOps, SendRoute, TargetWindow,
     };
     use kotone_core::profile::GameProfile;
 
@@ -75,13 +75,25 @@ mod windows_imp {
             profile: &GameProfile,
             cancel: CancelToken,
         ) -> Result<(), InjectError> {
+            self.send_line(text, profile, cancel).map(|_| ())
+        }
+
+        /// 发一行并说走了哪条路（ADR 041 D6）。
+        fn send_line(
+            &self,
+            text: &str,
+            profile: &GameProfile,
+            cancel: CancelToken,
+        ) -> Result<SendRoute, InjectError> {
             if cancel.is_cancelled() {
                 return Err(InjectError::new("发送已取消"));
             }
             // 声明了 Source 2 控制台通道的游戏：条件都满足就不开聊天框直接发（ADR 032 决定 3）。
             if profile.console_chat.is_some() {
                 match crate::console_chat::route(profile) {
-                    Ok(route) => return crate::console_chat::send(&route, text),
+                    Ok(route) => {
+                        return crate::console_chat::send(&route, text).map(|()| SendRoute::Console)
+                    }
                     Err(reason) => kotone_core::process_log::record_activity(
                         "console_chat_skipped",
                         kotone_core::process_log::EventData {
@@ -93,7 +105,7 @@ mod windows_imp {
             }
             // 整段发送期间挡住玩家的按下（ADR 032 决定 1）；任何出口都在 drop 时关窗。
             let _window = crate::input_gate::SendWindow::open();
-            send_sequence(text, profile, &cancel, &WinOps)
+            send_sequence(text, profile, &cancel, &WinOps).map(|()| SendRoute::Keys)
         }
     }
 
@@ -720,6 +732,17 @@ mod windows_imp {
 
         fn foreground_process_name(&self) -> Option<String> {
             foreground_process_name()
+        }
+
+        /// 前台窗口、进程名、是不是 Kotone 自己（发到游戏的入口按它挑游戏配置、拦 Kotone 自己的窗口）。
+        fn foreground_info(&self) -> Option<ForegroundInfo> {
+            let window = self.foreground_window()?;
+            let pid = foreground_pid();
+            Some(ForegroundInfo {
+                window,
+                process: pid.and_then(process_name_from_pid),
+                own_process: pid == Some(std::process::id()),
+            })
         }
     }
 

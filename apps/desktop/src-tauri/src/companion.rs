@@ -7,7 +7,7 @@
 //! 2. 用统一模型清单里选定的 OCR 模型识别，每行带截图坐标；
 //! 3. 写入本流程自己的聊天跟踪，附上最近的跟踪记录与 profile 说明；
 //! 4. 一次大模型调用（`kotone_ai::companion`），从提醒 / 帮忙打字 / 回答中选一种；
-//! 5. 执行：提醒交给调度器，打字经 profile 的注入设置打进聊天框（默认按发送键，`autoSend` 关掉时不按），
+//! 5. 执行：提醒交给调度器，打字经本体的“发到游戏”入口打进聊天框（`game_chat.rs`，ADR 041；默认按发送键，`autoSend` 关掉时不按），
 //!    回答走与提醒相同的语音 / 弹幕交付路径。模型回报的聊天框位置记进 profile。
 //!
 //! 必须选好 AI 连接并保存密钥；没有时不降级，只提示用户先去配置。失败都如实告诉用户
@@ -19,10 +19,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use kotone_ai::companion::{self as planner, CompanionAction, CompanionInput, OcrLine};
 use kotone_core::assistant::{AssistantPlan, CompanionCheck};
 use kotone_core::cancel::CancellationToken;
-use kotone_core::inject::CancelToken;
 use kotone_core::ocr::{OcrBackend, OcrBackendKind, OcrCancel, OcrInput, OcrParams};
 use kotone_core::profile::{self, ChatRegion, GameProfile};
 use kotone_core::reminders::ReminderIntent;
+use kotone_core::send_to_game::Speaker;
 use kotone_core::settings::Settings;
 use kotone_core::tools::WindowObserver;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
@@ -37,7 +37,6 @@ use crate::SharedState;
 /// 截图像素上限（4K 客户区以内）。
 const MAX_CAPTURE_PIXELS: u64 = 3840 * 2160;
 const OCR_DEADLINE: Duration = Duration::from_secs(20);
-const TYPE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct CompanionRuntime {
     tracker: Tracker,
@@ -501,115 +500,7 @@ pub async fn read_frame(
 }
 
 // ---------- 执行 ----------
-
-/// 把文字打进前台游戏的聊天框：沿用当前 profile 的开聊天框键、延迟与注入方式；
-/// `send = false` 时不按发送键。
-pub async fn type_text(app: &AppHandle, text: &str, send: bool) -> Result<Value, String> {
-    let text = text.trim().to_string();
-    if text.is_empty() || text.chars().count() > 200 || text.contains(['\r', '\n']) {
-        return Err("要打的字为空、超过 200 字或含有换行".into());
-    }
-    let s = settings(app);
-    let mut profile = active_profile(&s);
-    if !send {
-        profile.send_key.clear();
-    }
-    let injector = app.state::<SharedState>().injector.clone();
-    let profile_id = profile.id.clone();
-    let typed = text.clone();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        injector.send(&typed, &profile, CancelToken::default())
-    });
-    match tokio::time::timeout(TYPE_TIMEOUT, task).await {
-        Ok(Ok(Ok(()))) => Ok(json!({"typed": text, "sent": send, "profile": profile_id,
-            "receipt": if send { "已按 profile 的发送键发送；只证明本机按键已执行，不证明服务器已收到" } else { "已打进聊天框，未按发送键" }})),
-        Ok(Ok(Err(error))) => Err(format!("打字失败：{}", error.message)),
-        Ok(Err(_)) => Err("打字线程异常".into()),
-        Err(_) => Err("打字超时（10 秒）：模拟输入可能被安全软件或游戏拦截".into()),
-    }
-}
-
-/// 本体用 ToolSpec 登记的工具（[`kotone_agent::body`]，ADR 039 D2）在桌面端的实现：琴音
-/// （`BuiltinHost::body_tool`）和外部 Agent（工具服务、MCP，`tool_config::invoke`）都走这里。
-/// `caller` 是执行记录的发起方（琴音：`agent:<对话 id>`；工具服务：`tool-service`）。
-pub async fn body_tool(
-    app: &AppHandle,
-    tool: &str,
-    arguments: &Value,
-    caller: &str,
-) -> Result<kotone_plugin_api::ToolResult, String> {
-    match tool {
-        kotone_agent::body::TOOL_GAME_CHAT => {
-            let text = kotone_agent::body::chat_text(arguments)?;
-            let send = arguments.get("send").and_then(Value::as_bool);
-            send_to_game_chat(app, caller, &text, send)
-                .await
-                .map(kotone_plugin_api::ToolResult::content)
-        }
-        _ => Err(format!("本体没有 {tool} 这个工具")),
-    }
-}
-
-/// 替玩家打进前台游戏的聊天框，并写一条执行记录（`game_chat.send`，本体的工具，ADR 039 D2）。
-/// 打字经本体的注入器和 ADR 032 的挡键（[`type_text`]）。
-/// `session` 是记录里的发起方（琴音：`agent:<对话 id>`；工具服务：`tool-service`）；`send` 为 None = 跟随玩家的“自动发送”。
-pub async fn send_to_game_chat(
-    app: &AppHandle,
-    session: &str,
-    text: &str,
-    send: Option<bool>,
-) -> Result<Value, String> {
-    let text = text.to_string();
-    // 前台是 Kotone 自己（例如玩家正在聊天窗口里）时不能打字，否则字会打进 Kotone。
-    let (_, window) = crate::automation::foreground_target_info()
-        .map_err(|_| "前台不是游戏窗口：请先切到游戏，再让我替你发言".to_string())?;
-    let s = settings(app);
-    // 前台也得是这个游戏：不能把字和回车打进桌面、文件夹或别的程序（2026-11-18 真机测试里
-    // 玩家说“跟队友说…”，她选了打字，而前台是桌面）。
-    let game = active_profile(&s);
-    if let Some(reason) = foreground_refusal(&game, window.process_name.as_deref()) {
-        return Err(reason);
-    }
-    let send = send.unwrap_or(s.assistant.companion.auto_send);
-    let profile = game.id;
-    let result = type_text(app, &text, send).await;
-    let record = crate::automation::record_chat(
-        app,
-        session,
-        kotone_core::automation::ChatAction {
-            text,
-            sent: send && result.is_ok(),
-            profile,
-        },
-        result.as_ref().map(|_| ()).map_err(Clone::clone),
-    );
-    if let Err(e) = &record {
-        kotone_core::log::log(&format!("game_chat: chat record failed: {e}"));
-    }
-    let mut value = result?;
-    if let Ok(run) = record {
-        value["runId"] = json!(run.id);
-    }
-    Ok(value)
-}
-
-/// 前台不是这个游戏时不打字的原因（None = 可以打）。
-fn foreground_refusal(
-    game: &kotone_core::profile::GameProfile,
-    process: Option<&str>,
-) -> Option<String> {
-    let process = process.unwrap_or("");
-    if process.eq_ignore_ascii_case("explorer.exe") || process.is_empty() {
-        return Some("前台是桌面或文件夹，不是游戏：请先切到游戏，再让我替你发言".into());
-    }
-    if !kotone_core::profile::matches_process(game, process) {
-        return Some(format!(
-            "前台是 {process}，不是「{}」：请先切到游戏，再让我替你发言",
-            game.display_name
-        ));
-    }
-    None
-}
+// 帮忙打字经本体的“发到游戏”入口（`game_chat.rs`，ADR 041）：和语音输入、`game_chat.send` 共用一把输入锁。
 
 /// 把模型回报的聊天框位置换算成比例记进当前 profile（与已记录的差别很小时不写）。
 fn learn_chat_region(
@@ -746,7 +637,8 @@ pub async fn handle_assistant(
             }),
             CompanionAction::Type { text } => {
                 let auto_send = settings(app).assistant.companion.auto_send;
-                type_text(app, text, auto_send).await?;
+                crate::game_chat::type_into_chat(app, text, auto_send, Speaker::Companion, None)
+                    .await?;
                 Ok(AssistantPlan {
                     message: outcome.message.clone(),
                     reminders: vec![],
@@ -822,7 +714,7 @@ pub async fn run(app: &AppHandle, text: String, source: Source) -> Result<Value,
         }
         CompanionAction::Type { text } => {
             let auto_send = settings(app).assistant.companion.auto_send;
-            type_text(app, text, auto_send).await?
+            crate::game_chat::type_into_chat(app, text, auto_send, Speaker::Companion, None).await?
         }
         CompanionAction::Answer { text, delivery } => {
             let used = crate::assistant::deliver_text(app, text.clone(), delivery.clone()).await?;
@@ -1041,19 +933,5 @@ mod tests {
             1080
         )
         .is_none());
-    }
-
-    #[test]
-    fn game_chat_is_only_typed_into_the_game() {
-        let lol = kotone_core::profile::GameProfile::builtin_lol();
-        assert!(foreground_refusal(&lol, Some("explorer.exe")).is_some());
-        assert!(foreground_refusal(&lol, None).is_some());
-        assert!(foreground_refusal(&lol, Some("notepad.exe")).is_some());
-        let game = lol.process_names[0].clone();
-        assert!(foreground_refusal(&lol, Some(&game)).is_none());
-        // 没写进程名的通用配置：除了桌面，前台是什么就算什么
-        let generic = kotone_core::profile::GameProfile::builtin_generic();
-        assert!(foreground_refusal(&generic, Some("SomeGame.exe")).is_none());
-        assert!(foreground_refusal(&generic, Some("Explorer.EXE")).is_some());
     }
 }

@@ -87,6 +87,17 @@ pub trait AppHost: Send + Sync {
         let message = format!("{NO_HOST}（{tool}）");
         Box::pin(async move { Err(HostError::Failed(message)) })
     }
+    /// 同 [`Self::invoke`]，带上这次调用的期限（按 `timeoutMs` 算）：往游戏里按键的工具（发到游戏，ADR 041）
+    /// 据此在期限前返回真实的结果，不出现“报超时、其实已经发了”。缺省忽略期限。
+    fn invoke_until(
+        &self,
+        tool: &str,
+        args: Value,
+        deadline: std::time::Instant,
+    ) -> HostInvokeFuture<'_> {
+        let _ = deadline;
+        self.invoke(tool, args)
+    }
     /// 开着的插件做成 MCP App 的页面（ADR 039 D5）：`resources/list` 的项（`uri`、`name`、`mimeType`、
     /// `_meta.ui`，`kotone_plugin_api::Resource::listing` 的样子）。列在 `system.capabilities` 的 `resources` 里。
     fn resources(&self) -> Vec<Value> {

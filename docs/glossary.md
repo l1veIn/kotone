@@ -103,6 +103,8 @@
 | 模型 / Model | `ModelInfo`, `MultiFileModel`, `modelId`, `ModelRecipe` | 具体权重或在线服务条目及其加载配方。X-ASR、SenseVoice、FunASR-Nano 属模型；多个模型可以共用同一引擎。 |
 | 流式与本地 / Streaming and local | `ModelIo`, `EngineCapabilities` | `ModelIo::Offline` 表示非流式，`EngineCapabilities.offline` 表示无需远程服务。两者不得混用。“在线 transducer”常指流式解码，不代表上传音频。 |
 | 游戏配置 / Game profile | `GameProfile`, `ChatChannel` | 前台程序匹配、聊天打开/发送按键、频道、前缀和热词等游戏适配数据。不是 AI 连接，也不是全局设置。 |
+| 发到游戏 / Send to game | `SendToGame`, `GameChat`, `ChatRequest`, `ChatOutcome`, `game_chat.send` | “把这段话发到当前游戏的聊天”唯一的入口（ADR 041）：语音输入、她、外部 Agent、自动化的 `chat()` 都经它。按前台检测到的游戏挑游戏配置和频道，等修饰键松开，一行发一条，结果说走了哪条路、哪个频道、发了几行、没发完的原因。不重试、不补发。 |
+| 输入锁 / Input lock | `InputLock`, `InputUser` | 往游戏里按键的人共用的一把锁（ADR 041 D4）：一条发言、一次 `game.act`、按键程序的每一下各拿一次，后来的排队，最多 5 秒（或调用方的期限）。实例只有宿主一份。不是 ADR 032 的挡键（那个挡的是玩家的键，输入锁排的是 Kotone 自己的几路）。 |
 | 连接 / Connection | `Connection`, `connectionId`, `ResolvedConnection` | 可复用的服务地址、协议、模型与凭据引用。凭据由独立存储管理，不嵌入 pipeline、profile 导出或诊断包。 |
 | 后处理流水线 / Post-processing pipeline | `PostProcessPipeline`, `PipelineStepConfig`, `TextProcessor` | 有序处理步骤；每步消费上一步输出。处理器是能力定义，步骤是带配置和失败策略的实例。`required` 阻止失败交付；`best-effort` 保留上一文本继续。 |
 | 识别原文与待交付文本 / Recognized and ready text | `RecognizedText`, `ReadyText` | 原文来自 STT；待交付文本经过后处理后进入只读预览/注入。处理失败重试处理阶段，发送失败重试现成文本。评测使用识别原文。 |

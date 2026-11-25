@@ -554,6 +554,11 @@ pub fn act(
     flag_out: &Mutex<Option<Arc<AtomicBool>>>,
 ) -> Result<Value, String> {
     let plan = actions::parse_plan(raw_actions)?;
+    // 一把输入锁（ADR 041 D4、ADR 019“批内持有输入锁”）：整批拿着，不和发到游戏的字、按键程序的按键交错；
+    // 先拿锁再检查（有没有程序在跑），结尾再看一眼之前放掉（截图、识别慢，不在锁里）。
+    let input = crate::game_chat::input_lock(app)
+        .acquire_for(kotone_core::input_lock::InputUser::GameAct)
+        .map_err(|busy| format!("没有操作：{busy}"))?;
     let (observation, target, client, flag) = prepare(app, observation_id)?;
     *flag_out.lock().unwrap() = Some(flag.clone());
     let _guard = ActGuard {
@@ -576,6 +581,7 @@ pub fn act(
     let esc = hotkey_ll::esc_stop_pressed();
     hotkey_ll::arm_esc_stop(false);
     host.session.release_all();
+    drop(input);
     crate::bubble::acting_done(app);
     kotone_core::log::log(&format!(
         "computer use: act {}/{} sent, stop={:?}",

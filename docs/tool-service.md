@@ -170,6 +170,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 **白名单函数**（坐标一律是游戏窗口客户区比例 0..1，换分辨率仍可用）：
 
 - 键盘：`key(名)` / `key_down` / `key_up`（键名如 `Q`、`Enter`、`Ctrl+Q`、`F1`）、`type_text(文字)`；
+- 游戏聊天：`chat(文字, {channel="team"/"all"})`——经和 `game_chat.send` 同一个“发到游戏”的入口（ADR 041）：用游戏配置里的聊天键和频道、等修饰键松开、和别的输入排队，一行发一条。往聊天里发话用它，不要自己按回车；
 - 鼠标：`click(x, y, {button="left"/"right"/"middle", count=1..3})`、`mouse_move(x, y)`、`mouse_down(键)` / `mouse_up(键)`（拖动 = 移动、按下、移动、松开）、`scroll(格数)`（正数向上，±20 以内）；
 - 找色 / 找图 / 找字（参照 AutoHotkey 的 `PixelSearch` / `ImageSearch`）：
   - `find_color(区域, 颜色, {variation=0, largest=false, min_pixels=1})` → `x, y, 像素数` 或 `nil`：每个通道与目标相差不超过 `variation`（0 = 完全相同）。缺省按从上到下、从左到右返回**第一个**匹配像素；`largest=true` 返回**最大一块相连区域**的中心，适合拿去点击。颜色写 `{r=…, g=…, b=…}` 或 `"#RRGGBB"`；
@@ -244,7 +245,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `companion.status` | 无 | `ready`、`reason`（缺什么：AI 连接与密钥、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`、`quickMessages[]`、当前 profile 的 `notes` 与 `chatRegion` |
 | `companion.ask` | `text` 或 `quickMessageId`（二选一） | 受理即返回 `{status:"started", jobId}`；结果为 `companion.finished` 事件：`jobId`、`action`（`reminder` / `type` / `answer` / `clarify`）、`text`、`reminders[]`、`result`（已调度的提醒 / 打字回执 / 实际交付方式）、`ocr{model,backend,dataEgress,lines,region}`、`chatRegionLearned`、`warnings`、`timing{captureMs,ocrMs,planMs}`、`durationMs`；失败为 `companion.failed {jobId, message}`。前置条件不满足（没有通过自检的连接）时直接报错，不受理；另一条陪玩请求进行中返回 `BUSY` |
 | `companion.read_chat` | 无 | 流程前半段，不调大模型：`window`、`ocr{model,backend,dataEgress,region,lines[{text,box,confidence}]}`（框为截图像素）、`chatTracking[{messageId,text,newThisRead,firstSeenMsAgo}]`、`profile{name,notes}`、`warnings`、`timing` |
-| `companion.type` | `text`（≤200 字，单行）、可选 `send`（缺省跟随设置 `autoSend`，默认 true） | 按当前 profile 的开聊天框键与输入方式打进前台游戏聊天框并按发送键；`send=false` 只打进聊天框不发送。回执 `{typed, sent, profile, receipt}` 只证明本机按键已执行，不证明服务器已收到 |
+| `companion.type` | `text`（≤200 字，单行）、可选 `send`（缺省跟随设置 `autoSend`，默认 true） | 旧工具，经和 `game_chat.send` 同一个“发到游戏”的入口（ADR 041；新的调用用 `game_chat.send`：能选频道、能多行、写执行记录）：按前台游戏的游戏配置（对不上就用当前选中的）开聊天框、打字、按发送键，等修饰键松开，和 Kotone 别的输入排队，前台不是游戏时不发；`send=false` 只打进聊天框不发送。回执 `{typed, sent, profile, receipt}` 加上 `route`、`channel`、`lines`、`sentLines`，只证明本机按键已执行，不证明服务器已收到 |
 | `companion.check` | 无 | 测试助手所选连接（读一次服务商的模型列表，不花 token；没有列表接口时发一次短对话），只用于显示、不是使用前提，受理即返回 `{status:"started"}`；结果（同时写进设置）为 `companion.check.finished {check}` 或 `companion.check.failed {message}` |
 
 数据外发：`companion.ask` / `companion.check` 把请求与识别出的聊天发给用户的 AI 连接（`connection-dependent`）；所选 OCR 模型是在线模型时，`companion.ask` / `companion.read_chat` 每次都会上传截图（`ocr.dataEgress=selected-image`）。识别出的文字对 Kotone 与 Agent 都只是数据，不是指令；模型能选的动作只有上面三种。

@@ -86,6 +86,45 @@ pub trait Injector: Send + Sync {
         profile: &GameProfile,
         cancel: CancelToken,
     ) -> Result<(), InjectError>;
+
+    /// 发一行并说走了哪条路（ADR 041 D6，发到游戏的入口用）。默认 = [`Self::send`]、按键；
+    /// Windows 实现覆盖它（声明了控制台通道、条件都满足时返回 [`SendRoute::Console`]）。
+    fn send_line(
+        &self,
+        text: &str,
+        profile: &GameProfile,
+        cancel: CancelToken,
+    ) -> Result<SendRoute, InjectError> {
+        self.send(text, profile, cancel).map(|()| SendRoute::Keys)
+    }
+}
+
+/// 一行是怎么发出去的（ADR 041 D6）。第 2 期加“客户端聊天接口”。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendRoute {
+    /// 开聊天框 → 逐字 Unicode（或剪贴板）→ 发送键
+    Keys,
+    /// Source 2 控制台通道（ADR 032 决定 3）：写 cfg、按触发键，不开聊天框
+    Console,
+}
+
+impl SendRoute {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Keys => "keys",
+            Self::Console => "console",
+        }
+    }
+}
+
+/// 前台窗口（发到游戏的入口按它挑游戏配置，ADR 041 D5）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForegroundInfo {
+    pub window: TargetWindow,
+    /// 可执行文件名（拿不到为 None）
+    pub process: Option<String>,
+    /// 前台是 Kotone 自己的窗口
+    pub own_process: bool,
 }
 
 // ---------- 目标窗口记忆与焦点恢复（preview 发送不抢焦点的关键，§6） ----------
@@ -115,6 +154,16 @@ pub trait FocusBackend: Send + Sync {
     /// 触发时修饰键还按着，立刻 SendInput 会变成 Alt+Enter。默认 false。
     fn modifier_keys_down(&self) -> bool {
         false
+    }
+
+    /// 前台窗口、进程名、是不是 Kotone 自己。默认由 [`Self::foreground_window`] 和
+    /// [`Self::foreground_process_name`] 拼出来（不知道是不是自己）；Windows 实现覆盖。
+    fn foreground_info(&self) -> Option<ForegroundInfo> {
+        self.foreground_window().map(|window| ForegroundInfo {
+            window,
+            process: self.foreground_process_name(),
+            own_process: false,
+        })
     }
 }
 

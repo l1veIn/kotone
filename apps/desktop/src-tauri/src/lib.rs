@@ -19,6 +19,7 @@ mod diagnostics_cmd;
 mod events;
 mod fillers;
 mod follow_up;
+mod game_chat;
 mod game_session;
 mod game_tools;
 mod games;
@@ -83,7 +84,7 @@ use tauri::{AppHandle, Emitter as TauriEventEmitter, Manager};
 use hotkey::{HotkeyManager, HotkeyStatus, InputEnvironmentCheck};
 use kotone_core::audio::AudioDevice;
 use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
-use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
+use kotone_core::inject::{FocusBackend, Injector};
 use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator, OrchestratorState};
 use kotone_core::profile::{
@@ -114,7 +115,8 @@ pub struct SharedState {
     pub processors: Arc<kotone_core::postprocess::ProcessorRegistry>,
     pub connections: Arc<dyn ConnectionResolver>,
     pub secrets: Arc<dyn SecretStore>,
-    pub injector: Arc<dyn Injector>,
+    /// 发到游戏的唯一入口和那一把输入锁（ADR 041，`game_chat.rs`）：全进程只有这一份。
+    pub game_chat: Arc<kotone_core::send_to_game::GameChat>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -253,6 +255,14 @@ pub fn run() {
             });
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
+            // 发到游戏的唯一入口和那一把输入锁（ADR 041 D4）：语音输入（经编排器）、game_chat.send、
+            // companion.type、旧陪玩流程、自动化的 chat()、game.act、按键程序共用这一份。
+            let game_chat = Arc::new(kotone_core::send_to_game::GameChat::new(
+                injector.clone(),
+                focus.clone(),
+                kotone_core::input_lock::InputLock::new(),
+                settings.clone(),
+            ));
             // 语音唤醒（ADR 017）：唤醒后的那次会话改用唤醒线程转来的音频，其余照常开麦克风。
             let wake_runtime = wake::WakeRuntime::default();
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
@@ -286,7 +296,8 @@ pub fn run() {
             // 听写听到以后（文字处理、发送、识别记录）：语音输入插件
             .with_processors(processors.clone())
             .with_secrets(secrets.clone())
-            .with_settings_repository(settings_repository.clone());
+            .with_settings_repository(settings_repository.clone())
+            .with_send_to_game(game_chat.clone());
             if let Ok(scheduler) = &assistant_runtime.scheduler {
                 orchestrator = orchestrator
                     .with_assistant(assistant_runtime.handler.clone(), scheduler.clone());
@@ -315,7 +326,7 @@ pub fn run() {
                 processors,
                 connections,
                 secrets,
-                injector,
+                game_chat,
             });
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
             app.manage(RuntimeManager::new());
@@ -484,7 +495,6 @@ pub fn run() {
             get_resource_usage,
             confirm_send,
             cancel_session,
-            simulate_send,
             assistant::list_reminders,
             assistant::cancel_reminder,
             assistant::assistant_submit_text,

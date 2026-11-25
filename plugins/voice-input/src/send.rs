@@ -1,14 +1,15 @@
-//! 往游戏聊天框打字：占住发送权、等修饰键松开、把焦点还给目标窗口、注入、超时；重发最近一条。
-
-use std::time::Duration;
+//! 往游戏聊天框打字：占住发送权、交给本体的“发到游戏”入口、超时；重发最近一条。
+//!
+//! 排队（一把输入锁）、等修饰键松开、回到开始收音时的窗口（拿到锁以后才切，ADR 041 D5）、按前台挑游戏配置和
+//! 频道、注入都在本体的入口里（`kotone_core::send_to_game`），这里只决定发什么、回哪个窗口、用哪个频道。
 
 use kotone_core::assistant::SessionPurpose;
-use kotone_core::inject::{CancelToken, InjectError, TargetWindow};
+use kotone_core::inject::{CancelToken, TargetWindow};
 use kotone_core::orchestrator::{
     Orchestrator, OrchestratorState, PendingText, ReadyText, SendCompletion, SendOperation,
     SEND_STILL_RUNNING,
 };
-use kotone_core::profile::{self, GameProfile};
+use kotone_core::send_to_game::{ChannelPick, ChatFailure, ChatRequest, RestoreFocus, Speaker};
 use serde_json::json;
 
 use crate::VoiceInput;
@@ -147,57 +148,7 @@ impl VoiceInput {
         Ok(Some(claim))
     }
 
-    async fn wait_for_modifiers_up(
-        &self,
-        orch: &Orchestrator,
-        token: &CancelToken,
-    ) -> Result<(), InjectError> {
-        const MAX_WAIT: Duration = Duration::from_millis(1000);
-        const POLL: Duration = Duration::from_millis(10);
-        let started = std::time::Instant::now();
-        if token.is_cancelled() {
-            return Err(InjectError::new("发送已取消"));
-        }
-        if !orch.focus().modifier_keys_down() {
-            return Ok(());
-        }
-        kotone_core::log::log("inject: waiting for Ctrl/Alt/Shift/Win to release");
-        loop {
-            if token.is_cancelled() {
-                return Err(InjectError::new("发送已取消"));
-            }
-            if !orch.focus().modifier_keys_down() {
-                kotone_core::process_log::record_activity(
-                    "inject_wait_modifiers",
-                    kotone_core::process_log::EventData {
-                        detail: Some(format!("waitedMs={}", started.elapsed().as_millis())),
-                        outcome: Some("ok".into()),
-                        ..Default::default()
-                    },
-                );
-                return Ok(());
-            }
-            if started.elapsed() >= MAX_WAIT {
-                kotone_core::log::log(
-                    "inject: modifiers still down after 1000ms; preserving text instead of sending",
-                );
-                kotone_core::process_log::record_activity(
-                    "inject_wait_modifiers",
-                    kotone_core::process_log::EventData {
-                        detail: Some("timeoutMs=1000".into()),
-                        outcome: Some("timeout".into()),
-                        ..Default::default()
-                    },
-                );
-                return Err(InjectError::new(
-                    "发送前 Ctrl、Alt、Shift 或 Win 仍未松开；已保留文字，请松开按键后重试",
-                ));
-            }
-            tokio::time::sleep(POLL).await;
-        }
-    }
-
-    /// 焦点恢复和输入注入共享同一个阻塞任务/完成凭据，超时也不能另开并行任务。
+    /// 交给本体的入口（ADR 041）。入口和完成凭据在同一个阻塞任务里，超时也不能另开并行任务。
     async fn execute_send(
         &self,
         orch: &Orchestrator,
@@ -205,42 +156,46 @@ impl VoiceInput {
         token: CancelToken,
         target: Option<TargetWindow>,
         text: String,
-        profile: GameProfile,
-    ) -> Result<(), InjectError> {
-        let injector = orch.injector().clone();
-        let focus = orch.focus().clone();
-        let restore_delay = orch.focus_restore_delay;
+        channel: Option<(String, String)>,
+    ) -> Result<(), SendFailure> {
+        let entry = orch.send_to_game().clone();
+        let mut request = ChatRequest::new(text, Speaker::Player);
+        // 频道记的是 (游戏, 频道)：入口挑中的游戏不是那个游戏时退回默认频道（ADR-008）
+        request.channel = channel.map(|(game, id)| ChannelPick {
+            id,
+            for_game: Some(game),
+        });
+        // 回到开始收音时的窗口：入口拿到锁以后再切（她正在打多行时切走，剩下的键会打进别的窗口）
+        request.restore = target.map(|window| RestoreFocus {
+            window,
+            settle: orch.focus_restore_delay,
+        });
+        request.cancel = token.clone();
         let worker_token = token.clone();
         let mut task = tokio::task::spawn_blocking(move || {
             let _completion = completion;
-            if worker_token.is_cancelled() {
-                return Err(InjectError::new("发送已取消"));
-            }
             // 检查放在阻塞线程内，覆盖任务排队期间的取消。已经进入的系统调用
             // 无法强制中断；完成凭据会一直保留到它返回，阻止后续发送与之重叠。
-            if let Some(target) = target {
-                if focus.restore(target) && restore_delay > Duration::ZERO {
-                    std::thread::sleep(restore_delay);
-                }
-            }
             if worker_token.is_cancelled() {
-                return Err(InjectError::new("发送已取消"));
+                return Err(SendFailure::from(ChatFailure::Cancelled));
             }
-            let fg_before = focus.foreground_process_name();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                let fg_after = focus.foreground_process_name();
-                kotone_core::log::log(&format!(
-                    "inject focus probe: before={} after500ms={}",
-                    fg_before.as_deref().unwrap_or("(none)"),
-                    fg_after.as_deref().unwrap_or("(none)")
-                ));
-            });
-            injector.send(&text, &profile, worker_token)
+            let outcome = entry.send(request)?;
+            match outcome.stopped {
+                None => Ok(()),
+                // 发了一部分（多行时）：照实说，不重发
+                Some(stopped) => Err(SendFailure {
+                    message: format!(
+                        "发了 {} 行，后面 {} 行没发：{stopped}",
+                        outcome.sent_lines,
+                        outcome.lines.len() - outcome.sent_lines
+                    ),
+                    ..SendFailure::from(stopped)
+                }),
+            }
         });
         match tokio::time::timeout(orch.inject_timeout, &mut task).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(InjectError::new("发送线程异常")),
+            Ok(Err(_)) => Err(SendFailure::plain("发送线程异常")),
             Err(_) => {
                 token.cancel();
                 // 保留并观察 JoinHandle；状态可返回 Error，但发送权由工作线程的
@@ -252,7 +207,7 @@ impl VoiceInput {
                         ));
                     }
                 });
-                Err(InjectError::new(format!(
+                Err(SendFailure::plain(format!(
                     "发送超时（{}s），已请求取消。目标窗口可能已有部分输入，请先检查；\
                      上一次发送结束前无法重试，若持续无响应，请退出并重新打开应用",
                     orch.inject_timeout.as_secs()
@@ -282,39 +237,11 @@ impl VoiceInput {
                 "channelId": channel.as_ref().map(|(_, cid)| cid.clone()),
             }),
         );
-        let settings = orch.settings().read().unwrap().clone();
-        let profile = settings
-            .active_profile_id
-            .as_deref()
-            .and_then(profile::get)
-            .unwrap_or_else(GameProfile::builtin_generic);
-
-        // ADR-008 频道策略：克隆 profile 换开框键、文本加前缀——
-        // 用户原文（预览/历史/重试）不受频道前缀污染。选中的频道成为发送用配置的默认频道，
-        // 注入器走控制台通道时据此选 say / say_team（ADR 032 决定 3）。
-        let strategy = resolve_send_strategy(&profile, &channel);
-        let wire_profile = profile.for_channel(&strategy);
-        let wire_text = if strategy.text_prefix.is_empty() {
-            text.clone()
-        } else {
-            format!("{}{text}", strategy.text_prefix)
-        };
-
-        // Alt+F6 等组合热键在主键 down 时就触发；修饰键从不吞键，此时 Alt
-        // 仍按着。立刻开框/打字会变成 Alt+Enter，游戏里看不到消息，注入却成功。
-        let modifier_result = self.wait_for_modifiers_up(orch, &token).await;
-        let modifiers_failed = modifier_result.is_err() && !token.is_cancelled();
-        let result = match modifier_result {
-            Err(error) => {
-                // 准备阶段也走下面唯一的发送收尾出口，清理操作权并保留 ReadyText。
-                drop(completion);
-                Err(error)
-            }
-            Ok(()) => {
-                self.execute_send(orch, completion, token, target, wire_text, wire_profile)
-                    .await
-            }
-        };
+        // ADR-008 频道（发送时刻读取）和频道前缀、按前台挑游戏配置、Alt+F6 这类组合热键触发时修饰键还按着
+        // （立刻开框会变成 Alt+Enter）……都在入口里。用户原文（预览 / 历史 / 重试）不带频道前缀。
+        let result = self
+            .execute_send(orch, completion, token, target, text.clone(), channel)
+            .await;
 
         let (history_write, resume_continuous) = {
             let _op = orch.lock_op().await;
@@ -367,15 +294,7 @@ impl VoiceInput {
                         "injection_failed",
                         json!({
                             "outcome": "error",
-                            "errorCode": if modifiers_failed {
-                                "MODIFIERS_STILL_DOWN"
-                            } else if e.input_blocked {
-                                "INJECTION_BLOCKED"
-                            } else if e.needs_elevation {
-                                "INJECTION_ELEVATION_REQUIRED"
-                            } else {
-                                "INJECTION_FAILED"
-                            },
+                            "errorCode": e.code,
                             "durationMs": injection_started_at.elapsed().as_millis() as u64
                         }),
                     );
@@ -397,14 +316,43 @@ impl VoiceInput {
     }
 }
 
-/// ADR-008 发送频道解析（纯函数，可单测）：频道选择与当前 profile 不符
-/// （用户切了游戏适配，旧频道残留）时回落默认频道；否则按选择解析策略。
-pub(crate) fn resolve_send_strategy(
-    profile: &GameProfile,
-    channel: &Option<(String, String)>,
-) -> profile::ChannelStrategy {
-    match channel {
-        Some((pid, cid)) if *pid == profile.id => profile.channel_strategy(Some(cid)),
-        _ => profile.channel_strategy(None),
+/// 没发出去：给悬浮窗的话、过程日志的错误码、提权 / 被拦截的信号（前端据此弹窗引导排查）。
+pub(crate) struct SendFailure {
+    message: String,
+    code: &'static str,
+    needs_elevation: bool,
+    input_blocked: bool,
+}
+
+impl SendFailure {
+    fn plain(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: "INJECTION_FAILED",
+            needs_elevation: false,
+            input_blocked: false,
+        }
+    }
+}
+
+impl From<ChatFailure> for SendFailure {
+    fn from(failure: ChatFailure) -> Self {
+        let (needs_elevation, input_blocked) = match &failure {
+            ChatFailure::Inject(e) => (e.needs_elevation, e.input_blocked),
+            _ => (false, false),
+        };
+        let code = match &failure {
+            ChatFailure::ModifiersHeld => "MODIFIERS_STILL_DOWN",
+            ChatFailure::Busy(_) => "INPUT_BUSY",
+            _ if input_blocked => "INJECTION_BLOCKED",
+            _ if needs_elevation => "INJECTION_ELEVATION_REQUIRED",
+            _ => "INJECTION_FAILED",
+        };
+        Self {
+            message: failure.to_string(),
+            code,
+            needs_elevation,
+            input_blocked,
+        }
     }
 }

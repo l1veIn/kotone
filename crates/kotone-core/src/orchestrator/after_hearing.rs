@@ -357,12 +357,9 @@ impl Orchestrator {
         &self.emitter
     }
 
-    pub fn injector(&self) -> &Arc<dyn Injector> {
-        &self.injector
-    }
-
-    pub fn focus(&self) -> &Arc<dyn FocusBackend> {
-        &self.focus
+    /// 发到游戏的入口（ADR 041）：语音输入往游戏里打字只经它（拿不到注入器，绕不开那一把输入锁）。
+    pub fn send_to_game(&self) -> &Arc<dyn SendToGame> {
+        &self.send_to_game
     }
 
     /// 配置仓库（桌面壳注入；命令行 / 测试没有）。

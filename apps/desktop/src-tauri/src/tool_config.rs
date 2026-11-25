@@ -312,14 +312,33 @@ fn settings_error(message: String) -> HostError {
     }
 }
 
+/// 同 [`invoke_until`]，没有期限（按键的工具用入口自己的默认截止时间）。
 pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
+    invoke_until(app, tool, args, None).await
+}
+
+/// 执行一个工具服务委托给宿主的工具。`deadline` 是工具服务按 `timeoutMs` 算的期限：往游戏里按键的工具
+/// （`game_chat.send`、`companion.type`）据此在期限前返回真实结果，不会“报超时其实发了”（ADR 041）。
+pub async fn invoke_until(
+    app: &AppHandle,
+    tool: &str,
+    args: Value,
+    deadline: Option<std::time::Instant>,
+) -> HostResult {
     // 本体用 ToolSpec 登记的工具（ADR 039 D2：game_chat.send）：外部 Agent、MCP 经工具服务调到这里，
     // 和琴音调的是同一个实现，执行记录的发起方记成 tool-service；结果的样子和插件的工具一样
     if kotone_agent::body::owns(tool) {
-        return crate::companion::body_tool(app, tool, &args, "tool-service")
-            .await
-            .map(|result| result.to_service_json())
-            .map_err(HostError::Failed);
+        return crate::game_chat::body_tool(
+            app,
+            tool,
+            &args,
+            "tool-service",
+            kotone_core::send_to_game::Speaker::Agent,
+            deadline,
+        )
+        .await
+        .map(|result| result.to_service_json())
+        .map_err(HostError::Failed);
     }
     // 插件的工具（ADR 038）：外部 Agent、MCP 经工具服务调到这里，结果照 MCP（content / structuredContent / _meta.ui）
     if crate::plugins::owner(tool).is_some() {
@@ -846,7 +865,15 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                     .companion
                     .auto_send
             });
-            Ok(crate::companion::type_text(app, &text, send).await?)
+            // 旧工具：就是“往游戏聊天里发一句”（开聊天框键、发送键），经同一个入口（ADR 041 D1），只收一行
+            Ok(crate::game_chat::type_into_chat(
+                app,
+                &text,
+                send,
+                kotone_core::send_to_game::Speaker::Agent,
+                deadline,
+            )
+            .await?)
         }
         c::TOOL_COMPANION_CHECK => {
             let _: NoArgs = parse(tool, args)?;

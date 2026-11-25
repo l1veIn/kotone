@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
+use kotone_core::input_lock::{InputGuard, InputUser};
 use kotone_core::reminders::DeliveryKind;
+use kotone_core::send_to_game::{ChannelPick, ChatRequest, SendToGame, Speaker};
 use kotone_platform_windows::inject;
 use kotone_script::{
     Cancel, KeyAction, MouseAction, MouseButton, Pixels, Region, ScriptHost, TextLine,
@@ -67,6 +69,14 @@ impl DesktopHost {
             height: f64::from(ch) / f64::from(h),
         };
         (crop, origin)
+    }
+
+    /// 一把输入锁（ADR 041 D4）：每一下按键、打字、点击各拿一次，不和发到游戏的字、`game.act` 交错。
+    /// 松开（`key_up` / `mouse_up` / 结束时全部松开）不拿锁，永远不会因为排队卡住一个按着的键。
+    fn input(&self) -> Result<InputGuard, String> {
+        crate::game_chat::input_lock(&self.app)
+            .acquire_for(InputUser::Program)
+            .map_err(|busy| busy.to_string())
     }
 
     fn screen_point(&self, x: f64, y: f64) -> Result<(i32, i32), String> {
@@ -140,14 +150,41 @@ impl ScriptHost for DesktopHost {
 
     fn key(&self, action: KeyAction, key: &str) -> Result<(), String> {
         match action {
-            KeyAction::Press => inject::key_down_up(key).map_err(|e| e.message),
-            KeyAction::Down => self.session.key_down(key),
+            KeyAction::Press => {
+                let _input = self.input()?;
+                inject::key_down_up(key).map_err(|e| e.message)
+            }
+            KeyAction::Down => {
+                let _input = self.input()?;
+                self.session.key_down(key)
+            }
             KeyAction::Up => self.session.key_up(key),
         }
     }
 
     fn type_text(&self, text: &str) -> Result<(), String> {
+        let _input = self.input()?;
         inject::send_unicode(text).map_err(|e| e.message)
+    }
+
+    /// 经本体的“发到游戏”入口（ADR 041 D1）：游戏配置的聊天键和频道、等修饰键、排队都在入口里。
+    fn chat(&self, text: &str, channel: Option<&str>) -> Result<(), String> {
+        let mut request = ChatRequest::new(text, Speaker::Automation);
+        request.channel = channel.map(|id| ChannelPick {
+            id: id.to_string(),
+            for_game: None,
+        });
+        let outcome = crate::game_chat::entry(&self.app)
+            .send(request)
+            .map_err(|failure| failure.to_string())?;
+        match outcome.stopped {
+            None => Ok(()),
+            Some(stopped) => Err(format!(
+                "发了 {} 行，后面 {} 行没发：{stopped}",
+                outcome.sent_lines,
+                outcome.lines.len() - outcome.sent_lines
+            )),
+        }
     }
 
     fn brightness(&self, region: Region) -> Result<f64, String> {
@@ -195,6 +232,10 @@ impl ScriptHost for DesktopHost {
 
     fn mouse(&self, action: MouseAction) -> Result<(), String> {
         let err = |e: kotone_core::inject::InjectError| e.message;
+        let _input = match action {
+            MouseAction::Up(_) => None,
+            _ => Some(self.input()?),
+        };
         match action {
             MouseAction::Move { x, y } => {
                 let (px, py) = self.screen_point(x, y)?;

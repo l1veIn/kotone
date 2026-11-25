@@ -734,12 +734,6 @@ export async function cancelSession(): Promise<void> {
   return;
 }
 
-/** 手动触发发送（调试/测试用） */
-export async function simulateSend(text: string, profileId?: string): Promise<void> {
-  console.info(`[mock] simulate_send: "${text}" (profile: ${profileId ?? "generic"})`);
-  return;
-}
-
 // ---------- 提权（UIPI 方案） ----------
 
 /** 导出 profile 热词到 UTF-8 文本（每行一词条），返回条数 */

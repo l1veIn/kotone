@@ -6,6 +6,7 @@
 //! 模块即端口边界：
 //! - `audio`：AudioBackend 端口 + AudioHandle/AudioDevice
 //! - `inject`：Injector/FocusBackend/SendOps 端口 + 发送时序编排（send_sequence）
+//! - `send_to_game` / `input_lock`：发到游戏的唯一入口（ADR 041）和一把输入锁（实例由宿主建）
 //! - `hotkey`：HotkeySource 端口 + 键名解析/匹配状态机（纯逻辑）
 //! - `postprocess`：TextProcessor/ProcessorFactory 端口 + 注册表 + 有序 pipeline runner
 //! - `stt`：SttEngine/SttSession 端口 + EngineRegistry 容器（引擎实例由 kotone-stt 注入）
@@ -24,6 +25,7 @@ pub mod games;
 pub mod history;
 pub mod hotkey;
 pub mod inject;
+pub mod input_lock;
 pub mod interaction;
 pub mod log;
 pub mod model_catalog;
@@ -34,6 +36,7 @@ pub mod process_log;
 pub mod profile;
 pub mod reminders;
 pub mod runtime;
+pub mod send_to_game;
 pub mod settings;
 pub mod settings_guide;
 pub mod speech;
