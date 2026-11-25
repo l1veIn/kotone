@@ -39,8 +39,8 @@ use relay::*;
 pub use subagents::*;
 pub use turn::*;
 use voice::*;
-pub use when_free::{post_notice, resume_held_cards};
 use when_free::*;
+pub use when_free::{post_notice, resume_held_cards};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
