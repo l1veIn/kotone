@@ -36,6 +36,25 @@ async fn anonymous_search_stream_and_qr() {
     assert!(qr.content.contains("codekey="));
 }
 
+/// 登录过期（ADR 043 D11）：存着一个不管用的登录凭据时，网易云真的回“没有账号”（不是网络错误），插件当成过期、推“登录过期”。
+#[tokio::test]
+#[ignore = "talks to music.163.com"]
+async fn a_stale_login_reads_as_expired() {
+    use kotone_plugin_music::login_push::expired_account;
+    use kotone_plugin_music::SessionStore;
+    let store = Arc::new(MemorySessionStore::default());
+    // 假的、早就失效的登录凭据（不是谁的真凭据）
+    store.save(r#"{"cookies":{"MUSIC_U":"00stale0kotone0test0cookie00"}}"#);
+    let provider = NeteaseProvider::new(store);
+    let started = std::time::Instant::now();
+    let account = provider.account().await;
+    println!(
+        "account with a stale login: {account:?} ({} ms: asked music.163.com)",
+        started.elapsed().as_millis()
+    );
+    assert!(expired_account(true, &account), "{account:?}");
+}
+
 /// 真的出声（很小声，几秒）：搜歌直接放、跳转、暂停、停。
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "talks to music.163.com and plays sound"]

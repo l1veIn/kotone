@@ -61,9 +61,10 @@
   };
   // i18n-ignore-end
   const targetOptions = $derived(targets.map((value) => ({ value, label: TARGET_LABELS[value]?.() ?? value })));
+  // 气泡在前：2026-11-26 起默认气泡（悬浮窗的一行，ADR 043 D11）
   const displayOptions = $derived([
-    { value: "danmaku", label: m.plugin_interpreter_display_danmaku() },
     { value: "bubble", label: m.plugin_interpreter_display_bubble() },
+    { value: "danmaku", label: m.plugin_interpreter_display_danmaku() },
   ]);
 
   async function refresh() {
@@ -148,11 +149,11 @@
             </div>
           {/snippet}
         </SettingsRow>
-        <SettingsRow label={m.plugin_interpreter_display_label()}>
+        <SettingsRow label={m.plugin_interpreter_display_label()} description={m.plugin_interpreter_display_desc()}>
           {#snippet control()}
             <div class="w-56 max-w-full">
               <SelectField ariaLabel={m.plugin_interpreter_display_label()} testid="interpreter-display" value={config.display} options={displayOptions}
-                onchange={(display) => void save({ display: display === "bubble" ? "bubble" : "danmaku" })} />
+                onchange={(display) => void save({ display: display === "danmaku" ? "danmaku" : "bubble" })} />
             </div>
           {/snippet}
         </SettingsRow>

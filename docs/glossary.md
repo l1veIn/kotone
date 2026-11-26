@@ -46,12 +46,12 @@
 | 回答方式 | 她的回答和提醒用 语音 / 弹幕 / 两种都用 | `提醒方式`、`播报方式`、`回复方式` | `assistant.defaultDelivery` | reply mode (voice / floating text) |
 | 声音 / 语音合成 | 她的声音（音色、语速、音量）；“语音合成”只用在模型分类上 | `TTS`、`朗读` | `tts*`、`SpeechOutput` | voice / text-to-speech |
 | 语音识别 | 把说的话变成字（本地 / 在线）。只有一份，在本体：呼叫、语音输入、同传都用它，同一个模型只加载一份（ADR 039 D2）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` | speech recognition |
-| 同传 | 插件（ADR 021、038）：她在后台听你指定的程序（游戏、Discord、KOOK……，按程序录音）里队友说的话——不是你的麦克风，也录不到她自己——一句一句翻成你的语言，用弹幕或气泡显示。识别用本体的语音识别：你选的识别听得懂外语（自动判语种的在线识别，或本地 SenseVoice）就用它，否则用本地 SenseVoice（中英日韩粤）；用在线识别时队友的每一句都会发给它识别、每句计费。停止本地语音识别时，用本地识别的同传一起停（ADR 039 实施记录“同传用本体的识别”） | | `plugins/interpreter`、`voice.listen.*`、`voice_listen.rs`、`kotone_stt::listen` | interpreter |
+| 同传 | 插件（ADR 021、038）：她在后台听你指定的程序（游戏、Discord、KOOK……，按程序录音）里队友说的话——不是你的麦克风，也录不到她自己——一句一句翻成你的语言，用气泡（默认，悬浮窗里一行）或弹幕显示，并记进聊天里一局一张的“这局的同传”卡片（推送，ADR 043 D11）。识别用本体的语音识别：你选的识别听得懂外语（自动判语种的在线识别，或本地 SenseVoice）就用它，否则用本地 SenseVoice（中英日韩粤）；用在线识别时队友的每一句都会发给它识别、每句计费。停止本地语音识别时，用本地识别的同传一起停（ADR 039 实施记录“同传用本体的识别”） | | `plugins/interpreter`、`voice.listen.*`、`voice_listen.rs`、`kotone_stt::listen` | interpreter |
 | 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` | conversation (聊天 = chat) |
 | 自动化 | 替你持续或稍后做事；动作是“说一句”或“程序” | `脚本` | `automation.*` | automation |
 | 网易云音乐 | 放歌插件的名字（ADR 034、038；2026-11-25 起，以前叫“音乐”）：从左侧栏“插件”的卡片点开，搜歌、每日推荐、私人 FM、我的歌单、播放条。插件 id、配置（`plugins.music`）、她的工具名还是 `music`。“音乐”只说放歌这件事本身（音乐音量、她说话时音乐压低） | | `plugins/music`、`MusicPage` | NetEase Cloud Music |
 | 放歌 / 正在放 | Kotone 自己放歌（不用浏览器）：你在网易云音乐的页面里点，或者她用 `music` 工具放；“正在放”是播放条和左侧栏小播放条上的那首 | | `music`、`Player` | play music / Now playing |
-| 登录网易云音乐 | 点“登录网易云音乐”打开网易云官方登录页的窗口，用网易云音乐 App 扫码；第一次放歌要登录一次，登录信息交给 Windows 保管。她要放歌而你没登录时，聊天页出这个按钮（她不自己弹窗，免得游戏里抢焦点） | | `music_login_start`、`login.stage = needed` | Log in to NetEase Cloud Music |
+| 登录网易云音乐 | 点“登录网易云音乐”打开网易云官方登录页的窗口，用网易云音乐 App 扫码；第一次放歌要登录一次，登录信息交给 Windows 保管。她要放歌而你没登录时，聊天页出这个按钮（她不自己弹窗，免得游戏里抢焦点）；登录过期了（以前登录过、网易云说要重新登录），聊天里来一张“登录过期”卡片带这个按钮，登好了原地变成“已登录”（推送，ADR 043 D11） | | `music_login_start`、`login.stage = needed` | Log in to NetEase Cloud Music |
 | 每日推荐 / 私人 FM | 网易云按你的口味每天给的一组歌 / 一首接一首的电台 | | `daily`、`fm` | Daily picks / Personal FM |
 | 我喜欢的音乐 / 红心 | 网易云里你红心过的歌（歌单里排第一）；红心 = 把这首加进去 | | `liked`、`like` | Liked songs / Like |
 | 歌单 / 播放列表 | 歌单是网易云里的一组歌；播放列表是正在放的这一串 | | `Playlist`、`queue` | playlist / queue |

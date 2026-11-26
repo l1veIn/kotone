@@ -132,7 +132,7 @@ const lol: PluginManifest = {
   })),
 };
 
-// 游戏语音（ADR 020、038 第 4 步）：工具名沿用 voice_chat.*，默认关
+// 游戏语音（ADR 020、038 第 4 步）：工具名沿用 voice_chat.*，默认关。推送一条（她对队友说了）、事件一件（ADR 043 D11）
 const gameVoice: PluginManifest = {
   id: "game-voice",
   name: gameVoiceZh.plugin_game_voice_name,
@@ -141,11 +141,25 @@ const gameVoice: PluginManifest = {
   adapter: null,
   enabledByDefault: false,
   sources: [],
-  pages: [{ uri: "ui://kotone/game-voice/home", title: gameVoiceZh.plugin_game_voice_name, needs: [] }],
+  pages: [
+    { uri: "ui://kotone/game-voice/home", title: gameVoiceZh.plugin_game_voice_name, needs: [] },
+    { uri: "ui://kotone/game-voice/said", title: gameVoiceZh.plugin_game_voice_push_said_title, needs: [] },
+  ],
   agent: { overview: "", rule: "" },
+  pushes: [{
+    id: "said",
+    title: gameVoiceZh.plugin_game_voice_push_said_title,
+    when: gameVoiceZh.plugin_game_voice_push_said_when,
+    what: gameVoiceZh.plugin_game_voice_push_said_what,
+    forms: ["card"],
+    priority: "normal",
+    enabledByDefault: true,
+    needs: [],
+  }],
+  events: [{ type: "game-voice.said", label: gameVoiceZh.plugin_game_voice_event_said, needs: [], data: { text: "text" } }],
 };
 
-// 放歌（ADR 034、038 第 4 步）：她的 music + 音乐页用的 music.*，默认开
+// 放歌（ADR 034、038 第 4 步）：她的 music + 音乐页用的 music.*，默认开。推送一条（登录过期，ADR 043 D11）
 const music: PluginManifest = {
   id: "music",
   name: musicZh.plugin_music_name,
@@ -154,11 +168,25 @@ const music: PluginManifest = {
   adapter: null,
   enabledByDefault: true,
   sources: [],
-  pages: [{ uri: "ui://kotone/music/home", title: musicZh.plugin_music_name, needs: [] }],
+  pages: [
+    { uri: "ui://kotone/music/home", title: musicZh.plugin_music_name, needs: [] },
+    { uri: "ui://kotone/music/login", title: musicZh.plugin_music_push_login_title, needs: [] },
+  ],
   agent: { overview: "", rule: "" },
+  pushes: [{
+    id: "login",
+    title: musicZh.plugin_music_push_login_title,
+    when: musicZh.plugin_music_push_login_when,
+    what: musicZh.plugin_music_push_login_what,
+    forms: ["card"],
+    priority: "normal",
+    enabledByDefault: true,
+    needs: [],
+  }],
 };
 
-// 同传（ADR 021、038）：工具只给页面用，默认开
+// 同传（ADR 021、038）：页面的工具只给页面用，interpreter.show 给后台；默认开。推送一条（这局的同传：卡片 + 一行）、
+// 事件一件（原话和译文只给自动化，ADR 043 D11）
 const interpreter: PluginManifest = {
   id: "interpreter",
   name: interpreterZh.plugin_interpreter_name,
@@ -167,8 +195,22 @@ const interpreter: PluginManifest = {
   adapter: null,
   enabledByDefault: true,
   sources: [],
-  pages: [{ uri: "ui://kotone/interpreter/home", title: interpreterZh.plugin_interpreter_name, needs: [] }],
+  pages: [
+    { uri: "ui://kotone/interpreter/home", title: interpreterZh.plugin_interpreter_name, needs: [] },
+    { uri: "ui://kotone/interpreter/lines", title: interpreterZh.plugin_interpreter_push_lines_title, needs: [] },
+  ],
   agent: { overview: "", rule: "" },
+  pushes: [{
+    id: "lines",
+    title: interpreterZh.plugin_interpreter_push_lines_title,
+    when: interpreterZh.plugin_interpreter_push_lines_when,
+    what: interpreterZh.plugin_interpreter_push_lines_what,
+    forms: ["card", "line"],
+    priority: "normal",
+    enabledByDefault: true,
+    needs: [],
+  }],
+  events: [{ type: "interpreter.line", label: interpreterZh.plugin_interpreter_event_line, needs: [], data: { text: "text", heard: "heard", app: "app" } }],
 };
 
 // 语音输入（ADR 038 第 5 步）：默认开；没有给她的工具（game_chat.send 是本体的，ADR 039 D2）。推送两条（发出去的话、
@@ -240,6 +282,7 @@ const TOOLS: Record<string, MockTool[]> = {
     { name: "interpreter.status", needs: [], visibility: ["app"], page: null },
     { name: "interpreter.start", needs: [], visibility: ["app"], page: null },
     { name: "interpreter.stop", needs: [], visibility: ["app"], page: null },
+    { name: "interpreter.show", needs: [], visibility: BOTH, page: null },
   ],
 };
 

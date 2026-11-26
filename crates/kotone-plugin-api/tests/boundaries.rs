@@ -103,6 +103,28 @@ fn plugins_depend_only_on_the_contract_core_and_stateless_system_calls() {
     }
 }
 
+/// 只依赖插件契约的插件（2026-11-27）：ADR 043 D1“插件要用本体的东西……只能经过宿主（`Host`）”。别的插件还直接用着
+/// `kotone-core`（日志、设置说明、语音输入的编排器……，ADR 038 D6 允许），这几个只依赖 `kotone-plugin-api`，不许倒回去
+/// （B 轮同传为了记日志、在测试里查设置说明加过一次 `kotone-core`，改成了宿主记日志、宿主那边对所有插件查设置说明）。
+const CONTRACT_ONLY: &[&str] = &["interpreter"];
+
+#[test]
+fn contract_only_plugins_depend_on_nothing_else_of_kotone() {
+    let all = plugins();
+    for name in CONTRACT_ONLY {
+        let (_, table) = all
+            .iter()
+            .find(|(dir, _)| dir == name)
+            .unwrap_or_else(|| panic!("没有插件 {name}"));
+        for dep in dependencies(table) {
+            assert!(
+                !dep.starts_with("kotone-") || dep == "kotone-plugin-api",
+                "插件 {name} 依赖了 {dep}：它只用插件契约，本体的东西经宿主（ADR 043 D1）"
+            );
+        }
+    }
+}
+
 /// 全进程只有一份的东西：低级钩子（Esc、呼叫键）、输入闸门。插件的源码里不出现，要用就经宿主。
 const PROCESS_GLOBAL: &[&str] = &["hotkey_ll", "input_gate", "SetWindowsHookEx"];
 

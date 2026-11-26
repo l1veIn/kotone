@@ -210,6 +210,18 @@ impl DesktopHost {
     }
 }
 
+/// 现在在玩的游戏（[`Host::playing_game`]）：在跑的游戏里窗口在前台的那个；没有在前台的、只有一个在跑时就是它。
+fn playing_of(states: &[kotone_core::games::GameState]) -> Option<kotone_plugin_api::Playing> {
+    let state = states
+        .iter()
+        .find(|s| s.focused)
+        .or_else(|| (states.len() == 1).then(|| &states[0]))?;
+    Some(kotone_plugin_api::Playing {
+        game: state.game.clone(),
+        match_id: state.match_id.clone(),
+    })
+}
+
 /// 谁调了插件的工具 → 插件经入口发话时算谁在发（入口按它判前台规矩、记占用者）。页面调的不算：玩家点页面时
 /// Kotone 在前台，插件不该借页面往游戏里发话。
 fn speaker_of(caller: Caller<'_>) -> Option<kotone_core::send_to_game::Speaker> {
@@ -287,6 +299,10 @@ impl Host for DesktopHost {
             return;
         }
         crate::games::push(&self.app, game, kind, source, data, game_time);
+    }
+
+    fn playing_game(&self) -> Option<kotone_plugin_api::Playing> {
+        playing_of(&crate::games::states())
     }
 
     fn app_version(&self) -> String {
@@ -408,8 +424,15 @@ impl Host for DesktopHost {
             return Ok(kotone_plugin_api::PushOutcome::Off);
         }
         let push = push.shaped(spec);
-        push.check(&self.manifest)?;
-        crate::agent::post_push(&self.app, &self.id, &self.manifest.name, spec, push)
+        let key = push.key.clone();
+        let posted = push.check(&self.manifest).and_then(|()| {
+            crate::agent::post_push(&self.app, &self.id, &self.manifest.name, spec, push)
+        });
+        // 没推出去的宿主记一笔（插件不用自己记日志：它们只依赖插件契约）
+        if let Err(e) = &posted {
+            kotone_core::log::log(&format!("push: {} {key} 没推出去：{e}", self.id));
+        }
+        posted
     }
 
     /// 推送结束了（例如三选一的卡片从屏幕上消失）：悬浮窗收起那一行，聊天里的记录留着。只认清单里有的推送。
@@ -903,6 +926,37 @@ pub fn list(app: &AppHandle) -> Value {
 mod tests {
     use super::*;
 
+    /// 同传、游戏语音报事件、按局分卡片时问“现在在玩哪个游戏”：前台的那个；都不在前台时只有一个在跑才算。
+    #[test]
+    fn the_playing_game_is_the_focused_one_or_the_only_one() {
+        use kotone_core::games::{GameState, Phase};
+        let state = |game: &str, focused: bool, match_id: &str| GameState {
+            game: game.into(),
+            phase: Phase::InMatch,
+            native_phase: String::new(),
+            match_id: match_id.into(),
+            since: 0,
+            started: 0,
+            match_started: None,
+            focused,
+            attrs: Default::default(),
+        };
+        assert_eq!(playing_of(&[]), None);
+        let only = playing_of(&[state("pubg", false, "")]).unwrap();
+        assert_eq!((only.game.as_str(), only.match_id.as_str()), ("pubg", ""));
+        let two = [state("pubg", false, ""), state("lol", true, "m3")];
+        let front = playing_of(&two).unwrap();
+        assert_eq!(
+            (front.game.as_str(), front.match_id.as_str()),
+            ("lol", "m3")
+        );
+        assert_eq!(
+            playing_of(&[state("pubg", false, ""), state("lol", false, "m3")]),
+            None,
+            "两个都在跑、都不在前台：不知道是哪个"
+        );
+    }
+
     /// 插件经入口发话（ADR 041 第 3 期）照调它的人的规矩：她、外部 Agent、热键；页面调的不能发。
     #[test]
     fn plugins_speak_for_whoever_called_their_tool() {
@@ -993,6 +1047,29 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// 每个插件的每条内置推送，她的设置说明（`plugins.*`）里都写着开关：`pushes.<id> <名字>`（她照说明替玩家开关，
+    /// 改了清单忘了改说明她就不知道）。插件只依赖插件契约，所以在宿主这里对所有插件一起查。
+    #[test]
+    fn every_push_switch_is_in_her_settings_guide() {
+        let guide = kotone_core::settings_guide::FIELDS
+            .iter()
+            .find(|f| f.path == "plugins.*")
+            .expect("设置说明里要有 plugins.*")
+            .description;
+        for p in registry() {
+            let m = p.manifest();
+            assert!(
+                guide.contains(&format!("{}（{}", m.id, m.name)),
+                "设置说明里没有插件 {}",
+                m.id
+            );
+            for push in &m.pushes {
+                let path = format!("pushes.{} {}", push.id, push.title);
+                assert!(guide.contains(&path), "设置说明里没有 {} 的 {path}", m.id);
+            }
+        }
     }
 
     #[test]

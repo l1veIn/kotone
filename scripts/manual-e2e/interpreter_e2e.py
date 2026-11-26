@@ -2,7 +2,9 @@
 
 琴音 (mock AI, scripted by mock_interpreter.py) hands “帮我盯着队友” to a background task with `agent.start`; the
 background task starts listening to kotone-speaker.exe (a renamed copy of powershell.exe that this script uses to
-play an English sentence, at SAPI volume 40); the background task must receive the recognised sentence and show a (mock) translation as danmaku;
+play an English sentence, at SAPI volume 40); the background task must receive the recognised sentence and show a (mock) translation
+with interpreter.show (ADR 043 D11), which pushes it: the main conversation gets one “这局的同传” card with the line (and the
+floating window's bubble shows it; not checked here);
 “停止同传” must stop it (`agent.stop`) together with its listener. Then the same through the interpreter plugin's page
 (ADR 038 step 4): “开始” says the sentence for the player (it shows in the chat), she hands it to the background; “停下”
 says “停止同传”.
@@ -192,15 +194,36 @@ def main():
                 if m.get("role") == "user" and m.get("source") == "heard":
                     data = " ".join(a.get("text", "") for a in m.get("attachments", []))
                     said = [t for x in msgs[i + 1:] if x["role"] == "assistant" for t in x.get("toolCalls", [])
-                            if t["name"] == "danmaku"]
+                            if t["name"] in ("interpreter.show", "danmaku")]
                     if ("enemy" in data.lower() or "house" in data.lower()) and said:
                         return data, said
             return None
         got = wait_until(heard, 90)
         sentence, said = got or ("", [])
         check("recognised the English sentence", got, sentence)
-        check("translation shown as danmaku (the danmaku tool in the background)", said,
+        check("translation shown with interpreter.show (the plugin's tool in the background)",
+              said and said[0]["name"] == "interpreter.show",
               json.loads(said[0]["arguments"]).get("text", "")[:80] if said else "")
+
+        # 推送（ADR 043 D11）：主对话里一张“这局的同传”卡片，卡片里是那一句（译文、原话、在听的程序）
+        def lines_card():
+            conv = invoke("agent_conversation", {"id": main_id}).get("ok") or {}
+            pushes = [m.get("push") for m in conv.get("messages", []) if m.get("role") == "notice" and m.get("push")]
+            return [p for p in pushes if p.get("plugin") == "interpreter" and p.get("trigger") == "lines"]
+        cards = wait_until(lines_card, 30) or []
+        data = ((cards[0].get("card") or {}).get("structuredContent") or {}) if cards else {}
+        first = (data.get("lines") or [{}])[0]
+        check("one “这局的同传” card in the main conversation", len(cards) == 1 and cards[0].get("title") == "这局的同传",
+              f"{len(cards)} card(s)")
+        check("the card has the translated line, what was heard and the program",
+              first.get("text", "").startswith("（译）") and first.get("app") == SPEAKER and first.get("heard"),
+              json.dumps(first, ensure_ascii=False)[:160])
+        check("the push's line is the translation (the floating window's bubble)",
+              cards and ((cards[0].get("line") or {}).get("cells") or [{}])[0].get("text", "").startswith("（译）"),
+              json.dumps((cards[0].get("line") if cards else None), ensure_ascii=False)[:120])
+        check("no note for her (strangers' words stay out of her main conversation)",
+              not any("这局的同传" in (m.get("text") or "") for m in (invoke("agent_conversation", {"id": main_id}).get("ok") or {})
+                      .get("messages", []) if m.get("role") == "user" and m.get("source") == "auto-card"))
         card_now = card() or {}
         check("still running after its first round (it keeps listening)", card_now.get("status") == "running",
               card_now.get("status"))

@@ -43,5 +43,11 @@
   "plugin_game_voice_tool_test": "Test game voice chat",
   "plugin_game_voice_section_title": "Talk to teammates for you",
   "plugin_game_voice_off_note": "Turn it on to install the virtual microphone, pick your microphone and try it here. You can also ask her to set it up for you.",
-  "plugin_game_voice_saved": "Saved"
+  "plugin_game_voice_saved": "Saved",
+  "plugin_game_voice_push_said_title": "She told your teammates",
+  "plugin_game_voice_push_said_when": "She said something to your teammates through game voice for you; sentences within 2 minutes of the last one share a card",
+  "plugin_game_voice_push_said_what": "Posts a card with what she said to your teammates, one sentence per line",
+  "plugin_game_voice_event_said": "She said something to your teammates",
+  "plugin_game_voice_card_said_to": "She said to your teammates in game voice:",
+  "plugin_game_voice_card_empty": "Game voice pushes in the chat open here."
 }

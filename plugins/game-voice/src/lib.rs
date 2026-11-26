@@ -3,7 +3,8 @@
 //! - [`voice_chat`]：开关、状态、安装 VB-CABLE、切 Windows 默认麦克风、说一句、自检（原来桌面端的 `voice_chat.rs`）；
 //! - [`router`]：真麦克风 + 她的语音 → CABLE Input 的转发与混音（原来系统适配层的 `voice_router`）；
 //! - [`cable`]：VB-CABLE 的检测、静默安装、Windows 默认录音设备（原来系统适配层的 `voice_chat`）；
-//! - [`config`]：插件自己的设置（原来 config.json 的 `voiceChat` 段）。
+//! - [`config`]：插件自己的设置（原来 config.json 的 `voiceChat` 段）；
+//! - [`pushes`]：她对队友说了一句 → 推送“她对队友说了”、事件 `game-voice.said`（ADR 043 D11）。
 //!
 //! 插件开着 = 转发开着。合成她的声音、在玩家的扬声器上说、改自己的设置都经宿主（[`Host`]）。
 
@@ -14,6 +15,7 @@ use serde_json::{json, Value};
 
 pub mod cable;
 pub mod config;
+pub mod pushes;
 pub mod router;
 pub mod voice_chat;
 
@@ -177,6 +179,36 @@ mod tests {
         assert!(m.agent.rule.ends_with('\n') && !m.agent.rule.contains('\\'));
     }
 
+    /// ADR 043 D11：推送“她对队友说了”是卡片、默认开（插件本身默认关）、不要数据开关，卡片的页面在清单里；事件以插件 id
+    /// 开头（没有游戏适配器）、挂在所有游戏上；她的设置说明里写着这条推送的开关在哪。
+    #[test]
+    fn the_push_and_the_event_are_declared() {
+        use crate::pushes::{event_kind, EVENT_SAID, PAGE_SAID, PUSH_SAID, TITLE_SAID};
+        use kotone_plugin_api::PushForm;
+        let m = manifest();
+        let spec = m.push_spec(PUSH_SAID).expect("清单里要有推送 said");
+        assert_eq!(spec.title, TITLE_SAID);
+        assert_eq!(spec.forms, [PushForm::Card]);
+        assert!(spec.enabled_by_default && spec.needs.is_empty());
+        assert!(m.page(PAGE_SAID).is_some());
+        assert!(m.adapter.is_none());
+        let catalog =
+            kotone_plugin_api::event_catalog([m], &kotone_core::settings::Settings::default());
+        let entry = catalog.get(&event_kind(EVENT_SAID)).unwrap();
+        assert!(entry.spec.data.contains_key("text"));
+        assert!(entry.spec.private.is_empty(), "她自己说的话：她本来就知道");
+        let guide = kotone_core::settings_guide::FIELDS
+            .iter()
+            .find(|f| f.path == "plugins.*")
+            .unwrap()
+            .description;
+        for push in &m.pushes {
+            let path = format!("pushes.{} {}", push.id, push.title);
+            assert!(guide.contains(&path), "设置说明里没有 {path}");
+        }
+        assert!(guide.contains("插件 → 游戏语音 → 设置 → 推送"));
+    }
+
     #[test]
     fn messages_match_the_manifest() {
         let zh: serde_json::Map<String, Value> =
@@ -186,6 +218,23 @@ mod tests {
         let m = manifest();
         assert_eq!(zh["plugin_game_voice_name"], m.name.as_str());
         assert_eq!(zh["plugin_game_voice_description"], m.description.as_str());
+        // 推送的名字 / 时机 / 做什么、事件的名字（插件页「设置 → 推送」、自动化里的事件）：界面文字和清单里的一样
+        for push in &m.pushes {
+            let id = push.id.replace('-', "_");
+            for (part, want) in [
+                ("title", &push.title),
+                ("when", &push.when),
+                ("what", &push.what),
+            ] {
+                let key = format!("plugin_game_voice_push_{id}_{part}");
+                assert_eq!(zh[&key], want.as_str(), "{key}");
+            }
+        }
+        for event in &m.events {
+            let name = event.kind.rsplit('.').next().unwrap();
+            let key = format!("plugin_game_voice_event_{name}");
+            assert_eq!(zh[&key], event.label.as_str(), "{key}");
+        }
         for key in zh.keys() {
             assert!(key.starts_with("plugin_game_voice_"), "{key}");
             assert!(en.contains_key(key), "en 缺 {key}");

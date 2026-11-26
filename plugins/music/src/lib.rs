@@ -12,6 +12,7 @@
 
 pub mod app;
 mod cache;
+pub mod login_push;
 pub mod netease;
 mod player;
 pub mod qr;
@@ -422,6 +423,29 @@ mod tests {
         assert!(m.agent.rule.contains("music") && m.agent.rule.ends_with('\n'));
     }
 
+    /// ADR 043 D11：只有一条推送“登录过期”，是卡片、默认开、不要数据开关，卡片的页面在清单里；她的设置说明里写着它的
+    /// 开关在哪。
+    #[test]
+    fn the_login_push_is_declared() {
+        use crate::login_push::{PAGE_LOGIN, PUSH_LOGIN, TITLE_LOGIN};
+        let m = manifest();
+        assert_eq!(m.pushes.len(), 1, "只做必要的");
+        let spec = m.push_spec(PUSH_LOGIN).expect("清单里要有推送 login");
+        assert_eq!(spec.title, TITLE_LOGIN);
+        assert_eq!(spec.forms, [kotone_plugin_api::PushForm::Card]);
+        assert!(spec.enabled_by_default && spec.needs.is_empty());
+        assert!(m.page(PAGE_LOGIN).is_some());
+        assert!(m.events.is_empty());
+        let guide = kotone_core::settings_guide::FIELDS
+            .iter()
+            .find(|f| f.path == "plugins.*")
+            .unwrap()
+            .description;
+        let path = format!("pushes.{} {}", spec.id, spec.title);
+        assert!(guide.contains(&path), "设置说明里没有 {path}");
+        assert!(guide.contains("插件 → 网易云音乐 → 设置 → 推送"));
+    }
+
     #[test]
     fn messages_match_the_manifest() {
         let zh: serde_json::Map<String, serde_json::Value> =
@@ -431,6 +455,18 @@ mod tests {
         let m = manifest();
         assert_eq!(zh["plugin_music_name"], m.name.as_str());
         assert_eq!(zh["plugin_music_description"], m.description.as_str());
+        // 推送的名字 / 时机 / 做什么（插件页「设置 → 推送」）：界面文字和清单里的一样
+        for push in &m.pushes {
+            let id = push.id.replace('-', "_");
+            for (part, want) in [
+                ("title", &push.title),
+                ("when", &push.when),
+                ("what", &push.what),
+            ] {
+                let key = format!("plugin_music_push_{id}_{part}");
+                assert_eq!(zh[&key], want.as_str(), "{key}");
+            }
+        }
         for key in zh.keys() {
             assert!(key.starts_with("plugin_music_"), "{key}");
             assert!(en.contains_key(key), "en 缺 {key}");

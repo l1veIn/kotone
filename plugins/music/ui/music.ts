@@ -8,6 +8,14 @@ import { m } from "$lib/paraglide/messages.js";
 
 export const PLUGIN_ID = "music";
 export const PAGE_HOME = "ui://kotone/music/home";
+/** 推送“登录过期”的卡片（ADR 043 D11，后端 plugins/music/src/login_push.rs）。 */
+export const PAGE_LOGIN = "ui://kotone/music/login";
+
+/** “登录过期”卡片里的数据：expired 过期了、等你登录；done 登好了（带昵称）。 */
+export interface LoginCardData {
+  stage: "expired" | "done";
+  nickname?: string;
+}
 /** 插件事件：音乐的状态变了（在放的时候约每秒一次）。 */
 export const STATE_EVENT = "state";
 

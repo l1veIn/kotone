@@ -75,5 +75,12 @@
   "plugin_music_now_playing": "正在放：{name}",
   "plugin_music_open_page": "打开网易云音乐",
   "plugin_music_tool_music": "放歌",
-  "plugin_music_off_note": "打开后她能放网易云的歌（搜歌、每日推荐、我喜欢的、私人 FM、你的歌单），左侧栏也会出现在放的歌。"
+  "plugin_music_off_note": "打开后她能放网易云的歌（搜歌、每日推荐、我喜欢的、私人 FM、你的歌单），左侧栏也会出现在放的歌。",
+  "plugin_music_push_login_title": "登录过期",
+  "plugin_music_push_login_when": "网易云音乐的登录过期了（以前登录过，网易云说要重新登录）",
+  "plugin_music_push_login_what": "发一张卡片，上面有“登录网易云音乐”按钮（打开网易云官方的登录页，用网易云音乐 App 扫码）；登好了这张卡片原地变成“已登录”",
+  "plugin_music_card_expired": "网易云音乐的登录过期了：重新登录以后才能放整首歌、每日推荐和你的歌单。",
+  "plugin_music_card_done": "已登录网易云音乐",
+  "plugin_music_card_done_named": "已登录网易云音乐：{nickname}",
+  "plugin_music_card_empty": "聊天里网易云音乐的推送点开就是这里。"
 }

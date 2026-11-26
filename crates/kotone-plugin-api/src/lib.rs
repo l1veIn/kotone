@@ -701,6 +701,15 @@ pub trait Plugin: Send + Sync + 'static {
     }
 }
 
+/// 游戏中心里现在在玩的那个游戏（[`Host::playing_game`]）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Playing {
+    /// 游戏配置 id（报事件时用它）。
+    pub game: String,
+    /// 这一局的编号（游戏中心起的，一局里不变）；不在一局里、或者这个游戏分不出局（只看进程的游戏）时为空。
+    pub match_id: String,
+}
+
 /// 宿主交给插件的本体能力（ADR 038 D5）。每个插件拿到的是自己那一份（设置、目录按插件 id 分开）。
 pub trait Host: Send + Sync {
     /// 这份宿主属于哪个插件。
@@ -820,6 +829,11 @@ pub trait Host: Send + Sync {
         data: Map<String, Value>,
         game_time: Option<f64>,
     );
+    /// 游戏中心里现在在玩的游戏：在跑的游戏里窗口在前台的那个；没有在前台的、只有一个在跑时就是它；都不是 = None。
+    /// 不是游戏插件、自己不知道是哪个游戏的插件（同传、游戏语音）报事件（[`Host::game_event`]）、按局分卡片时用。
+    fn playing_game(&self) -> Option<Playing> {
+        None
+    }
     /// 给插件自己的页面发事件（界面上是 `kotone://plugin` 事件，带 `plugin`、`event`、`payload`）。
     fn emit(&self, event: &str, payload: Value) {
         let _ = (event, payload);

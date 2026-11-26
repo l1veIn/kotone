@@ -12,6 +12,27 @@ enabled_by_default = false
 uri = "ui://kotone/game-voice/home"
 title = "游戏语音"
 
+# 推送的卡片（ADR 043 D11）：聊天里的卡片和点开以后右侧栏里的样子，数据见 src/pushes.rs
+[[pages]]
+uri = "ui://kotone/game-voice/said"
+title = "她对队友说了"
+
+# 内置推送（ADR 043 D4、D11）：插件页「设置 → 推送」里一个开关，宿主执行。和语音输入的“发出去的话”对称：凡是以你的名义
+# 对队友说的话，聊天里都留一条。不给她留说明（是她自己说的）。
+[[pushes]]
+id = "said"
+title = "她对队友说了"
+when = "她用游戏语音替你对队友说了一句；上一句说完后 2 分钟内的并进同一张"
+what = "发一张卡片：她对队友说了什么，一句一行"
+forms = ["card"]
+
+# 事件（ADR 043 D11）：给自动化用。不是游戏插件、没有适配器，名字以插件 id 开头；报到现在在玩的游戏上（游戏中心里
+# 有在玩的游戏时才报）。
+[[events]]
+type = "game-voice.said"
+label = "她对队友说了一句"
+data.text = "她说的话"
+
 [agent]
 overview = "用虚拟麦克风替玩家在游戏语音里对队友说话"
 rule = """- speak 是说给玩家自己听的；要让**队友**在游戏语音里听到，用 voice_chat.say（只说玩家让你说的话，简短）。\

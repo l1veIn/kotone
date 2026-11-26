@@ -36,27 +36,28 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await expect(listening).toHaveText("没在听");
   await expect(pluginPage.getByTestId("interpreter-app")).toHaveAttribute("placeholder", "现在的游戏");
   await expect(pluginPage.getByTestId("interpreter-target")).toContainText("中文");
-  await expect(pluginPage.getByTestId("interpreter-display")).toContainText("弹幕");
+  // 2026-11-26 起默认气泡（悬浮窗里一行，ADR 043 D11）
+  await expect(pluginPage.getByTestId("interpreter-display")).toContainText("气泡");
   await expect(pluginPage.getByTestId("interpreter-note")).toContainText("停止同传");
 
-  // 听 Discord、译成日语、用气泡：写进插件自己的设置
+  // 听 Discord、译成日语、用弹幕：写进插件自己的设置
   await pluginPage.getByTestId("interpreter-app").fill("Discord.exe");
   await pluginPage.getByTestId("interpreter-app").press("Enter");
   await pluginPage.getByTestId("interpreter-target").click();
   await page.getByRole("option", { name: "日语" }).click();
   await expect(pluginPage.getByTestId("interpreter-target")).toContainText("日语");
   await pluginPage.getByTestId("interpreter-display").click();
-  await page.getByRole("option", { name: "气泡" }).click();
-  await expect(pluginPage.getByTestId("interpreter-display")).toContainText("气泡");
+  await page.getByRole("option", { name: "弹幕" }).click();
+  await expect(pluginPage.getByTestId("interpreter-display")).toContainText("弹幕");
   await expect.poll(async () => (await settings(page)).plugins?.interpreter?.settings).toEqual({
     app: "Discord.exe",
     target: "日语",
-    display: "bubble",
+    display: "danmaku",
   });
 
   // 开始：替你对她说那句话，她的耳朵在听 Discord
   await pluginPage.getByTestId("interpreter-start").click();
-  await expect(page.getByText("帮我盯着队友说的话，当同传：听 Discord.exe，每句外语翻成日语，用气泡显示。")).toBeVisible();
+  await expect(page.getByText("帮我盯着队友说的话，当同传：听 Discord.exe，每句外语翻成日语，用弹幕显示。")).toBeVisible();
   await expect(listening).toHaveText("正在听：Discord.exe");
   await screenshot(page, { path: shot(testInfo, "interpreter-page") });
 
@@ -73,7 +74,7 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await expect(pluginPage.getByTestId("interpreter-start")).toHaveCount(0);
   await expect.poll(async () => (await settings(page)).plugins?.interpreter).toMatchObject({
     enabled: false,
-    settings: { app: "Discord.exe", target: "日语", display: "bubble" },
+    settings: { app: "Discord.exe", target: "日语", display: "danmaku" },
   });
 });
 
@@ -86,7 +87,7 @@ test("empty program means the current game, and her ui.open lands on the interpr
   const pluginPage = page.getByTestId("plugin-page-interpreter");
   await expect(pluginPage).toBeVisible();
   await pluginPage.getByTestId("interpreter-start").click();
-  await expect(page.getByText("帮我盯着队友说的话，当同传：听 现在的游戏，每句外语翻成中文，用弹幕显示。")).toBeVisible();
+  await expect(page.getByText("帮我盯着队友说的话，当同传：听 现在的游戏，每句外语翻成中文，用气泡显示。")).toBeVisible();
   await expect(pluginPage.getByTestId("interpreter-listening")).toHaveText("正在听：TslGame.exe");
 
   // 她打开插件的页面：玩家正在插件页，不切过去（共享资源评估第二节第 6 条）；点提示上的“打开”在聊天页的右侧栏打开

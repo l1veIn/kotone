@@ -1,9 +1,10 @@
 # 同传插件（ADR 021、038）：页面上设好听哪个程序、译成什么、怎么显示，点“开始”就等于你对她说了这句话，
 # 她照 ADR 021 的做法交给后台去听、去翻。耳朵（voice.listen）和后台是本体的。清单的写法见 crates/kotone-plugin-api。
+# 后台每翻好一句调 interpreter.show：插件把这一句推送出去（悬浮窗的气泡一行 + 聊天里“这局的同传”卡片，ADR 043 D11）。
 
 id = "interpreter"
 name = "同传"
-description = "队友说外语时，她在后台听游戏或语音软件的声音，一句一句翻成你的语言，用弹幕或气泡显示"
+description = "队友说外语时，她在后台听游戏或语音软件的声音，一句一句翻成你的语言，用气泡或弹幕显示"
 # 同传以前一直能用（叫她就行），所以默认开
 enabled_by_default = true
 
@@ -11,9 +12,36 @@ enabled_by_default = true
 uri = "ui://kotone/interpreter/home"
 title = "同传"
 
+# 推送的卡片（ADR 043 D11）：聊天里的卡片和点开以后右侧栏里的样子，数据见 src/pushes.rs
+[[pages]]
+uri = "ui://kotone/interpreter/lines"
+title = "这局的同传"
+
+# 内置推送（ADR 043 D4、D11）：插件页「设置 → 推送」里一个开关，宿主执行。一局一张卡片，每翻好一句原地加一行；
+# 选了气泡时这一句同时显示在悬浮窗的气泡里（一行），选了弹幕时只进卡片（屏幕上用弹幕）。
+# 不给她留说明：同传是她自己交给后台的，要紧的话后台会告诉她；队友说的话（别人的话）不进她的主对话（ADR 021）。
+[[pushes]]
+id = "lines"
+title = "这局的同传"
+when = "同传翻好一句；同一局的都在一张卡片里（分不出局时，上一句翻好后 10 分钟内的、没有重新点开始的并进同一张）"
+what = "在悬浮窗的气泡里显示这一句译文（选了弹幕时不显示）；聊天里“这局的同传”卡片加上这一句：原话和译文，新的在下面"
+forms = ["card", "line"]
+
+# 事件（ADR 043 D11）：给自动化用。不是游戏插件、没有适配器，名字以插件 id 开头；报到现在在玩的游戏上（游戏中心里
+# 有在玩的游戏时才报）。原话和译文是队友（别人）说的：只交给自动化，她在 game.state 里只看到“听到一句”（private）。
+[[events]]
+type = "interpreter.line"
+label = "同传翻好一句"
+data.text = "译文"
+data.heard = "听到的原话"
+data.app = "在听的程序（进程名，例如 Discord.exe）"
+private = ["text", "heard"]
+
 [agent]
 overview = "当同传：在后台听队友的语音，翻成玩家的语言显示出来"
 rule = """- 同传（玩家说“帮我盯着队友说的话”“帮我翻译队友”，或同传插件的页面替玩家这样说）：交给后台（agent.start，name 用 tongchuan，label 写“同传”），\
 任务里写清：先 voice.listen.start 听哪个程序（玩家说了就用那个，没说就是现在的游戏）；每听到一句不是目标语言的话就翻成目标语言（玩家没说就是中文），\
-用 danmaku 显示（玩家要气泡就写“用气泡”）；队友在叫玩家、问玩家时要汇报。玩家说“停止同传 / 别翻了”时 agent.stop tongchuan。\n\
+用 interpreter.show 显示（text 写译文，heard 写原话，app 写听的程序；它显示在悬浮窗的气泡里、记进聊天里“这局的同传”卡片）；\
+玩家要弹幕（“用弹幕”）时同一步里再用 danmaku 显示同一句，interpreter.show 返回 shown=false 时也改用 danmaku；队友在叫玩家、问玩家时要汇报。\
+玩家说“停止同传 / 别翻了”时 agent.stop tongchuan。\n\
 """

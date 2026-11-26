@@ -6,7 +6,9 @@ main        "帮我盯着队友"  -> agent.start(name=interpreter, label=同传)
 main        "停止同传"      -> agent.stop(interpreter) -> final "已经停了"
 main        other           -> final "收到"
 background  task            -> voice.listen.start(app = MOCK_LISTEN_APP) -> final "开始听了，翻译会显示成弹幕"
-background  heard sentence  -> danmaku("（译）<text>")  (the background cannot speak) -> final "好的"
+background  heard sentence  -> interpreter.show({text: "（译）<text>", heard, app}) when the interpreter plugin offers it (ADR 043
+                               D11: the plugin pushes the line and the “这局的同传” card), else danmaku("（译）<text>")
+                               (the background cannot speak) -> final "好的"
 background  “监听……停了” note (voice_listen.rs, e.g. local recognition stopped) -> final "同传停了"
 POST …/tools/asr (DeepSeek speech recognition, multipart) -> {"text": MOCK_ASR_TEXT} (default "Enemy behind the red house.")
 
@@ -52,7 +54,11 @@ def plan(body):
         elif "（听到" in user:
             heard = re.findall(r"KOTONE_DATA（[^）]*）\n(.*?)\nKOTONE_DATA", user, re.S)
             said = heard[-1].strip() if heard else user[-80:]
-            steps = [("danmaku", {"text": "（译）" + said[:200]})]
+            offered = {t.get("function", {}).get("name") for t in body.get("tools", []) if isinstance(t, dict)}
+            if "interpreter_show" in offered:
+                steps = [("interpreter.show", {"text": "（译）" + said[:200], "heard": said[:200], "app": APP})]
+            else:
+                steps = [("danmaku", {"text": "（译）" + said[:200]})]
             final = "好的"
         else:
             steps = [("voice.listen.start", {"app": APP})]

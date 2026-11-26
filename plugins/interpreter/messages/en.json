@@ -1,6 +1,6 @@
 {
   "plugin_interpreter_name": "Interpreter",
-  "plugin_interpreter_description": "When teammates speak another language, she listens to the game or voice app in the background and shows each sentence translated into your language as danmaku or a bubble",
+  "plugin_interpreter_description": "When teammates speak another language, she listens to the game or voice app in the background and shows each sentence translated into your language as a bubble or floating text",
   "plugin_interpreter_off_note": "Once it's on, set which program to listen to, the language and how to show it here; click Start and she listens to your teammates in the background and translates each sentence for you.",
   "plugin_interpreter_section_title": "Understand your teammates",
   "plugin_interpreter_app_label": "Program to listen to",
@@ -27,5 +27,16 @@
   "plugin_interpreter_recognizer_missing": "Not available yet",
   "plugin_interpreter_recognizer_local_note": "Uses Kotone's speech recognition: the one you chose if it understands foreign languages, otherwise SenseVoice on this PC (Chinese, English, Japanese, Korean, Cantonese). Your teammates' voices stay on this PC. Stopping local speech recognition stops interpreting too.",
   "plugin_interpreter_recognizer_online_note": "Uses the online recognition you chose: every sentence your teammates say is sent to it and billed per sentence (shown in usage).",
-  "plugin_interpreter_recognizer_open_models": "Change in Settings → Models"
+  "plugin_interpreter_recognizer_open_models": "Change in Settings → Models",
+  "plugin_interpreter_display_desc": "Bubble: one line next to her avatar in the floating window; floating text: drifts from right to left. Both are kept in the chat in the “This game's interpreting” card.",
+  "plugin_interpreter_push_lines_title": "This game's interpreting",
+  "plugin_interpreter_push_lines_when": "The interpreter translates a sentence; one card per game (when games can't be told apart: sentences within 10 minutes of the last one, without pressing Start again, share a card)",
+  "plugin_interpreter_push_lines_what": "Shows the translation in the floating window's bubble (not when you chose floating text); adds the sentence to the “This game's interpreting” card in the chat: what was heard and the translation, newest last",
+  "plugin_interpreter_event_line": "The interpreter translated a sentence",
+  "plugin_interpreter_card_summary": "{count} sentences · into {target}",
+  "plugin_interpreter_card_summary_more": "{count} sentences · into {target} · the latest {shown} here",
+  "plugin_interpreter_card_heard": "Heard: {text}",
+  "plugin_interpreter_card_heard_in": "Heard ({app}): {text}",
+  "plugin_interpreter_card_empty": "Interpreter pushes in the chat open here.",
+  "plugin_interpreter_tool_show": "Show an interpreted sentence"
 }

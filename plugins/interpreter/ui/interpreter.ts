@@ -9,7 +9,18 @@ import { settingsStore } from "$lib/stores/ui";
 
 export const PLUGIN_ID = "interpreter";
 export const PAGE_HOME = "ui://kotone/interpreter/home";
+/** 推送“这局的同传”的卡片（ADR 043 D11，后端 plugins/interpreter/src/pushes.rs）。 */
+export const PAGE_LINES = "ui://kotone/interpreter/lines";
 
+/** “这局的同传”卡片里的数据：一局一张，lines 只留最近的几句，total 是一共几句。 */
+export interface LinesCardData {
+  target: string;
+  startedAtMs: number;
+  total: number;
+  lines: { text: string; heard?: string; app?: string; atMs: number }[];
+}
+
+/** 气泡 = 悬浮窗里她头像旁边的一行（推送的一行）；弹幕 = 从右往左飘的字。 */
 export type InterpreterDisplay = "danmaku" | "bubble";
 
 export interface InterpreterStatus {
@@ -30,14 +41,14 @@ export interface InterpreterPrefs {
   display: InterpreterDisplay;
 }
 
-/** 设置里现在的偏好；语言不在 `targets` 里时按第一个（和后端一样）。 */
+/** 设置里现在的偏好；语言不在 `targets` 里时按第一个（和后端一样）。没存过怎么显示时是气泡（2026-11-26 起）。 */
 export function interpreterPrefs(settings: Settings | null | undefined, targets: string[]): InterpreterPrefs {
   const raw = (settings?.plugins?.[PLUGIN_ID]?.settings ?? {}) as Record<string, unknown>;
   const target = typeof raw.target === "string" ? raw.target.trim() : "";
   return {
     app: typeof raw.app === "string" ? raw.app : "",
     target: targets.includes(target) ? target : (targets[0] ?? ""),
-    display: raw.display === "bubble" ? "bubble" : "danmaku",
+    display: raw.display === "danmaku" ? "danmaku" : "bubble",
   };
 }
 

@@ -10,6 +10,8 @@ would hear as the microphone) and on the player's own speakers (WASAPI loopback,
 words (`assistant::speak_in_turn`): it must not be dropped ("voice chat: local playback failed" absent), and when her
 `speak` in the same step was already talking, the copy waits for it ("插件的话排在她后面放" in the log) instead of
 both playing at once; the turn must not stall (the tool does not wait for the copy). Prints those log lines.
+2026-11-26 (ADR 043 D11): what she said to the teammates also leaves a record in the chat — one push card “她对队友说了”
+(game-voice plugin, trigger `said`) with that sentence in the conversation, and no note for her.
 Runs a copy of target/debug/kotone.exe (target/voicechat-e2e/bin/), so it is not mistaken for the player's `pnpm dev`.
 Plays sound on the default speakers: exits when a game is running.
 usage: python -X utf8 -I scripts/manual-e2e/voice_chat_real.py
@@ -132,6 +134,23 @@ def main():
         names = [n for n, _ in calls]
         ack = "speak" in names and "voice_chat.say" in names and names.index("voice_chat.say") < names.index("speak")
         passed &= check("she spoke to teammates, then told the player (speak)", ack)
+        # 推送（ADR 043 D11）：聊天里一张“她对队友说了”，里面是她说的那句；不给她留说明（她自己说的）
+        said_text = next((json.loads(a).get("text", "") for n, a in calls if n == "voice_chat.say"), "")
+        deadline = time.time() + 15
+        cards = []
+        while time.time() < deadline:
+            messages = [m for path in glob.glob(os.path.join(HOME, "agent", "conversations", "*.json"))
+                        for m in json.load(open(path, encoding="utf-8")).get("messages", [])]
+            cards = [m["push"] for m in messages if m.get("role") == "notice" and (m.get("push") or {}).get("plugin") == "game-voice"]
+            if cards:
+                break
+            time.sleep(1)
+        lines = [line.get("text") for c in cards for line in ((c.get("card") or {}).get("structuredContent") or {}).get("lines", [])]
+        passed &= check("one 她对队友说了 card in the chat with that sentence",
+                        len(cards) == 1 and cards[0].get("trigger") == "said" and cards[0].get("title") == "她对队友说了"
+                        and said_text and said_text in lines, f"{len(cards)} card(s), lines {lines}")
+        notes = [m for m in messages if m.get("role") == "user" and m.get("source") == "auto-card"]
+        passed &= check("no note for her about it", not notes, f"{len(notes)} note(s)")
         cable = result.get("cable", [])
         loud = [i / 2 for i, p in enumerate(cable) if p > 0.05]
         passed &= check("the teammates' side (CABLE Output) carried her voice", loud,

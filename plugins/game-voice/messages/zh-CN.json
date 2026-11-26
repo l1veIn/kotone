@@ -43,5 +43,11 @@
   "plugin_game_voice_tool_test": "测试游戏语音",
   "plugin_game_voice_section_title": "替你跟队友说话",
   "plugin_game_voice_off_note": "打开以后，在这里安装虚拟麦克风、选你的麦克风、试一下。也可以直接让她帮你设。",
-  "plugin_game_voice_saved": "已保存"
+  "plugin_game_voice_saved": "已保存",
+  "plugin_game_voice_push_said_title": "她对队友说了",
+  "plugin_game_voice_push_said_when": "她用游戏语音替你对队友说了一句；上一句说完后 2 分钟内的并进同一张",
+  "plugin_game_voice_push_said_what": "发一张卡片：她对队友说了什么，一句一行",
+  "plugin_game_voice_event_said": "她对队友说了一句",
+  "plugin_game_voice_card_said_to": "她在游戏语音里对队友说了：",
+  "plugin_game_voice_card_empty": "聊天里游戏语音的推送点开就是这里。"
 }

@@ -75,5 +75,12 @@
   "plugin_music_now_playing": "Now playing: {name}",
   "plugin_music_open_page": "Open NetEase Cloud Music",
   "plugin_music_tool_music": "Play music",
-  "plugin_music_off_note": "Turn it on and she can play NetEase Cloud Music (search, daily picks, liked songs, personal FM, your playlists); what is playing also shows in the left sidebar."
+  "plugin_music_off_note": "Turn it on and she can play NetEase Cloud Music (search, daily picks, liked songs, personal FM, your playlists); what is playing also shows in the left sidebar.",
+  "plugin_music_push_login_title": "Login expired",
+  "plugin_music_push_login_when": "Your NetEase Cloud Music login expired (you logged in before and NetEase asks you to log in again)",
+  "plugin_music_push_login_what": "Posts a card with a “Log in to NetEase Cloud Music” button (opens NetEase's official login page; scan with the NetEase Cloud Music app); once you're in, the card turns into “Logged in” in place",
+  "plugin_music_card_expired": "Your NetEase Cloud Music login expired: log in again to play full songs, daily picks and your playlists.",
+  "plugin_music_card_done": "Logged in to NetEase Cloud Music",
+  "plugin_music_card_done_named": "Logged in to NetEase Cloud Music: {nickname}",
+  "plugin_music_card_empty": "NetEase Cloud Music pushes in the chat open here."
 }

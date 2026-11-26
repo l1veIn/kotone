@@ -26,7 +26,7 @@ async function prefs(): Promise<{ app: string; target: string; bubble: boolean }
   return {
     app: text("app").slice(0, 64),
     target: TARGETS.includes(target) ? target : TARGETS[0],
-    bubble: raw.display === "bubble",
+    bubble: raw.display !== "danmaku",
   };
 }
 

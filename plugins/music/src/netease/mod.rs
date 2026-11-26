@@ -75,8 +75,17 @@ impl NeteaseProvider {
         }
     }
 
-    fn logged_in(&self) -> bool {
+    /// 存着登录凭据（MUSIC_U）：登录过。凭据可能已经过期了（网易云说没登录），见 [`NeteaseProvider::expire`]。
+    pub(crate) fn logged_in(&self) -> bool {
         self.session.lock().unwrap().logged_in()
+    }
+
+    /// 网易云说登录过期了（存着的登录凭据不管用了）：忘掉缓存的账号和结果，之后当没登录；凭据先留着（下次启动再问一次，
+    /// 重新登录时换掉）。
+    pub(crate) fn expire(&self) {
+        *self.account.lock().unwrap() = Some(None);
+        self.cache.clear();
+        *self.liked_ids.lock().unwrap() = None;
     }
 
     fn persist(&self) {

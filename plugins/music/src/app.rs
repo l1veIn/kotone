@@ -4,7 +4,8 @@
 //! - 音乐页用只给页面的 `music.*` 工具，她用 `music`，一次调用就出声；
 //! - 状态一变就发插件事件 `state`（在放的时候约每秒一次），音乐页、左侧栏的小播放条、聊天页的登录卡片都听它；
 //! - 登录用网易云官网的登录页（宿主开的无痕窗口），登录凭据存 Windows 凭据库（宿主的 secret，名字没变）；
-//! - 她出声时（边生成边念的回答、应答、提醒）音乐压低到 25%，说完恢复（D7）。
+//! - 她出声时（边生成边念的回答、应答、提醒）音乐压低到 25%，说完恢复（D7）；
+//! - 登录过期了（以前登录过、网易云说要重新登录）推一张“登录过期”卡片，登好了原地变成“已登录”（[`crate::login_push`]）。
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,6 +14,7 @@ use kotone_core::log;
 use kotone_plugin_api::Host;
 use serde_json::{json, Value};
 
+use crate::login_push::{expired_account, lost_login, LoginPush};
 use crate::{
     Account, MusicError, MusicProvider, NeteaseProvider, PlayOutcome, Player, PlayerState, Quality,
     SessionStore, Track,
@@ -129,6 +131,8 @@ pub struct Music {
     checked: Mutex<bool>,
     login: Mutex<Login>,
     login_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// 登录过期的那张卡片（ADR 043 D11）。
+    login_push: LoginPush,
     /// 上次用到播放器上的设置（设置变了才改播放器）。
     applied: Mutex<MusicSettings>,
 }
@@ -185,6 +189,7 @@ impl Music {
                     ..Login::default()
                 }),
                 login_task: Mutex::new(None),
+                login_push: LoginPush::new(host.clone()),
                 applied: Mutex::new(config),
             }
         });
@@ -205,12 +210,36 @@ impl Music {
     }
 
     async fn refresh_account(&self) {
-        match self.provider.account().await {
+        let stored = self.provider.logged_in();
+        let result = self.provider.account().await;
+        if expired_account(stored, &result) {
+            self.login_expired();
+        }
+        match result {
             Ok(account) => *self.account.lock().unwrap() = account,
             Err(error) => log::log(&format!("music: 查账号失败：{error}")),
         }
         *self.checked.lock().unwrap() = true;
         self.emit();
+    }
+
+    /// 登录过期了（以前登录过、网易云说要重新登录）：当没登录，推“登录过期”卡片（同一次过期只有一张）。
+    fn login_expired(&self) {
+        if !self.login_push.pending() {
+            log::log("music: 网易云的登录过期了");
+        }
+        *self.account.lock().unwrap() = None;
+        self.provider.expire();
+        self.login_push.expired();
+        self.emit();
+    }
+
+    /// 网易云接口出的错 → 给人看的一句；是因为登录过期了，就照 [`Music::login_expired`] 处理。
+    fn failed(&self, error: MusicError) -> String {
+        if lost_login(self.provider.logged_in(), &error) {
+            self.login_expired();
+        }
+        error.to_string()
     }
 
     /// 她出声时音乐压低（D7）：每 150 毫秒看一眼，变了才通知播放器。
@@ -331,6 +360,8 @@ impl Music {
                 match music.provider.login_with_cookies(&cookies).await {
                     Ok(account) => {
                         log::log("music: 网易云登录好了");
+                        // 登录过期的那张卡片原地变成“已登录”
+                        music.login_push.logged_in(&account);
                         *music.account.lock().unwrap() = Some(account);
                         music.host.close_web_window();
                         music.set_login("idle", None);
@@ -400,6 +431,14 @@ impl Music {
         if self.login.lock().unwrap().stage != "waiting" {
             self.set_login("needed", None);
         }
+        if self.login_push.pending() {
+            // 过期了：再推一次那张卡片（启动时还没有她的聊天、没推出去的，这时补上；推过的什么都不做）
+            self.login_push.expired();
+            return Some(json!({
+                "status": "need_login",
+                "note": "玩家的网易云登录过期了（以前登录过）：请玩家点聊天里“登录过期”卡片上的“登录网易云音乐”（或者在网易云音乐插件页面点），在弹出的网易云页面里用网易云音乐 App 扫码。登好了再放",
+            }));
+        }
         Some(json!({
             "status": "need_login",
             "note": "玩家还没登录网易云（只要登一次）：请玩家在 Kotone 的网易云音乐插件页面或聊天页点“登录网易云音乐”，在弹出的网易云页面里用网易云音乐 App 扫码。登好了再放",
@@ -413,18 +452,26 @@ impl Music {
             .provider
             .search(query, offset, 30)
             .await
-            .map_err(error_text)?;
+            .map_err(|e| self.failed(e))?;
         Ok(json!({"tracks": tracks, "hasMore": has_more}))
     }
 
     pub async fn home(&self) -> Result<Value, String> {
-        let daily = self.provider.daily().await.map_err(error_text)?;
-        let playlists = self.provider.playlists().await.map_err(error_text)?;
+        let daily = self.provider.daily().await.map_err(|e| self.failed(e))?;
+        let playlists = self
+            .provider
+            .playlists()
+            .await
+            .map_err(|e| self.failed(e))?;
         Ok(json!({"daily": daily, "playlists": playlists}))
     }
 
     pub async fn playlist(&self, id: &str) -> Result<Value, String> {
-        let (playlist, tracks) = self.provider.playlist(id).await.map_err(error_text)?;
+        let (playlist, tracks) = self
+            .provider
+            .playlist(id)
+            .await
+            .map_err(|e| self.failed(e))?;
         Ok(json!({"playlist": playlist, "tracks": tracks}))
     }
 
@@ -441,23 +488,23 @@ impl Music {
                 .player
                 .play(tracks, request.index, None)
                 .await
-                .map_err(error_text);
+                .map_err(|e| self.failed(e));
         }
         if let Some(query) = request.query.filter(|q| !q.trim().is_empty()) {
             return self
                 .player
                 .play_query(query.trim())
                 .await
-                .map_err(error_text);
+                .map_err(|e| self.failed(e));
         }
         let provider = &self.provider;
         let (tracks, source) = match request.from.as_deref() {
             Some("daily") => (
-                provider.daily().await.map_err(error_text)?,
+                provider.daily().await.map_err(|e| self.failed(e))?,
                 "每日推荐".to_string(),
             ),
             Some("liked") => (
-                provider.liked().await.map_err(error_text)?,
+                provider.liked().await.map_err(|e| self.failed(e))?,
                 "我喜欢的音乐".to_string(),
             ),
             // 私人 FM：放完这一批播放器自己要下一批
@@ -466,7 +513,7 @@ impl Music {
                     .player
                     .play_fm(Some("私人 FM".to_string()))
                     .await
-                    .map_err(error_text)
+                    .map_err(|e| self.failed(e))
             }
             Some("playlist") => {
                 let id = match (request.playlist_id, request.playlist_name) {
@@ -474,7 +521,8 @@ impl Music {
                     (None, Some(name)) => self.find_playlist(&name).await?,
                     (None, None) => return Err("放歌单要说是哪个歌单".into()),
                 };
-                let (playlist, tracks) = provider.playlist(&id).await.map_err(error_text)?;
+                let (playlist, tracks) =
+                    provider.playlist(&id).await.map_err(|e| self.failed(e))?;
                 (tracks, playlist.name)
             }
             Some(other) => return Err(format!("不认识的 from：{other}")),
@@ -492,12 +540,16 @@ impl Music {
         self.player
             .play(tracks, index, Some(source))
             .await
-            .map_err(error_text)
+            .map_err(|e| self.failed(e))
     }
 
     /// 按名字找歌单（玩家自己的和收藏的）：完全一样的优先，再找包含的。
     async fn find_playlist(&self, name: &str) -> Result<String, String> {
-        let lists = self.provider.playlists().await.map_err(error_text)?;
+        let lists = self
+            .provider
+            .playlists()
+            .await
+            .map_err(|e| self.failed(e))?;
         let want = name.trim().trim_matches(['《', '》', '“', '”', '"']);
         lists
             .iter()
@@ -539,10 +591,10 @@ impl Music {
             "toggle" => self.player.toggle(),
             "stop" => self.player.stop(),
             "next" => {
-                self.player.next().await.map_err(error_text)?;
+                self.player.next().await.map_err(|e| self.failed(e))?;
             }
             "previous" => {
-                self.player.previous().await.map_err(error_text)?;
+                self.player.previous().await.map_err(|e| self.failed(e))?;
             }
             "seek" => self.player.seek(number as u64),
             "volume" => {
@@ -556,7 +608,7 @@ impl Music {
                     return Err("现在没在放歌".into());
                 }
                 let like = value.and_then(Value::as_bool).unwrap_or(true);
-                self.player.like(like).await.map_err(error_text)?;
+                self.player.like(like).await.map_err(|e| self.failed(e))?;
             }
             other => return Err(format!("不认识的操作：{other}")),
         }
@@ -677,10 +729,6 @@ pub struct PlayRequest {
     pub playlist_id: Option<String>,
     pub playlist_name: Option<String>,
     pub query: Option<String>,
-}
-
-fn error_text(error: MusicError) -> String {
-    error.to_string()
 }
 
 fn outcome_json(outcome: &PlayOutcome) -> Value {

@@ -160,8 +160,10 @@ impl PushLine {
 }
 
 impl PushCell {
-    /// 一格最多几个字。
+    /// 一格最多几个字（分了几格的一行：三选一的“首选 / 可选 / 可刷新”）。
     pub const MAX_CHARS: usize = 12;
+    /// 只有一格的一行最多几个字：一整句话（同传翻好的一句，ADR 043 D11），气泡里显示得下两行左右。
+    pub const ONE_CELL_MAX_CHARS: usize = 40;
 }
 
 impl Push {
@@ -170,8 +172,8 @@ impl Push {
     /// 语音的一个说法最多几个字（固定的短话）。
     pub const VOICE_MAX: usize = 20;
 
-    /// 宿主收推送时先做的：只留清单里这条声明过的样子；一行最多 3 格、每格最多 12 个字（空的格去掉），语音每个说法
-    /// 最多 20 个字（空的去掉），`note` 最多 160 字。
+    /// 宿主收推送时先做的：只留清单里这条声明过的样子；一行最多 3 格、每格最多 12 个字（空的格去掉；只有一格时是一整句，
+    /// 最多 40 个字），语音每个说法最多 20 个字（空的去掉），`note` 最多 160 字。
     pub fn shaped(mut self, spec: &PushSpec) -> Self {
         let has = |form| spec.forms.contains(&form);
         if !has(PushForm::Card) {
@@ -183,8 +185,16 @@ impl Push {
                 .into_iter()
                 .filter(|c| !c.text.trim().is_empty())
                 .take(PushLine::MAX_CELLS)
+                .collect();
+            let max = if cells.len() == 1 {
+                PushCell::ONE_CELL_MAX_CHARS
+            } else {
+                PushCell::MAX_CHARS
+            };
+            let cells: Vec<PushCell> = cells
+                .into_iter()
                 .map(|c| PushCell {
-                    text: clip(&c.text, PushCell::MAX_CHARS),
+                    text: clip(&c.text, max),
                     tone: c.tone,
                 })
                 .collect();
@@ -538,6 +548,28 @@ until_done = true
         assert_eq!(push.voice[1].chars().count(), Push::VOICE_MAX);
         assert_eq!(push.note.chars().count(), Push::NOTE_MAX);
         assert!(push.check(&m).is_ok());
+
+        // 只有一格的一行是一整句（同传翻好的一句）：最多 40 个字，不按一格 12 个字截
+        let sentence = |text: &str| {
+            Push {
+                trigger: "augment-pick".into(),
+                key: "pick:2".into(),
+                line: Some(PushLine {
+                    cells: vec![cell(text, None), cell(" ", None)],
+                }),
+                ..Push::default()
+            }
+            .shaped(pick)
+            .line
+            .unwrap()
+            .cells
+        };
+        let long = "小心，他们三个人从左边的房子后面绕过来了";
+        assert_eq!(sentence(long)[0].text, long, "一句 20 个字照样显示全");
+        let cells = sentence(&"长".repeat(60));
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].text.chars().count(), PushCell::ONE_CELL_MAX_CHARS);
+        assert!(cells[0].text.ends_with('…'));
 
         // 只推了没声明的样子：什么都不剩
         let opening = m.push_spec("opening").unwrap();

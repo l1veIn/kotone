@@ -1,6 +1,6 @@
 {
   "plugin_interpreter_name": "同传",
-  "plugin_interpreter_description": "队友说外语时，她在后台听游戏或语音软件的声音，一句一句翻成你的语言，用弹幕或气泡显示",
+  "plugin_interpreter_description": "队友说外语时，她在后台听游戏或语音软件的声音，一句一句翻成你的语言，用气泡或弹幕显示",
   "plugin_interpreter_off_note": "打开以后，在这里设好听哪个程序、译成什么、怎么显示，点“开始”她就在后台听队友说话，一句一句翻给你看。",
   "plugin_interpreter_section_title": "帮你听懂队友",
   "plugin_interpreter_app_label": "听哪个程序",
@@ -27,5 +27,16 @@
   "plugin_interpreter_recognizer_missing": "还不能用",
   "plugin_interpreter_recognizer_local_note": "用本体的语音识别：你选的识别听得懂外语就用它，否则用本地的 SenseVoice（中英日韩粤）。队友的声音不出电脑。停止本地语音识别时同传也停。",
   "plugin_interpreter_recognizer_online_note": "用你选的在线识别：队友说的每一句都会发给它识别，每句计费（记在用量里）。",
-  "plugin_interpreter_recognizer_open_models": "去 设置 → 模型 换"
+  "plugin_interpreter_recognizer_open_models": "去 设置 → 模型 换",
+  "plugin_interpreter_display_desc": "气泡：悬浮窗里她头像旁边显示一行；弹幕：从右往左飘。两种都记进聊天里“这局的同传”卡片。",
+  "plugin_interpreter_push_lines_title": "这局的同传",
+  "plugin_interpreter_push_lines_when": "同传翻好一句；同一局的都在一张卡片里（分不出局时，上一句翻好后 10 分钟内的、没有重新点开始的并进同一张）",
+  "plugin_interpreter_push_lines_what": "在悬浮窗的气泡里显示这一句译文（选了弹幕时不显示）；聊天里“这局的同传”卡片加上这一句：原话和译文，新的在下面",
+  "plugin_interpreter_event_line": "同传翻好一句",
+  "plugin_interpreter_card_summary": "{count} 句 · 译成{target}",
+  "plugin_interpreter_card_summary_more": "{count} 句 · 译成{target} · 这里是最近 {shown} 句",
+  "plugin_interpreter_card_heard": "原话：{text}",
+  "plugin_interpreter_card_heard_in": "原话（{app}）：{text}",
+  "plugin_interpreter_card_empty": "聊天里同传的推送点开就是这里。",
+  "plugin_interpreter_tool_show": "显示同传的一句"
 }

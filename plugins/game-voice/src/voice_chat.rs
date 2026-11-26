@@ -6,7 +6,7 @@
 //!   SHA-256），解压到 `<KOTONE_HOME>/drivers/vbcable/`，以管理员身份运行
 //!   `VBCABLE_Setup_x64.exe -h -i`（照 Soundux 的安装脚本），等设备出现；
 //! - [`default_mic`]：把 Windows 默认麦克风设成 CABLE Output（先记下原来的），或改回；
-//! - [`say`]：一句话合成一次，送进虚拟麦克风，玩家自己也照常听到；
+//! - [`say`]：一句话合成一次，送进虚拟麦克风，玩家自己也照常听到；聊天里留一张“她对队友说了”（[`crate::pushes`]）；
 //! - [`test`]：往虚拟麦克风放 1 秒测试音，同时从 CABLE Output 录回来。
 
 use std::path::PathBuf;
@@ -52,6 +52,8 @@ pub struct VoiceChat {
     inner: Mutex<Inner>,
     /// `sync` 串行执行（打开设备要一点时间）。
     syncing: Mutex<()>,
+    /// 她对队友说的话：推送“她对队友说了”、事件 `game-voice.said`（ADR 043 D11）。
+    said: Arc<crate::pushes::SaidDesk>,
     /// 玩家这边那一遍（[`echo_to_player`]）：停下她时还在排队、正在放的都不放了。
     echoes: Mutex<CancellationToken>,
 }
@@ -388,6 +390,8 @@ pub async fn say(state: &Arc<VoiceChat>, host: Arc<dyn Host>, text: &str) -> Res
     let (samples, rate) = host.synthesize(text).await?;
     let duration_ms = router.say(&samples, rate);
     echo_to_player(state, &host, text);
+    // 以玩家的名义对队友说的话，聊天里都留一条（和语音输入“你向「队伍」发了”对称）
+    state.said.report(host.clone(), text);
     kotone_core::log::log(&format!(
         "voice chat: said {} chars to teammates",
         text.chars().count()

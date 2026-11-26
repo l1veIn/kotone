@@ -7,6 +7,13 @@ import { pluginCall } from "$lib/plugins";
 
 export const PLUGIN_ID = "game-voice";
 export const PAGE_HOME = "ui://kotone/game-voice/home";
+/** 推送“她对队友说了”的卡片（ADR 043 D11，后端 plugins/game-voice/src/pushes.rs）。 */
+export const PAGE_SAID = "ui://kotone/game-voice/said";
+
+/** “她对队友说了”卡片里的数据：上一句说完后 2 分钟内的几句，一句一行。 */
+export interface SaidCardData {
+  lines: { text: string; atMs: number }[];
+}
 
 export interface CaptureEndpoint {
   id: string;
