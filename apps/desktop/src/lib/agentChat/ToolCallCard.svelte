@@ -17,11 +17,13 @@
   import { pluginToolLabel } from "../pluginUi";
   import ThirdPartyAskActions from "./ThirdPartyAskActions.svelte";
 
-  let { tool, runActive = false, ask, onAnswer }: {
+  let { tool, runActive = false, ask, onAnswer, onOpenCard }: {
     tool: ToolView;
     runActive?: boolean;
     ask?: AgentAsk;
     onAnswer?: (askId: string, answer: Answer) => Promise<void>;
+    /** 结果卡片上面那一行：给了就交给它（悬浮窗的聊天小窗：打开 Kotone），不在右侧栏打开。 */
+    onOpenCard?: () => void;
   } = $props();
 
   let open = $state(false);
@@ -89,7 +91,7 @@
   </details>
   {#if tool.display?.ui?.uri && tool.status === "completed"}
     <!-- 插件工具的页面（ADR 038）：她那一刻看到的样子，点开在右侧栏 -->
-    <PluginCard display={tool.display} />
+    <PluginCard display={tool.display} onOpen={onOpenCard} />
   {/if}
   {#if sources.length}
     <ol class="m-0 mb-1 ml-5 flex list-none flex-col gap-0.5 p-0 text-xs" data-testid="agent-tool-sources" aria-label={m.chat_tool_card_sources()}>

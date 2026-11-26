@@ -41,6 +41,8 @@ export interface Turn {
   extraCosts?: CategoryTotals[];
   /** 推送（ADR 043；旧的自动卡片也画成它）：插件自己发进聊天的一条，单独占一轮（没有玩家的话、没有她的回答）。 */
   push?: PushRecord;
+  /** 这一轮第一条消息的时间（正在回答、还没有消息的那一轮是现在）：悬浮窗拿它分出“这一次来的”（ADR 043 D6）。 */
+  startedAtMs?: number;
 }
 
 export interface LiveState {
@@ -75,7 +77,7 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
   const turns: Turn[] = [];
   let turn: Turn | null = null;
   const start = (user: UserMessage | null, index: number, atMs: number) => {
-    turn = { id: `${index}-${atMs}`, user, blocks: [], usage: null, answerText: "", active: false, endedAtMs: null };
+    turn = { id: `${index}-${atMs}`, user, blocks: [], usage: null, answerText: "", active: false, endedAtMs: null, startedAtMs: atMs };
     turns.push(turn);
     return turn;
   };

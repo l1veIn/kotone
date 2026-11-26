@@ -2,10 +2,12 @@
   // 一轮对话：用户气泡（或自动化结果的系统行）+ 琴音的思考、回答、工具行、状态说明 + 页脚。
   // 版式参照 DeepSeek Harness 的消息流（MessageItem / UserMessageBubble，MIT）：用户消息是右侧
   // 圆角气泡，回答不加气泡，过程是一行一行的“流程行”。Kotone 自己的实现。
+  // 悬浮窗的聊天小窗（ADR 043 D6）也画它：`compact` 去掉每一轮上面她的小头像和名字（悬浮窗角上就是她的头像）和下面的
+  // 页脚（复制、时间、用量），间距紧一点；小窗里没有右侧栏，卡片上面那一行交给 `onOpenPush` / `onOpenCard`（打开 Kotone）。
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
   import { ChevronRight, Info, Volume2, Zap } from "@lucide/svelte";
-  import { movedTaskName, sourceLabel, type AgentAsk, type Answer } from "../agent";
+  import { movedTaskName, sourceLabel, type AgentAsk, type Answer, type PushRecord } from "../agent";
   import MessageMarkdown from "./markdown/MessageMarkdown.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolCallCard from "./ToolCallCard.svelte";
@@ -18,10 +20,16 @@
   import { avatarLetter, customAvatar, roleFaces } from "../stores/avatar";
   import { settingsStore } from "../stores/ui";
 
-  let { turn, askFor, onAnswer }: {
+  let { turn, askFor, onAnswer, compact = false, onOpenPush, onOpenCard }: {
     turn: Turn;
     askFor: (callId: string) => AgentAsk | undefined;
     onAnswer: (askId: string, answer: Answer) => Promise<void>;
+    /** 悬浮窗的聊天小窗：不画每一轮上面的小头像和名字、不画页脚，间距紧一点。 */
+    compact?: boolean;
+    /** 给了就交给它（悬浮窗：打开 Kotone、定位到这条推送），不在右侧栏打开。 */
+    onOpenPush?: (push: PushRecord) => void;
+    /** 工具结果的卡片：给了就交给它（悬浮窗：打开 Kotone）。 */
+    onOpenCard?: () => void;
   } = $props();
 
   // 后台做完的事交回来的那条（ADR 029）：卡片已经更新，不显示这条，只显示她接着说的话。
@@ -44,10 +52,11 @@
   }
 </script>
 
-<section class="space-y-3" data-turn-anchor={turn.id} data-testid="agent-turn" data-turn-active={turn.active}>
+<section class={compact ? "space-y-2" : "space-y-3"} data-turn-anchor={turn.id} data-testid="agent-turn" data-turn-active={turn.active}>
   {#if turn.push}
+    {@const push = turn.push}
     <!-- 推送（ADR 043 D3）：插件自己发来的，单独一轮 -->
-    <PushItem push={turn.push} atMs={turn.endedAtMs ?? 0} />
+    <PushItem {push} atMs={turn.endedAtMs ?? 0} onOpen={onOpenPush ? () => onOpenPush(push) : undefined} />
   {/if}
   {#if user && system}
     <details class="group/system min-w-0 text-[13px] text-muted-foreground" data-testid="agent-system-message">
@@ -79,10 +88,12 @@
 
   {#if turn.blocks.length || turn.active}
     <div class="min-w-0 space-y-1.5">
-      <div class="flex items-center gap-2 pb-0.5 text-xs text-muted-foreground" aria-hidden="true">
-        <KotoneAvatar size={20} mood="speaking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} animate={turn.active} />
-        <span class="font-medium text-foreground/80">{$companionName}</span>
-      </div>
+      {#if !compact}
+        <div class="flex items-center gap-2 pb-0.5 text-xs text-muted-foreground" aria-hidden="true">
+          <KotoneAvatar size={20} mood="speaking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} animate={turn.active} />
+          <span class="font-medium text-foreground/80">{$companionName}</span>
+        </div>
+      {/if}
       {#each turn.blocks as block (block.key)}
         {#if block.kind === "thinking"}
           <ThinkingBlock text={block.text} streaming={block.streaming} />
@@ -102,7 +113,7 @@
           <!-- 交给后台的事；主会话里超过 3 秒转到后台的工具也显示成同一种卡片（ADR 029 §一） -->
           <BackgroundTaskCard tool={block.tool} runActive={turn.active} />
         {:else if block.kind === "tool"}
-          <ToolCallCard tool={block.tool} runActive={turn.active} ask={askFor(block.tool.call.id)} {onAnswer} />
+          <ToolCallCard tool={block.tool} runActive={turn.active} ask={askFor(block.tool.call.id)} {onAnswer} {onOpenCard} />
         {:else if block.kind === "recap"}
           <div class="my-1 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2" data-testid="agent-recap">
             <p class="m-0 flex items-center gap-2 text-[13px] font-medium text-foreground"><Info class="size-3.5 shrink-0 text-primary" />{block.text}</p>
@@ -120,7 +131,7 @@
       {#if waiting}
         <p class="m-0 flex h-7 items-center text-[13px] text-muted-foreground" role="status"><span class="kotone-shimmer">{m.chat_turn_thinking({ name: $companionName })}</span></p>
       {/if}
-      {#if !turn.active}<TurnFooter copyText={turn.answerText} endedAtMs={turn.endedAtMs} usage={turn.usage} extraCosts={turn.extraCosts ?? []} />{/if}
+      {#if !turn.active && !compact}<TurnFooter copyText={turn.answerText} endedAtMs={turn.endedAtMs} usage={turn.usage} extraCosts={turn.extraCosts ?? []} />{/if}
     </div>
   {/if}
 </section>

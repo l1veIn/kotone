@@ -149,7 +149,7 @@
   "companion_bubble_offset_custom": "自定义（{offset}）",
   "companion_bubble_preview_failed": "预览失败：{error}",
   "companion_bubble_title": "悬浮窗",
-  "companion_bubble_desc": "游戏所在屏幕上的一个小窗。平时是一行气泡：她在听、在想、在说什么，或插件推送的一行；插件推送卡片时弹出小窗，里面就是聊天里的推送，往回翻看更早的。它不抢游戏的焦点，可以关（×）、可以拖，拖到哪里下次就从哪里出现；鼠标停在上面时不收起。游戏独占全屏时显示不出来。",
+  "companion_bubble_desc": "游戏所在屏幕上的一个小窗，角上是她的头像。简单的一句（她在听、在想、说了一句短话，插件推送的一行）是头像旁边的气泡；复杂的（卡片、她用了工具、长回答、同时来了几条）是聊天小窗，里面就是聊天里这段对话最近的几条，往回翻看更早的。头像外面那一圈走完就收起，鼠标停在上面时停住。它不抢游戏的焦点，可以关（×）、可以拖，拖到哪里下次就从哪里出现。游戏独占全屏时显示不出来。",
   "companion_bubble_enabled_label": "显示悬浮窗",
   "companion_bubble_enabled_desc": "关掉后只用声音和弹幕回答你，推送照样记进聊天；不会借用语音输入的输入条。",
   "companion_bubble_enabled_on": "悬浮窗已开启",
@@ -476,7 +476,7 @@
   "companion_workspace_revert": "还原",
   "companion_saving": "保存中…",
   "companion_pushes_popup_label": "推送时弹出小窗",
-  "companion_pushes_popup_desc": "插件推送卡片时弹出小窗、定位到那张卡片（插件提醒再看一次的更新也弹）；点卡片上面那一行打开聊天。鼠标移开 8 秒后收起，Kotone 窗口在前台时不弹。推送都记进聊天，每条在插件页的「设置 → 推送」里单独开关。",
+  "companion_pushes_popup_desc": "插件推送卡片时弹出聊天小窗、定位到那张卡片（插件提醒再看一次的更新也弹）；点卡片上面那一行打开聊天。没有新消息 10 秒后收起（鼠标停在上面时不收），Kotone 窗口在前台时不弹。推送都记进聊天，每条在插件页的「设置 → 推送」里单独开关。",
   "companion_pushes_popup_on": "推送时弹出小窗已开启",
   "companion_pushes_popup_off": "推送时弹出小窗已关闭"
 }

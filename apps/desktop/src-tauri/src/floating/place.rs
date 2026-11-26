@@ -75,6 +75,26 @@ pub fn at(position: FloatingPosition, area: Rect, size: (i32, i32)) -> Rect {
     Rect::at(left, top, size)
 }
 
+/// 窗口里挡鼠标的那几块（物理像素，相对窗口左上角）：界面报的几块（头像、气泡 / 聊天小窗，逻辑像素、相对整块内容的左上角，
+/// 已经带上了阴影那一圈）按缩放换成物理像素，裁到窗口 `size` 里，空的不要。窗口就是整块内容那么大，所以“相对内容”就是
+/// “相对窗口”。别的地方（聊天小窗旁边、头像上面那一条）是透明的，窗口只留这几块（`SetWindowRgn`），点得到下面的游戏。
+/// 没报（旧界面、界面还没量）或者一块都没有 → `None`：整个窗口都挡（原来的样子）。
+pub fn hit_rects(boxes: &[[f64; 4]], scale: f64, size: (i32, i32)) -> Option<Vec<Rect>> {
+    let px = |logical: f64| (logical * scale).round() as i32;
+    let rects: Vec<Rect> = boxes
+        .iter()
+        .filter(|b| b.iter().all(|v| v.is_finite()))
+        .map(|&[x, y, w, h]| Rect {
+            left: px(x).clamp(0, size.0),
+            top: px(y).clamp(0, size.1),
+            right: px(x + w).clamp(0, size.0),
+            bottom: px(y + h).clamp(0, size.1),
+        })
+        .filter(|r| r.right > r.left && r.bottom > r.top)
+        .collect();
+    (!rects.is_empty()).then_some(rects)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +198,45 @@ mod tests {
         };
         let r = at(wild, SECOND, (360, 93));
         assert_eq!((r.right, r.bottom), (SECOND.right, SECOND.bottom));
+    }
+
+    /// 挡鼠标的几块：聊天小窗（高）+ 右下角的头像，150% 缩放；头像上面那一条不在里面（点得到下面的游戏）；出了窗口的裁掉，
+    /// 空的、坏的不要；一块都没有就是整个窗口。
+    #[test]
+    fn only_the_avatar_and_the_box_beside_it_take_the_mouse() {
+        // 整块 448 × 420（逻辑）：小窗 [0, 0, 376, 420]，头像 [368, 340, 80, 80]（都带着阴影那 8 px）
+        let size = (672, 630);
+        let rects = hit_rects(
+            &[[0.0, 0.0, 376.0, 420.0], [368.0, 340.0, 80.0, 80.0]],
+            1.5,
+            size,
+        )
+        .unwrap();
+        assert_eq!(
+            rects,
+            [Rect::at(0, 0, (564, 630)), Rect::at(552, 510, (120, 120))]
+        );
+        let strip = (600, 200);
+        assert!(
+            !rects.iter().any(|r| r.left <= strip.0
+                && strip.0 < r.right
+                && r.top <= strip.1
+                && strip.1 < r.bottom),
+            "头像上面那一条不挡"
+        );
+        // 出了窗口的裁掉；宽或高是 0 的、不是数的不要
+        let rects = hit_rects(
+            &[
+                [-8.0, -8.0, 500.0, 40.0],
+                [10.0, 10.0, 0.0, 30.0],
+                [f64::NAN, 0.0, 1.0, 1.0],
+            ],
+            1.0,
+            (448, 420),
+        )
+        .unwrap();
+        assert_eq!(rects, [Rect::at(0, 0, (448, 32))]);
+        assert_eq!(hit_rects(&[], 1.0, size), None);
+        assert_eq!(hit_rects(&[[0.0, 0.0, 0.0, 0.0]], 1.0, size), None);
     }
 }

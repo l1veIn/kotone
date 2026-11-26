@@ -1,5 +1,6 @@
-// 悬浮窗（ADR 043 D6）：游戏所在屏幕上的小窗，两种状态——气泡（她在听、在想、在说，或插件推送的一行）和小窗（这段对话里的
-// 推送卡片，和聊天页同一种组件）。后端 `floating/mod.rs` 管显示什么、什么时候收、摆在哪、拖动、不抢焦点；这里是页面用的
+// 悬浮窗（ADR 043 D6，2026-11-26 晚修订）：游戏所在屏幕上的小窗。出现时角上一定是她的头像（外面一圈进度条），旁边是
+// 气泡（一条简单的）或聊天小窗（复杂的：聊天页那段对话最近的几条，同一套组件）；旁边放哪个由页面按内容定
+// （routes/floating/shape.ts）。后端 `floating/mod.rs` 管显示不显示、进度条、摆在哪、拖动、不抢焦点；这里是页面用的
 // 命令和事件。浏览器预览里（Playwright）由 `@tauri-apps/api/mocks` 模拟这些命令和事件，没有模拟时什么都不显示。
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -7,8 +8,6 @@ import { isTauri, type BubbleCorner } from "./ipc";
 import type { PushCell } from "./agent";
 
 export const FLOATING_EVENT = "kotone://floating";
-
-export type FloatingMode = "hidden" | "bubble" | "mini";
 
 /** 气泡里的一行推送。 */
 export interface FloatingLine {
@@ -23,24 +22,40 @@ export interface FloatingLine {
   untilDone: boolean;
 }
 
-/** 弹出的小窗：哪段对话、定位到哪一条（`插件:key`，小窗的高度跟着它）。 */
+/** 弹出聊天小窗的那条推送（新的卡片、带提醒的更新）：哪段对话、定位到哪一条（`插件:key`）。 */
 export interface FloatingMini {
   conversationId: string;
   focus: string;
   key: string;
 }
 
+/**
+ * 头像外面那一圈进度条（`floating::model::Ring`）：`atMs` 那一刻还剩 `leftMs`；`running` 时从那一刻起往下走，走完整个收起。
+ * 停着（running = false）：鼠标在上面、拖着、她在听 / 在想 / 在说、等插件说结束。
+ */
+export interface FloatingRing {
+  totalMs: number;
+  leftMs: number;
+  running: boolean;
+  atMs: number;
+}
+
 /** 后端给的样子（`floating::Shown`）。 */
 export interface FloatingView {
+  /** 内容的版本。 */
   revision: number;
-  mode: FloatingMode;
-  /** 她这一行显示不显示（内容是 kotone://bubble 的快照）。 */
+  shown: boolean;
+  /** 她这一行在不在（内容是 kotone://bubble 的快照；她说完以后接着画她最后那句）。 */
   her: boolean;
+  /** 推送的几行（新的在后面）。 */
   lines: FloatingLine[];
   mini: FloatingMini | null;
-  /** 窗口贴着哪个角：内容往哪边靠、从哪边长。 */
+  /** 这一次出现的时间（毫秒）：分出“这一次来的”消息。 */
+  since: number;
+  ring: FloatingRing | null;
+  /** 窗口贴着哪个角：头像在哪个角、内容往哪边长。 */
   corner: BubbleCorner;
-  /** 小窗最高多少（逻辑像素，游戏所在那块屏工作区高度的 40%）。 */
+  /** 聊天小窗最高多少（逻辑像素，游戏所在那块屏工作区高度的 40%）。 */
   maxHeight: number;
 }
 
@@ -54,9 +69,13 @@ export function subscribeFloating(callback: (view: FloatingView) => void): Promi
   return listen<FloatingView>(FLOATING_EVENT, (e) => callback(e.payload));
 }
 
-/** 量好的内容大小（逻辑像素）：后端按它摆窗口、该显示就显示。 */
-export async function floatingLayout(revision: number, width: number, height: number): Promise<void> {
-  if (isTauri) await invoke("floating_layout", { revision, width, height });
+/** 一块挡鼠标的地方：`[x, y, 宽, 高]`（逻辑像素，相对整块内容的左上角）。 */
+export type FloatingBox = [number, number, number, number];
+
+/** 量好的内容大小（逻辑像素）：后端按它摆窗口、该显示就显示。`mini`：头像旁边放的是聊天小窗（进度条的一圈长一些）。
+ *  `boxes`：头像、气泡 / 小窗各一块（带着阴影那一圈）——窗口只留这几块挡鼠标，透明的地方点得到下面的游戏。 */
+export async function floatingLayout(revision: number, width: number, height: number, mini: boolean, boxes: FloatingBox[]): Promise<void> {
+  if (isTauri) await invoke("floating_layout", { revision, width, height, mini, boxes });
 }
 
 export async function floatingHover(inside: boolean): Promise<void> {

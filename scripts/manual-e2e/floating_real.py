@@ -1,12 +1,15 @@
-"""The floating window (悬浮窗, ADR 043 D6) on a real Kotone: a pushed card pops up the mini window over a "game" (a test
+"""The floating window (悬浮窗, ADR 043 D6, revised 2026-11-26 evening) on a real Kotone: her avatar in the corner with a
+progress ring, and next to it the mini chat (the chat page's components) when a card is pushed — over a "game" (a test
 window) without ever taking its foreground; clicking buttons in it, the wheel, dragging it and × all leave the
-foreground (and the keyboard) with the game; the next appearance uses the dragged position; it is excluded from
-capture; it sits above the voice input bar in the bottom-right corner. Replaces message_popup_real.py (the message
-pop-up merged into the floating window).
+foreground (and the keyboard) with the game; the ring stops while the mouse is over it and, with the mouse away, runs
+out and hides the window by itself; the next appearance uses the dragged position; it is excluded from capture; it
+sits above the voice input bar in the bottom-right corner. Replaces message_popup_real.py (the message pop-up merged
+into the floating window).
 
 Setup (like message_popup_real.py): the fake LoL client timeline from game_events_real.py (0 s Lobby → 8 s ChampSelect
-→ 16 s InProgress, loading → 60 s EndOfGame → 70 s Lobby). The only things it makes Kotone do here are the two
-pushes (开局战绩 at loading, 这局总结 after the end), each popping the mini window. Isolated
+→ 16 s InProgress, loading → 60 s EndOfGame → 70 s Lobby). What it makes Kotone do here are the LoL plugin's card
+pushes (文字识别模型 at once — no local OCR model in the isolated home —, 选英雄 in champ select, 开局战绩 at loading,
+这局总结 after the end), each popping the mini chat; F4–F8 wait for the 开局战绩 card and a still window first. Isolated
 KOTONE_HOME=target/floating-real/home, `--background`, no AI key (pushes never call the model), input tools denied,
 the voice input bar at its bottom-right preset with visibility always (online recognition that cannot reach anything —
 a DeepSeek connection without a key, pointed at the local discard port, as in focus_steal_real.py — so the runtime runs
@@ -18,17 +21,25 @@ F2 the 开局战绩 push pops the floating window in the mini state; while it ap
    which never loses focus and gets no key; the window is topmost and WS_EX_NOACTIVATE.
 F3 capture: the window's display affinity is WDA_EXCLUDEFROMCAPTURE (with --shots it is made capturable instead and the
    corner is screenshot to target/plugin-shots/round9/floating-*.png).
-F4 it does not overlap the input bar (stacked above it), and the page shows the card in the mini window.
+F4 it does not overlap the input bar (stacked above it); the page shows her avatar (with the ring running) and the
+   mini chat with the card.
+F4b (run after F5, while the mini chat is tall) the transparent strip next to the tall mini chat (above her avatar)
+   lets clicks through (the window keeps only the
+   avatar and the mini chat, SetWindowRgn): the window under a point there is not the floating window; with the test
+   window moved behind the floating window, a click there reaches the test window (MOUSE Left in its log) and not the
+   floating page; the avatar itself still belongs to the floating window. The test window goes back afterwards.
 F5 one click on 往后翻 / 往前翻 (or, without them, on the card's title line): the page gets the click (pointerdown +
-   click), the foreground stays the test window, no key.
-F6 the wheel over the list: the page gets the wheel event and the list scrolls; foreground stays, no key. If the wheel
-   does not arrive, this FAILs: the up / down buttons in the mini window are the fallback (ADR 043 D6).
+   click), the ring stops while the mouse is over it, the foreground stays the test window, no key.
+F6 the wheel over the list: the page gets the wheel event and the list scrolls (when it can); foreground stays, no
+   key. If the wheel does not arrive, this FAILs: the up / down buttons in the mini window are the fallback.
 F7 dragging the mini window's title line by (-160, -120): the window follows, the foreground stays the test window the
    whole time (sampled every 50 ms), no key; `assistant.bubble.position` is saved.
 F8 × closes it; the foreground stays the test window; no key.
 F9 the 这局总结 push pops it again, at the dragged position (same anchored corner, within 4 px), not stacked in the corner.
-System input: the mouse in F5–F8 (only when the test window is in front and the floating window is the window under
-the point; the cursor is put back). Nothing is typed, no Alt is pressed. Needs a debug build with the embedded frontend
+F10 with the mouse away the ring runs out and the window hides by itself (10 s for the mini chat, plus slack).
+System input: the mouse in F4b–F8 (only when the test window is in front and — F5–F8 — the floating window, or — F4b —
+the test window, is the window under the point; the cursor is put back); F4b moves / resizes the test window (not
+activating it) and puts it back. Nothing is typed, no Alt is pressed. Needs a debug build with the embedded frontend
 (`pnpm -C apps/desktop build:apps`, `build:web`, then `cargo build -p kotone-tauri --features tauri/custom-protocol`);
 the exe is copied to target/floating-real/bin first. Takes target/tmp/real.lock; only starts when a terminal is in front
 and no game runs; at the end the terminal gets the foreground back.
@@ -61,6 +72,9 @@ WDA_EXCLUDEFROMCAPTURE = 0x11
 WHEEL = 0x0800
 RESULTS = []
 user32.GetWindowDisplayAffinity.argtypes = [fs.wt.HWND, ctypes.POINTER(fs.wt.DWORD)]
+user32.SetWindowPos.argtypes = [fs.wt.HWND, fs.wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_uint]
+SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
 
 
 def check(name, ok, detail=""):
@@ -158,12 +172,15 @@ if (!w.__floatingTest) {
 }
 const box = (sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height] : null; };
 const list = document.querySelector('[data-testid=floating-list]');
+const ring = document.querySelector('[data-testid=floating-ring]');
 const seen = { events: w.__floatingTest.events.slice(), mode: document.querySelector('[data-testid=floating]')?.dataset.mode,
-  items: [...document.querySelectorAll('[data-testid=floating-item]')].map((e) => e.dataset.key),
+  turns: [...document.querySelectorAll('[data-testid=floating-turn]')].map((e) => e.dataset.push),
+  avatar: box('[data-testid=floating-avatar]'), ring: ring ? { running: ring.dataset.running, left: Number(ring.dataset.left) } : null,
   head: box('[data-testid=floating-mini-head]'), list: box('[data-testid=floating-list]'),
   older: box('[data-testid=floating-older]'), newer: box('[data-testid=floating-newer]'),
   close: box('[data-testid=floating-close]'), title: box('[data-testid=push-from]'),
-  scrollTop: list ? list.scrollTop : null, dpr: window.devicePixelRatio };
+  scrollTop: list ? list.scrollTop : null, scrollable: list ? list.scrollHeight > list.clientHeight + 2 : false,
+  dpr: window.devicePixelRatio };
 w.__floatingTest.events.length = 0;
 return seen;
 """
@@ -229,6 +246,66 @@ def drag_by(app_pid, target, x, y, dx, dy, floating_hwnd):
     return time.time()
 
 
+def click_through(pid, target, floating, seen, dpr):
+    """F4b: the transparent strip beside the tall mini chat (above / below her avatar) is not part of the window."""
+    avatar = seen.get("avatar")
+    left, top, right, bottom = fs.rect(floating)
+    if not avatar:
+        check("F4b: the page reports her avatar box", False, json.dumps(seen)[:200])
+        return
+    ax, ay, aw, ah = avatar
+    height_css = (bottom - top) / dpr
+    pad = 8  # 头像那一块四周带着阴影那 8（Floating.svelte 的 HIT_PAD）
+    if ay > height_css / 2:  # 头像在下边的角：上面那一条
+        y_css = (ay - pad) / 2
+        room = ay - pad
+    else:  # 头像在上边的角：下面那一条
+        y_css = (ay + ah + pad + height_css) / 2
+        room = height_css - (ay + ah + pad)
+    if room < 24:
+        print(f"   SKIP F4b: the mini chat is not taller than the avatar (room {room:.0f} css px)")
+        return
+    x, y = int(left + (ax + aw / 2) * dpr), int(top + y_css * dpr)
+    under = fs.root_at(x, y)
+    check("F4b: the transparent strip beside the mini chat is not the floating window (clicks go through)",
+          under != floating, f"({x},{y}) is {fs.describe(under)}")
+    cx, cy = at(floating, avatar, dpr=dpr)
+    check("F4b: her avatar still belongs to the floating window", fs.root_at(cx, cy) == floating,
+          f"({cx},{cy}) is {fs.describe(fs.root_at(cx, cy))}")
+    # 测试窗口挪到悬浮窗后面（不激活、不改叠放次序），在那一条上点一下：点到的是测试窗口
+    before = fs.rect(target.hwnd)
+    moved = user32.SetWindowPos(target.hwnd, None, left - 40, top - 40, (right - left) + 80, (bottom - top) + 80,
+                                SWP_NOZORDER | SWP_NOACTIVATE)
+    try:
+        time.sleep(0.6)
+        if not moved or fs.root_at(x, y) != target.hwnd:
+            check("F4b: the test window is behind the strip", False, f"({x},{y}) is {fs.describe(fs.root_at(x, y))}")
+            return
+        floating_page()  # 清掉页面里记下的事件
+        target.set_mark()
+        fs.guard_input(pid, target.hwnd, strict=True)
+        fs.mouse_abs(x, y, 0)
+        time.sleep(0.3)
+        fs.guard_input(pid, target.hwnd, strict=True)
+        if fs.root_at(x, y) != target.hwnd:
+            raise SystemExit(f"STOP: the window under ({x},{y}) is {fs.describe(fs.root_at(x, y))}; not clicking")
+        fs.mouse_abs(x, y, fs.LEFTDOWN)
+        time.sleep(0.08)
+        fs.mouse_abs(x, y, fs.LEFTUP)
+        time.sleep(0.6)
+        got = [e for e in target.since_mark() if " MOUSE " in f" {e} "]
+        page = floating_page()
+        check("F4b: a click on the strip reaches the test window behind, not the floating page",
+              got and "pointerdown" not in page.get("events", []),
+              f"test window: {got}; floating page: {page.get('events')}")
+        check("F4b: the foreground stayed the test window",
+              fs.hval(user32.GetForegroundWindow()) == target.hwnd, fs.describe(user32.GetForegroundWindow()))
+    finally:
+        user32.SetWindowPos(target.hwnd, None, before[0], before[1], before[2] - before[0], before[3] - before[1],
+                            SWP_NOZORDER | SWP_NOACTIVATE)
+        time.sleep(0.4)
+
+
 def keys_since_mark(target):
     return [e for e in target.since_mark() if " DOWN " in f" {e} " or " UP " in f" {e} "]
 
@@ -279,6 +356,19 @@ def run(app, target, ui):
         check("F3: excluded from capture (WDA_EXCLUDEFROMCAPTURE)", affinity.value == WDA_EXCLUDEFROMCAPTURE,
               hex(affinity.value))
 
+    # 等开局战绩推来、窗口不再变大（前面还有文字识别模型、选英雄两张卡片；同一张小窗里接着往下加）
+    if ui:
+        opened = wait_until(lambda: any(":opening:" in (k or "") for k in floating_page().get("turns", [])), 40, 0.5)
+        print(f"   the 开局战绩 card is in the mini chat: {bool(opened)}")
+    still, last = 0, None
+    for _ in range(40):
+        now = fs.rect(floating)
+        still = still + 1 if now == last else 0
+        last = now
+        if still >= 6:
+            break
+        time.sleep(0.25)
+
     # F4：和输入条不叠，页面里是那张卡片
     bar = window(pid, fs.OVERLAY_TITLE)
     rect = fs.rect(floating)
@@ -288,8 +378,10 @@ def run(app, target, ui):
     seen = floating_page() if ui else {}
     print(f"   floating page: {json.dumps(seen, ensure_ascii=False)}")
     if ui:
-        check("F4: the mini window shows the 开局战绩 card", any(k.startswith("opening:") for k in seen.get("items", [])),
-              json.dumps(seen.get("items")))
+        check("F4: her avatar is in the corner with the ring running", seen.get("avatar") and (seen.get("ring") or {}).get("running") == "true",
+              json.dumps({"avatar": seen.get("avatar"), "ring": seen.get("ring")}))
+        check("F4: the mini chat shows the 开局战绩 card", seen.get("mode") == "mini" and any(":opening:" in (k or "") for k in seen.get("turns", [])),
+              json.dumps({"mode": seen.get("mode"), "turns": seen.get("turns")}))
     if not ui:
         print("SKIP F5–F9 — no embedded frontend (positions inside the page are unknown)")
         return
@@ -307,7 +399,15 @@ def run(app, target, ui):
         after = floating_page()
         check("F5: the page got the click (pointerdown + click)",
               "pointerdown" in after.get("events", []) and "click" in after.get("events", []), json.dumps(after.get("events")))
+        ring = after.get("ring") or {}
+        time.sleep(0.5)
+        later = floating_page().get("ring") or {}
+        check("F5: the ring stops while the mouse is over it", ring.get("running") == "false" and later.get("left") == ring.get("left"),
+              f"{ring} → {later}")
         no_change_checks("F5", sampler, target)
+
+        # F4b（F5 以后：鼠标在小窗上、进度条停着；移开以后至少还剩 2 秒，F6 又停在上面）：旁边透明的那一条点得到下面的窗口
+        click_through(pid, target, floating, seen, dpr)
 
         # F6：滚轮
         if after.get("list"):
@@ -318,9 +418,14 @@ def run(app, target, ui):
             wheel_at(pid, target, x, y, 120 if (before or 0) > 0 else -120, floating)
             time.sleep(0.8)
             wheeled = floating_page()
+            # 列表能滚时看它滚了没有（2026-11-27 真机：滚了一格 100 像素，页面上却没记到 wheel 事件——滚动是 Chromium
+            # 自己做的）；不能滚时只能看页面收没收到 wheel
+            seen_wheel = "wheel" in wheeled.get("events", [])
+            scrolled = wheeled.get("scrollTop") != before
             check("F6: the wheel reaches the non-focusable window and scrolls the list (else: use the up / down buttons)",
-                  "wheel" in wheeled.get("events", []) and wheeled.get("scrollTop") != before,
-                  f"events {wheeled.get('events')}, scrollTop {before} → {wheeled.get('scrollTop')}")
+                  scrolled if after.get("scrollable") else seen_wheel,
+                  f"wheel event seen {seen_wheel}, scrollTop {before} → {wheeled.get('scrollTop')}, "
+                  f"scrollable {after.get('scrollable')}")
             no_change_checks("F6", sampler, target)
 
         # F7：拖上面那一行
@@ -364,6 +469,20 @@ def run(app, target, ui):
     check(f"F9: it appears at the dragged position ({corner} corner within 4 px)",
           abs(xs[0] - xs[1]) <= 4 and abs(ys[0] - ys[1]) <= 4, f"dragged {dragged}, now {again}")
     shot("dragged", [again])
+
+    # F10：鼠标不在上面：进度条走完，自己收起（聊天小窗 10 秒，从最后一次变化算）
+    cursor = fs.wt.POINT()
+    user32.GetCursorPos(ctypes.byref(cursor))
+    over = fs.root_at(cursor.x, cursor.y) == floating
+    if over:
+        print("   (the cursor is over the floating window: the ring waits; skipping F10)")
+        return
+    started = time.time()
+    gone = wait_until(lambda: not (window(pid, FLOATING_TITLE) or (0, False))[1], 20, 0.1)
+    check("F10: with the mouse away the ring runs out and the window hides by itself",
+          gone, f"after {time.time() - started:.1f}s: {window(pid, FLOATING_TITLE)}")
+    if gone:
+        print(f"   hid {time.time() - started:.1f}s after it was seen again")
 
 
 def bt_phase():

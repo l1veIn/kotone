@@ -1,10 +1,12 @@
-//! 悬浮窗（ADR 043 D6）：游戏所在屏幕上的一个小窗，两种状态——**气泡**（一行字：她在听、在想、在说，或插件推送的一行）
-//! 和**小窗**（这段对话里插件推送的卡片，和聊天页同一种组件，新的在下面，滚轮往回翻）。原来的说话气泡（ADR 018，
-//! 窗口 `companion`）和右下角的消息提示（ADR 039 D4，窗口 `message-popup`）都并进了它。
+//! 悬浮窗（ADR 043 D6，2026-11-26 晚修订）：游戏所在屏幕上的一个小窗。出现时角上一定是她的头像（外面一圈进度条），
+//! 旁边是**气泡**（一条简单的：她在听、在想、说了一句短话，推送的一行）或**聊天小窗**（复杂的：卡片、工具调用、长回答、
+//! 同时来了几条；就是聊天页那段对话最近的几条，用聊天页的组件）。原来的说话气泡（ADR 018，窗口 `companion`）和右下角的
+//! 消息提示（ADR 039 D4，窗口 `message-popup`）都并进了它。
 //!
-//! - **显示什么、什么时候收**：纯状态在 [`model`]（一行 6 秒、写了 `until_done` 的一行到插件说结束、小窗 8 秒；
-//!   鼠标在上面不收，移开再留 3 秒；× 收到下一条推送）。她这一行的内容和时长照旧是 `bubble.rs` 的状态机，
-//!   它每次改状态都调 [`her`]；推送由 `agent/push.rs` 调 [`pushed`] / [`done`]。
+//! - **显示不显示、进度条**：纯状态在 [`model`]（气泡 6 秒、聊天小窗 10 秒，从最后一次变化算；鼠标在上面、她在听 / 在想 /
+//!   在说时不走，移开接着走；走完整个收起；× 收到下一条推送）。旁边放气泡还是聊天小窗由界面按内容定，量好大小时一起报上来
+//!   （[`floating_layout`] 的 `mini`）。她这一行的内容照旧是 `bubble.rs` 的状态机，它每次改状态都调 [`her`]（带上她在不在忙）；
+//!   推送由 `agent/push.rs` 调 [`pushed`] / [`done`]。
 //! - **在哪**：游戏（前台窗口）在哪块屏，就在哪块屏。没拖过贴着设置里的角，让开同一个角上的输入条（屏幕角落分配，
 //!   `screen_corner.rs`）；拖过就照记下的位置（相对工作区，`assistant.bubble.position`，[`place`]）。窗口变大变小时贴着
 //!   的那个角不动。窗口跟着内容的大小走：界面量好内容报上来（[`floating_layout`]），这里按那块屏的缩放摆；从收着到显示，
@@ -36,7 +38,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::bubble::Phase;
 use crate::SharedState;
-use model::{Line, Mode, Model, View};
+use model::{Line, Model, View};
 
 pub const LABEL: &str = "floating";
 /// 给界面的样子（[`Shown`]）。
@@ -55,6 +57,10 @@ struct State {
     model: Model,
     /// 界面报的内容大小（逻辑像素）。
     size: Option<(f64, f64)>,
+    /// 界面报的挡鼠标的几块（头像、气泡 / 聊天小窗；逻辑像素，相对内容左上角，[`place::hit_rects`]）。
+    boxes: Option<Vec<[f64; 4]>>,
+    /// 上一次给窗口设的那几块（窗口句柄 + 物理像素；一样就不再设）。
+    clipped: Option<(isize, Option<Vec<crate::screen_corner::Rect>>)>,
     /// 界面报大小时说的版本（最大的那个）。
     laid_out: u64,
     /// 从收着变成显示的那一版：界面报了这一版（或更新的）大小以后才显示。
@@ -81,14 +87,14 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-/// 给界面的样子：显示什么（[`View`]），加上窗口贴着哪个角（内容往哪边靠、从哪边长）、小窗最高多少。
+/// 给界面的样子：显示什么、进度条（[`View`]），加上窗口贴着哪个角（头像在哪个角、内容往哪边长）、聊天小窗最高多少。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shown {
     #[serde(flatten)]
     pub view: View,
     pub corner: BubbleCorner,
-    /// 小窗最高多少（逻辑像素）：游戏所在那块屏工作区高度的 40%。
+    /// 聊天小窗最高多少（逻辑像素）：游戏所在那块屏工作区高度的 40%。
     pub max_height: u32,
 }
 
@@ -112,16 +118,23 @@ fn compose(app: &AppHandle, view: View) -> Shown {
 
 /// 现在的样子（不改状态）。
 fn current(app: &AppHandle) -> Shown {
-    let view = state().lock().unwrap().model.view();
+    let view = state().lock().unwrap().model.view(now_ms());
     compose(app, view)
 }
 
-/// 状态变了：告诉界面，按新的样子显示 / 收起，排下一次倒计时。
+/// 只是进度条变了（鼠标进出、拖动）：告诉界面，排下一次到点。窗口不用动。
+fn announce(app: &AppHandle) {
+    let view = state().lock().unwrap().model.view(now_ms());
+    let _ = app.emit(EVENT, &compose(app, view));
+    schedule(app);
+}
+
+/// 状态变了：告诉界面，按新的样子显示 / 收起，排下一次到点。
 fn publish(app: &AppHandle) {
     let (view, waiting) = {
         let mut s = state().lock().unwrap();
-        let view = s.model.view();
-        let visible = view.mode != Mode::Hidden;
+        let view = s.model.view(now_ms());
+        let visible = view.shown;
         let appearing = visible && !s.visible;
         if appearing {
             s.visible_since = view.revision;
@@ -153,7 +166,7 @@ fn publish(app: &AppHandle) {
     }
 }
 
-/// 排下一次到点收起（新的作废旧的）。
+/// 排下一次到点（进度条走完、等插件说结束的那一行到时候；新的作废旧的）。
 fn schedule(app: &AppHandle) {
     let (deadline, generation) = {
         let mut s = state().lock().unwrap();
@@ -185,9 +198,16 @@ fn schedule(app: &AppHandle) {
 fn apply(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let (visible, ready, size, dragging) = {
+        let (visible, ready, size, boxes, dragging) = {
             let s = state().lock().unwrap();
-            (s.visible, s.laid_out >= s.visible_since, s.size, s.dragging)
+            let boxes = s.boxes.clone();
+            (
+                s.visible,
+                s.laid_out >= s.visible_since,
+                s.size,
+                boxes,
+                s.dragging,
+            )
         };
         let window = match handle.get_webview_window(LABEL) {
             Some(window) => window,
@@ -206,8 +226,9 @@ fn apply(app: &AppHandle) {
             return;
         }
         if !dragging {
-            if let Err(e) = place_window(&handle, &window, size.unwrap_or(FALLBACK_SIZE)) {
-                log::log(&format!("悬浮窗：摆不好位置：{e}"));
+            match place_window(&handle, &window, size.unwrap_or(FALLBACK_SIZE)) {
+                Ok((scale, physical)) => clip(&window, boxes.as_deref(), scale, physical),
+                Err(e) => log::log(&format!("悬浮窗：摆不好位置：{e}")),
             }
         }
         crate::show_window_no_focus(&window);
@@ -248,11 +269,12 @@ fn prepare(window: &tauri::WebviewWindow) {
 }
 
 /// 摆到游戏所在那块屏上：拖过就照记下的位置，没拖过贴着设置里的角、让开输入条。`size` 是内容的逻辑大小。
+/// 回那块屏的缩放和窗口的物理大小。
 fn place_window(
     app: &AppHandle,
     window: &tauri::WebviewWindow,
     size: (f64, f64),
-) -> Result<(), String> {
+) -> Result<(f64, (i32, i32)), String> {
     use crate::screen_corner;
     let config = config(app);
     let (area, scale) = screen_corner::foreground_monitor().ok_or("无法确定显示器")?;
@@ -285,14 +307,67 @@ fn place_window(
     window
         .set_size(tauri::PhysicalSize::new(size.0 as u32, size.1 as u32))
         .map_err(|e| e.to_string())?;
-    window.set_position(position).map_err(|e| e.to_string())
+    window.set_position(position).map_err(|e| e.to_string())?;
+    Ok((scale, size))
+}
+
+/// 窗口只留挡鼠标的那几块（头像、气泡 / 聊天小窗，[`place::hit_rects`]；`SetWindowRgn`）：透明的地方——聊天小窗旁边
+/// 头像上面那一条——不再挡住下面游戏的点击（Windows 按窗口区域判断点的是谁，区域外的点直接落到下面的窗口）。和窗口大小
+/// 一起改（界面每次报大小都带着这几块）；拖动只挪窗口，区域跟着窗口走。没报的时候整个窗口都挡。
+#[cfg(windows)]
+fn clip(window: &tauri::WebviewWindow, boxes: Option<&[[f64; 4]]>, scale: f64, size: (i32, i32)) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let raw = hwnd.0 as isize;
+    let rects = boxes.and_then(|b| place::hit_rects(b, scale, size));
+    {
+        let mut s = state().lock().unwrap();
+        if s.clipped.as_ref() == Some(&(raw, rects.clone())) {
+            return;
+        }
+        s.clipped = Some((raw, rects.clone()));
+    }
+    let hwnd = HWND(raw as _);
+    // SAFETY: 只改这个窗口的区域；SetWindowRgn 成功后区域归系统（不再用、不删），失败了自己删；拼区域用的那几块用完就删
+    unsafe {
+        let Some(rects) = rects else {
+            SetWindowRgn(hwnd, None, true);
+            return;
+        };
+        let region = CreateRectRgn(0, 0, 0, 0);
+        for r in &rects {
+            let part = CreateRectRgn(r.left, r.top, r.right, r.bottom);
+            CombineRgn(Some(region), Some(region), Some(part), RGN_OR);
+            let _ = DeleteObject(part.into());
+        }
+        if SetWindowRgn(hwnd, Some(region), true) == 0 {
+            let _ = DeleteObject(region.into());
+            log::log("悬浮窗：设不了窗口区域，整个窗口照旧挡鼠标");
+            state().lock().unwrap().clipped = None;
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn clip(
+    _window: &tauri::WebviewWindow,
+    _boxes: Option<&[[f64; 4]]>,
+    _scale: f64,
+    _size: (i32, i32),
+) {
 }
 
 // ---------- 别处调的 ----------
 
-/// 她这一行变了（`bubble.rs` 每次改状态都调；`None` = 收起了）。内容在 `kotone://bubble` 里，界面自己听。
-pub fn her(app: &AppHandle, phase: Option<Phase>) {
-    let changed = state().lock().unwrap().model.her(phase);
+/// 她这一行变了（`bubble.rs` 每次改状态、念完一句都调；`None` = 那边收起了）。`active`：她在听 / 在想 / 在说 / 等你回答
+/// （进度条停着）。内容在 `kotone://bubble` 里，界面自己听。
+pub fn her(app: &AppHandle, phase: Option<Phase>, active: bool) {
+    let changed = state().lock().unwrap().model.her(phase, active, now_ms());
     if changed {
         publish(app);
     }
@@ -316,8 +391,9 @@ pub struct Pushed<'a> {
     pub alert: bool,
 }
 
-/// 推送来了：一行显示在气泡里；新的卡片（或带 alert 的更新）开着“推送时弹出小窗”时弹出小窗、定位到它。
-/// 关着“显示悬浮窗”、现在不能弹（`attention::popup_blocked`）时什么都不做，推送照样在聊天里。
+/// 推送来了：一行显示在气泡里；新的卡片（或带 alert 的更新）开着“推送时弹出小窗”时弹出聊天小窗、定位到它；
+/// 别的原地更新（聊天小窗开着时）让进度条从头走。关着“显示悬浮窗”、现在不能弹（`attention::popup_blocked`）时什么都不做，
+/// 推送照样在聊天里。
 pub fn pushed(app: &AppHandle, push: Pushed) {
     let Some(state_handle) = app.try_state::<SharedState>() else {
         return;
@@ -330,7 +406,15 @@ pub fn pushed(app: &AppHandle, push: Pushed) {
         )
     };
     let pop = push.card && popup && (push.posted || push.alert);
-    if !enabled || (push.line.is_none() && !pop) {
+    if !enabled {
+        return;
+    }
+    if push.line.is_none() && !pop {
+        // 没弹出的原地更新：聊天小窗开着时小窗里那张变了
+        let changed = !push.posted && state().lock().unwrap().model.updated(now_ms());
+        if changed {
+            publish(app);
+        }
         return;
     }
     if let Some(why) = crate::attention::popup_blocked() {
@@ -371,15 +455,19 @@ pub fn pushed(app: &AppHandle, push: Pushed) {
 
 /// 插件说这条推送结束了（`Host::push_done`）：收起它的那一行。
 pub fn done(app: &AppHandle, plugin: &str, key: &str) {
-    let changed = state().lock().unwrap().model.done(&model::id(plugin, key));
+    let changed = state()
+        .lock()
+        .unwrap()
+        .model
+        .done(&model::id(plugin, key), now_ms());
     if changed {
         publish(app);
     }
 }
 
-/// 玩家打开了 Kotone（点了卡片上面那一行、“打开 Kotone”）：推送都在聊天里了，小窗和几行收起。
+/// 玩家打开了 Kotone（点了卡片上面那一行、“打开 Kotone”）：都在聊天里了，和 × 一样整个收起。
 pub fn opened(app: &AppHandle) {
-    let changed = state().lock().unwrap().model.opened();
+    let changed = state().lock().unwrap().model.close(now_ms());
     if changed {
         publish(app);
     }
@@ -393,40 +481,56 @@ pub fn floating_current(app: AppHandle) -> Shown {
     current(&app)
 }
 
-/// 界面量好了内容的大小（逻辑像素；每画一版都报，内容变大变小时也报）：按它摆、该显示就显示。
+/// 界面量好了内容的大小（逻辑像素；每画一版都报，内容变大变小时也报）：按它摆、该显示就显示。`mini`：头像旁边放的是
+/// 聊天小窗（false = 气泡；旧界面不报）——换了样子进度条从头走，小窗的一圈长一些。`boxes`：挡鼠标的那几块
+/// （`[x, y, 宽, 高]`，相对内容左上角，带着阴影那一圈；旧界面不报 = 整个窗口都挡），别的地方点得到下面的游戏。
 #[tauri::command]
-pub fn floating_layout(app: AppHandle, revision: u64, width: f64, height: f64) {
-    {
+pub fn floating_layout(
+    app: AppHandle,
+    revision: u64,
+    width: f64,
+    height: f64,
+    mini: Option<bool>,
+    boxes: Option<Vec<[f64; 4]>>,
+) {
+    let reshaped = {
         let mut s = state().lock().unwrap();
         if width.is_finite() && height.is_finite() {
             s.size = Some((width.max(1.0), height.max(1.0)));
+            s.boxes = boxes;
         }
         s.laid_out = s.laid_out.max(revision);
+        mini.is_some_and(|mini| s.model.shape(mini, revision, now_ms()))
+    };
+    if reshaped {
+        announce(&app);
     }
     apply(&app);
 }
 
-/// 鼠标进出悬浮窗：在上面时不收，移开后再倒计时。
+/// 鼠标进出悬浮窗：在上面时进度条停住，移开接着走。
 #[tauri::command]
 pub fn floating_hover(app: AppHandle, inside: bool) {
-    state().lock().unwrap().model.hover(inside, now_ms());
-    schedule(&app);
+    let changed = state().lock().unwrap().model.hover(inside, now_ms());
+    if changed {
+        announce(&app);
+    }
 }
 
 /// 玩家点了 ×：现在显示着的都收起，直到下一条推送。
 #[tauri::command]
 pub fn floating_close(app: AppHandle) {
-    let changed = state().lock().unwrap().model.close();
+    let changed = state().lock().unwrap().model.close(now_ms());
     if changed {
         publish(&app);
     }
 }
 
-/// 拖动悬浮窗（页面在气泡、小窗上面那一行按下左键时调）：照语音输入的 `drag_overlay`，按着左键时每 8 毫秒看一次光标，
+/// 拖动悬浮窗（页面在头像、气泡、聊天小窗上面那一行按下左键时调）：照语音输入的 `drag_overlay`，按着左键时每 8 毫秒看一次光标，
 /// 挪过 4 个像素（逻辑像素）才算拖（只是点一下不动它，照 dsh-orb-cordis 的拖动门槛），用原始 `SetWindowPos` 挪
 /// （不激活、不改叠放次序）；跟着光标走的是按下那一刻光标到窗口的距离（dsh-orb-cordis 的 `grab`：每次都从光标算，
 /// 窗口挪了不会反过来影响下一步）。松开就停（最多跟 60 秒），记下拖到的位置（相对那块屏的工作区，[`place::remember`]），
-/// 再整个拉回工作区里。拖着时不收。窗口不可聚焦，拖完不用还前台。
+/// 再整个拉回工作区里。拖着时进度条停住。窗口不可聚焦，拖完不用还前台。
 #[tauri::command]
 pub fn floating_drag(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
@@ -441,7 +545,7 @@ pub fn floating_drag(app: AppHandle) -> Result<(), String> {
             return Ok(());
         }
         std::thread::spawn(move || {
-            let moved = follow_cursor(windows::Win32::Foundation::HWND(hwnd as _));
+            let moved = follow_cursor(&app, windows::Win32::Foundation::HWND(hwnd as _));
             if moved {
                 remember_position(&app, &window);
             }
@@ -452,7 +556,7 @@ pub fn floating_drag(app: AppHandle) -> Result<(), String> {
             }
             DRAGGING.store(false, Ordering::SeqCst);
             apply(&app);
-            schedule(&app);
+            announce(&app);
         });
     }
     #[cfg(not(windows))]
@@ -462,7 +566,7 @@ pub fn floating_drag(app: AppHandle) -> Result<(), String> {
 
 /// 按着左键时窗口跟着光标走；返回挪过没有（只是点了一下就没挪）。
 #[cfg(windows)]
-fn follow_cursor(hwnd: windows::Win32::Foundation::HWND) -> bool {
+fn follow_cursor(app: &AppHandle, hwnd: windows::Win32::Foundation::HWND) -> bool {
     use windows::Win32::Foundation::{POINT, RECT};
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
@@ -494,9 +598,12 @@ fn follow_cursor(hwnd: windows::Win32::Foundation::HWND) -> bool {
             let (dx, dy) = (now.x - start.x, now.y - start.y);
             if !moved && dx.abs().max(dy.abs()) > threshold {
                 moved = true;
-                let mut s = state().lock().unwrap();
-                s.dragging = true;
-                s.model.hold(true, now_ms());
+                {
+                    let mut s = state().lock().unwrap();
+                    s.dragging = true;
+                    s.model.hold(true, now_ms());
+                }
+                announce(app);
             }
             if moved {
                 let _ = unsafe {

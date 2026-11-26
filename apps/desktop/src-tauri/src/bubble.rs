@@ -5,7 +5,7 @@
 //! - 念出来的话：说的时候挂住，说完再按字数停留几秒才收（迟到的“说完了”按序号丢弃）；
 //! - 独占全屏时不显示，只靠语音。
 //!
-//! 这里只管她这一行的状态（[`Model`]），每次改了发 `kotone://bubble`（内容）、告诉悬浮窗（`floating::her`：显示不显示）；
+//! 这里只管她这一行的状态（[`Model`]），每次改了发 `kotone://bubble`（内容）、告诉悬浮窗（`floating::her`：显示不显示、她在不在忙——忙着时头像外面的进度条不走；念完一句也告诉它）；
 //! 窗口的显示、摆位、拖动、× 在 `floating/mod.rs`。悬浮窗现在能点能拖（原来整窗鼠标穿透），玩家可以把它拖离小地图。
 //!
 //! 线程约定（吸取输入条死锁的教训）：状态只在短临界区里改；窗口的事交给悬浮窗，在主线程按顺序做。
@@ -253,6 +253,16 @@ impl Model {
         (self.snap.phase == Phase::Asking && self.follow_up).then(|| self.hide())
     }
 
+    /// 她正忙着（在听、听清了、在想、在说、等你回答）：悬浮窗头像外面的进度条停着不走（ADR 043 D6 2026-11-26 晚修订）。
+    /// 念完了留着的那句、收尾的话、出错不算。
+    pub fn active(&self) -> bool {
+        match self.snap.phase {
+            Phase::Listening | Phase::Recognizing | Phase::Thinking | Phase::Asking => true,
+            Phase::Speaking => self.holding,
+            Phase::Note | Phase::Error | Phase::Hidden => false,
+        }
+    }
+
     /// 正在念一句话（呼叫键打断用）。
     pub fn is_speaking(&self) -> bool {
         self.snap.phase == Phase::Speaking && self.holding
@@ -381,7 +391,7 @@ pub fn owns_session(app: &AppHandle, payload: &Value) -> bool {
 /// 改状态并推送；返回改后的序号。
 fn update(app: &AppHandle, change: impl FnOnce(&mut Model) -> Option<Snapshot>) -> Option<u64> {
     let rt = app.try_state::<BubbleRuntime>()?;
-    let snapshot = {
+    let (snapshot, active) = {
         let name = app
             .try_state::<SharedState>()
             .map(|state| state.settings.read().unwrap().agent.identity.name.clone())
@@ -390,13 +400,14 @@ fn update(app: &AppHandle, change: impl FnOnce(&mut Model) -> Option<Snapshot>) 
         model.set_name(&name);
         let mut snap = change(&mut model)?;
         snap.corner = config(app).map(|c| c.corner).unwrap_or_default();
-        snap
+        (snap, model.active())
     };
     let revision = snapshot.revision;
     let _ = app.emit(EVENT, &snapshot);
     crate::floating::her(
         app,
         (snapshot.phase != Phase::Hidden).then_some(snapshot.phase),
+        active,
     );
     Some(revision)
 }
@@ -590,10 +601,14 @@ pub fn speaking(app: &AppHandle, text: &str) -> Option<u64> {
 /// 念完了（`revision` = 最后一次 [`speaking`] 的序号）：按字数停留一会儿再收起；
 /// 中间有了新内容就不收。
 pub fn spoken(app: &AppHandle, revision: u64) {
-    let after = app
-        .try_state::<BubbleRuntime>()
-        .and_then(|rt| rt.model.lock().unwrap().spoken(revision));
-    if let Some(after) = after {
+    let after = app.try_state::<BubbleRuntime>().and_then(|rt| {
+        let mut model = rt.model.lock().unwrap();
+        let after = model.spoken(revision)?;
+        Some((after, model.snapshot().phase))
+    });
+    if let Some((after, phase)) = after {
+        // 念完了：悬浮窗头像外面的进度条从这时起走（她这一行留着，走完再收）
+        crate::floating::her(app, Some(phase), false);
         schedule_hide(app, revision, after);
     }
 }
@@ -823,5 +838,26 @@ mod tests {
         assert_eq!(tool_label("saved.auto-1"), "正在执行自动化");
         assert_eq!(tool_label("models.download"), "正在处理模型");
         assert_eq!(tool_label("something.else"), "在想…");
+    }
+
+    /// 悬浮窗的进度条（ADR 043 D6）：她在听、在想、在说、等你回答时停着；念完了、收尾的话、出错时走。
+    #[test]
+    fn she_is_busy_while_listening_thinking_speaking_or_waiting() {
+        let mut m = Model::default();
+        assert!(!m.active());
+        m.listening();
+        assert!(m.active());
+        m.thinking("在想…");
+        assert!(m.active());
+        let rev = m.speaking("好的").revision;
+        assert!(m.active());
+        m.spoken(rev);
+        assert!(!m.active(), "念完了留着的那句");
+        m.follow_up(8, 0, "好的");
+        assert!(m.active());
+        m.note("没听到，先不打扰啦");
+        assert!(!m.active());
+        m.error("出了点问题");
+        assert!(!m.active());
     }
 }
