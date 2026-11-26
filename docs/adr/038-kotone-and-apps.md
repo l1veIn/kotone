@@ -1,6 +1,6 @@
 # ADR 038：Kotone 是什么——她，加上装在她身上的插件（照 MCP Apps）
 
-状态：Accepted（方向，2026-11-24）。部分由 [ADR 039](039-desktop-companion-and-game-apps.md) 修订（2026-11-25，改了哪些见“怎么定的”最后一条）。
+状态：Accepted（方向，2026-11-24）。部分由 [ADR 039](039-desktop-companion-and-game-apps.md) 修订（2026-11-25，改了哪些见“怎么定的”最后一条）；D5 的覆盖层（插件页面的第三个显示位置）由 [ADR 043](043-plugin-shape-and-pushes.md) D6、D7 去掉（2026-11-26）。
 
 玩家定了方向：本体轻，复杂度都放进插件；语音输入是典型的插件；界面上叫“插件”。原话：
 
