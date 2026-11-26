@@ -663,6 +663,68 @@ fn modifiers_that_never_come_up_do_not_switch_the_window() {
     assert!(rig.events().is_empty(), "等修饰键失败：不切窗口");
 }
 
+/// 语音输入推送卡片上的“重发”（ADR 043 D10，`strict_target`）：玩家在聊天里点的，前台是 Kotone 自己。切不回要发去的
+/// 那个窗口就不发，前台是 Kotone 自己 / 桌面 / 没有前台也不发——一个键都不按；切回来了照常发。不带它的语音输入照旧
+/// “前台是什么窗就往哪发”。
+#[test]
+fn a_strict_resend_never_types_into_kotone_or_another_window() {
+    let own = |window| {
+        Some(ForegroundInfo {
+            window: TargetWindow(window),
+            process: Some("kotone.exe".into()),
+            own_process: true,
+        })
+    };
+    let strict = |restore: Option<usize>| {
+        let mut request = ask("gg", Speaker::Player);
+        request.strict_target = true;
+        request.restore = restore.map(|window| RestoreFocus {
+            window: TargetWindow(window),
+            settle: Duration::ZERO,
+        });
+        request
+    };
+    // 切回去了、游戏就在前台（悬浮窗里点的；或者切过去了）：照常发
+    let rig = Rig::new(Some("lol"), fg(LOL));
+    let out = rig.chat.send(strict(Some(7))).unwrap();
+    assert_eq!(out.game, "lol");
+    assert_eq!(rig.events(), ["restore:7", "Enter|gg|Enter"]);
+
+    // 要切回的窗口切不过来（前台还是 Kotone 自己）：不发
+    let rig = Rig::new(Some("lol"), own(1));
+    let failure = rig.chat.send(strict(Some(42))).unwrap_err();
+    assert!(matches!(failure, ChatFailure::WindowGone), "{failure:?}");
+    assert_eq!(failure.code(), "windowGone");
+    assert_eq!(rig.events(), ["restore:42"], "一个键都没按");
+
+    // 不知道要发去哪个窗口（重启过）：前台是 Kotone 自己、桌面都不发
+    let rig = Rig::new(Some("lol"), own(1));
+    assert!(matches!(
+        rig.chat.send(strict(None)).unwrap_err(),
+        ChatFailure::OwnWindow
+    ));
+    let rig = Rig::new(None, fg("explorer.exe"));
+    assert!(matches!(
+        rig.chat.send(strict(None)).unwrap_err(),
+        ChatFailure::Desktop
+    ));
+    let rig = Rig::new(None, None);
+    assert!(matches!(
+        rig.chat.send(strict(None)).unwrap_err(),
+        ChatFailure::NoForeground
+    ));
+    assert!(rig.events().is_empty());
+
+    // 不带 strict_target 的语音输入：照旧发到现在的前台（玩家拍板过）
+    let rig = Rig::new(Some("lol"), own(1));
+    let mut request = ask("gg", Speaker::Player);
+    request.restore = Some(RestoreFocus {
+        window: TargetWindow(42),
+        settle: Duration::ZERO,
+    });
+    assert!(rig.chat.send(request).is_ok());
+}
+
 #[test]
 fn someone_else_holding_the_lock_past_the_deadline_is_busy_and_nothing_is_pressed() {
     let rig = Rig::new(Some("lol"), fg(LOL));

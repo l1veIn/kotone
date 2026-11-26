@@ -2,7 +2,7 @@
   /*
    * 历史记录页（新 IPC：get_history / clear_history）：
    * 顶部 history.mode 三态 + 独立音频保留开关 + 清空（二次确认）；
-   * 列表 = 时间 / 识别文本 / 时长 / 状态；技术字段收纳到高级页。
+   * 列表 = 时间 / 识别文本 / 时长、发到哪个游戏哪个频道（ADR 043 D10，旧记录没有就不显示） / 状态；技术字段收纳到高级页。
    * 音频回放手写 Web Audio 管线（decodeAudioData + AudioBufferSourceNode），
    * 不走 WebView2 的 <audio> 元素——此前「no supported source」的根源；
    * 波形用 canvas 手绘（峰值柱 + 进度高亮），点击可 seek。
@@ -313,6 +313,12 @@
     error: { text: m.voice_history_outcome_error(), cls: "bg-brand-pink/12 text-brand-pink" },
   };
 
+  /** 发到了哪里（“英雄联盟 · 队伍”）；没发出去、旧记录没有时 null。 */
+  function sentTo(r: HistoryRecord): string | null {
+    if (!r.game && !r.channel) return null;
+    return m.plugin_voice_input_history_sent_to({ game: r.game?.name ?? "", channel: r.channel?.name ?? "" });
+  }
+
   function fmtTime(ts: string): string {
     // "2026-07-25T10:14:43Z" → "07-25 10:14"
     const m = ts.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/);
@@ -378,6 +384,7 @@
               </p>
               <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">
                 {m.voice_history_duration({ seconds: (r.audioMs / 1000).toFixed(1) })}
+                {#if sentTo(r)}<span data-testid="history-record-sent-to"> · {sentTo(r)}</span>{/if}
               </p>
             </div>
             {#if r.audioFile}
@@ -435,6 +442,12 @@
           <dt class="text-[11px] text-muted-foreground">{m.voice_history_detail_source()}</dt>
           <dd class="m-0 mt-0.5 break-all text-foreground/80">{detail.sourceText || m.voice_history_detail_no_source()}</dd>
         </div>
+        {#if sentTo(detail)}
+          <div>
+            <dt class="text-[11px] text-muted-foreground">{m.plugin_voice_input_history_detail_sent_to()}</dt>
+            <dd class="m-0 mt-0.5 text-foreground/80" data-testid="history-detail-sent-to">{sentTo(detail)}</dd>
+          </div>
+        {/if}
         <div class="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
           <div>{m.voice_history_detail_engine({ engine: detail.engineId })}</div>
           <div>{m.voice_history_detail_audio({ seconds: (detail.audioMs / 1000).toFixed(1) })}</div>

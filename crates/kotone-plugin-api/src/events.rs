@@ -1,9 +1,11 @@
-//! 插件登记的游戏事件（ADR 036 D4、ADR 038 D3 第 10 条）：带游戏中心适配器的插件在 `plugin.toml` 里用
-//! `[[events]]` 登记自己会报的事，宿主把开着、关着的插件登记的都并进一份事件目录（[`event_catalog`]）。
+//! 插件登记的游戏事件（ADR 036 D4、ADR 038 D3 第 10 条）：插件在 `plugin.toml` 里用 `[[events]]` 登记自己会报的事，
+//! 宿主把开着、关着的插件登记的都并进一份事件目录（[`event_catalog`]）。
 //!
 //! - **只有这一种登记方式**（原则 15）：本体只登记任何游戏都有的 `game.*`（`kotone_core::games::generic_events`），
 //!   游戏专用的事都在插件的清单里；
-//! - 类型以插件的适配器 id 开头（`<适配器>.<名字>`），不能用通用的 `game.`，同一个清单里不重名（[`Manifest::parse`] 查）；
+//! - 类型以 [`Manifest::event_scope`] 开头：带游戏中心适配器的插件是适配器 id（`lol.<名字>`），没有适配器的插件是
+//!   插件 id（语音输入的 `voice-input.<名字>`，ADR 043 D10：它不是游戏插件，事件照样给自动化和她用）；不能用通用的
+//!   `game.`，同一个清单里不重名（[`Manifest::parse`] 查）；
 //! - 插件只报得出自己登记过的事（宿主照 [`Manifest::declares_event`] 挡掉别的）；
 //! - 插件关着、或某种事要的数据开关关着：目录里还有这种事（保存校验认得，旧的自动化不报废），标着现在为什么不会发生。
 
@@ -13,24 +15,29 @@ use kotone_core::settings::Settings;
 use crate::{valid_id, Manifest};
 
 impl Manifest {
-    /// 检查 `[[events]]`：要有适配器（不能叫 `game` / `generic`），类型以 `<适配器>.` 开头、写法照 ADR 036 D2，
-    /// 有中文说明，`needs` 是自己的数据开关，不重名。
+    /// 这个插件登记的事以什么开头（`<范围>.<名字>`）：带适配器的是适配器 id，没有适配器的是插件 id（ADR 043 D10）。
+    pub fn event_scope(&self) -> &str {
+        self.adapter.as_deref().unwrap_or(&self.id)
+    }
+
+    /// 检查 `[[events]]`：范围（[`Self::event_scope`]）不能叫 `game` / `generic`，类型以 `<范围>.` 开头、写法照
+    /// ADR 036 D2，有中文说明，`needs` 是自己的数据开关，不重名。
     pub(crate) fn check_events(&self) -> Result<(), String> {
         if self.events.is_empty() {
             return Ok(());
         }
-        let adapter = match self.adapter.as_deref() {
-            Some(a) if valid_id(a) && a != GENERIC_SCOPE && a != GENERIC_ADAPTER => a,
+        let scope = match self.event_scope() {
+            s if valid_id(s) && s != GENERIC_SCOPE && s != GENERIC_ADAPTER => s,
             _ => {
                 return Err(format!(
-                    "插件 {} 登记了游戏事件，要写 adapter（游戏中心适配器的 id，不能是 game 或 generic）",
+                    "插件 {} 登记了游戏事件，adapter（游戏中心适配器的 id，没有就用插件 id）不能是 game 或 generic",
                     self.id
                 ))
             }
         };
         let mut seen = std::collections::HashSet::new();
         for spec in &self.events {
-            spec.check(adapter)
+            spec.check(scope)
                 .map_err(|e| format!("插件 {} 的{e}", self.id))?;
             if !seen.insert(spec.kind.as_str()) {
                 return Err(format!("插件 {} 的事件 {} 重名", self.id, spec.kind));
@@ -80,20 +87,19 @@ impl Manifest {
 }
 
 /// 合并后的事件目录：本体的 `game.*`，加上每个插件 `[[events]]` 登记的（按 `manifests` 的顺序；关着的也在，
-/// 标着为什么不会发生）。两个插件登记了同一种事时只留先登记的（宿主的测试查不许重名）。
+/// 标着为什么不会发生）。两个插件登记了同一种事时只留先登记的（宿主的测试查不许重名）。没有适配器的插件（语音输入）
+/// 那一组按插件 id 归（[`Manifest::event_scope`]），挂在所有游戏上。
 pub fn event_catalog<'a>(
     manifests: impl IntoIterator<Item = &'a Manifest>,
     settings: &Settings,
 ) -> EventCatalog {
     let mut catalog = EventCatalog::generic();
     for m in manifests {
-        let Some(adapter) = m.adapter.as_deref() else {
-            continue;
-        };
+        let scope = m.event_scope();
         for spec in &m.events {
             let _ = catalog.add(CatalogEntry {
                 spec: spec.clone(),
-                adapter: adapter.to_string(),
+                adapter: scope.to_string(),
                 plugin: Some((m.id.clone(), m.name.clone())),
                 games: m.games.clone(),
                 off: m.event_off(settings, spec),
@@ -191,8 +197,12 @@ label = "我阵亡了"
             (DEMO.replace("data.bossName", "data.boss_name"), "camelCase"),
             // 没有说明
             (DEMO.replace("label = \"我阵亡了\"", "label = \"\""), "说明"),
-            // 登记事件要有适配器，适配器不能叫 game
-            (DEMO.replace("adapter = \"demo\"\n", ""), "adapter"),
+            // 没有适配器：事件以插件 id 开头（这里插件 id 不是 demo）；适配器不能叫 game
+            (
+                DEMO.replace("adapter = \"demo\"\n", "")
+                    .replace("id = \"demo\"", "id = \"demo-x\""),
+                "demo-x.<名字>",
+            ),
             (
                 DEMO.replace("adapter = \"demo\"", "adapter = \"game\"")
                     .replace("demo.", "game."),
@@ -207,6 +217,41 @@ label = "我阵亡了"
             let error = Manifest::parse(&bad).unwrap_err();
             assert!(error.contains(want), "{want} → {error}");
         }
+    }
+
+    /// 没有游戏中心适配器的插件（语音输入，ADR 043 D10）也能登记事件：以插件 id 开头，目录里按插件 id 归组、挂在所有
+    /// 游戏上（`games` 空），插件关着时照样标着为什么不会发生。
+    #[test]
+    fn a_plugin_without_an_adapter_registers_events_under_its_id() {
+        const PLAIN: &str = r#"
+id = "talk-box"
+name = "说话框"
+description = "测试用的插件"
+
+[[events]]
+type = "talk-box.sent"
+label = "发出去一句"
+data.text = "发了什么"
+"#;
+        let m = Manifest::parse(PLAIN).unwrap();
+        assert_eq!(m.event_scope(), "talk-box");
+        let catalog = event_catalog([&m], &Settings::default());
+        let sent = catalog.get("talk-box.sent").unwrap();
+        assert_eq!(sent.adapter, "talk-box");
+        assert!(sent.games.is_empty() && sent.off.is_none());
+        assert!(catalog.knows("talk-box.*"));
+        let mut off = Settings::default();
+        off.plugins.entry("talk-box".into()).or_default().enabled = Some(false);
+        assert_eq!(
+            event_catalog([&m], &off)
+                .get("talk-box.sent")
+                .unwrap()
+                .off
+                .as_deref(),
+            Some("说话框插件关着")
+        );
+        // 不以插件 id 开头的不收
+        assert!(Manifest::parse(&PLAIN.replace("talk-box.sent", "other.sent")).is_err());
     }
 
     #[test]
@@ -242,7 +287,7 @@ label = "我阵亡了"
         );
         assert!(live_off.get("demo.my_death").unwrap().off.is_none());
 
-        // 没有适配器的插件不登记事件；两个插件登记同一种事只留先登记的
+        // 两个插件登记同一种事只留先登记的
         let twin = Manifest::parse(&DEMO.replace("id = \"demo\"", "id = \"demo-two\"")).unwrap();
         assert_eq!(
             event_catalog([&m, &twin], &Settings::default())

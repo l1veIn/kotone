@@ -156,7 +156,9 @@ const interpreter: PluginManifest = {
   agent: { overview: "", rule: "" },
 };
 
-// 语音输入（ADR 038 第 5 步）：默认开；没有给她的工具（game_chat.send 是本体的，ADR 039 D2）
+// 语音输入（ADR 038 第 5 步）：默认开；没有给她的工具（game_chat.send 是本体的，ADR 039 D2）。推送两条（发出去的话、
+// 没发出去）、事件两件（没有适配器，以插件 id 开头），卡片上的“重发”只给页面（ADR 043 D10）
+const voiceInputText = voiceInputZh as Record<string, string>;
 const voiceInput: PluginManifest = {
   id: "voice-input",
   name: voiceInputZh.plugin_voice_input_name,
@@ -165,8 +167,26 @@ const voiceInput: PluginManifest = {
   adapter: null,
   enabledByDefault: true,
   sources: [],
-  pages: [{ uri: "ui://kotone/voice-input/home", title: voiceInputZh.plugin_voice_input_name, needs: [] }],
+  pages: [
+    { uri: "ui://kotone/voice-input/home", title: voiceInputZh.plugin_voice_input_name, needs: [] },
+    { uri: "ui://kotone/voice-input/sent", title: voiceInputZh.plugin_voice_input_push_sent_title, needs: [] },
+    { uri: "ui://kotone/voice-input/failed", title: voiceInputZh.plugin_voice_input_push_failed_title, needs: [] },
+  ],
   agent: { overview: "", rule: "" },
+  pushes: ["sent", "failed"].map((id) => ({
+    id,
+    title: voiceInputText[`plugin_voice_input_push_${id}_title`],
+    when: voiceInputText[`plugin_voice_input_push_${id}_when`],
+    what: voiceInputText[`plugin_voice_input_push_${id}_what`],
+    forms: ["card" as const],
+    priority: "normal" as const,
+    enabledByDefault: true,
+    needs: [],
+  })),
+  events: [
+    { type: "voice-input.sent", label: voiceInputZh.plugin_voice_input_event_sent, needs: [], data: { text: "text", channel: "team / all", channelName: "channel" } },
+    { type: "voice-input.failed", label: voiceInputZh.plugin_voice_input_event_failed, needs: [], data: { reason: "reason", code: "code" } },
+  ],
 };
 
 interface MockTool { name: string; needs: string[]; visibility: PluginVisibility[]; page: string | null }
@@ -198,7 +218,7 @@ const TOOLS: Record<string, MockTool[]> = {
     ...["state", "login_start", "login_cancel", "logout", "search", "home", "playlist", "play", "control", "queue", "set_quality"]
       .map((t): MockTool => ({ name: `music.${t}`, needs: [], visibility: ["app"], page: null })),
   ],
-  "voice-input": [],
+  "voice-input": [{ name: "voice-input.resend", needs: [], visibility: ["app"], page: null }],
   interpreter: [
     { name: "interpreter.status", needs: [], visibility: ["app"], page: null },
     { name: "interpreter.start", needs: [], visibility: ["app"], page: null },
@@ -275,7 +295,8 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   }
   if (plugin === "voice-input") {
     if (!(await enabled(voiceInput))) return { content: { status: "disabled", text: voiceInput.name } };
-    // 预览里不打字（和别的没模拟的工具一样回工具名）
+    // 预览里不打字：重发照真的回“没重发”和原因（卡片照样显示）；别的没模拟的工具回工具名
+    if (tool === "voice-input.resend") return { content: { status: "refused", reason: "dev:web" } };
     return { content: { status: "error", text: tool } };
   }
   if (plugin === "interpreter") {

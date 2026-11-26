@@ -2,7 +2,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use kotone_core::history::{HistoryOutcome, HistoryPlace};
 use kotone_core::orchestrator::{CaptureObserver, Orchestrator};
+use kotone_core::send_to_game::ChatOutcome;
 use kotone_core::settings::Settings;
 
 use crate::VoiceInput;
@@ -38,6 +40,9 @@ pub(crate) struct HistoryDraft {
     /// 相邻段间隙 < SPEECH_GAP_SAMPLES 时合并保留句间短停顿）。
     /// 仅 VAD 模式填充；persist 时按区间拼接裁剪掉段首/段尾静音。
     pub(crate) speech_segments: Vec<(usize, usize)>,
+    /// 发到了哪个游戏、哪个频道（“发到游戏”入口的结果，ADR 043 D10）；没发出去为 None
+    pub(crate) game: Option<HistoryPlace>,
+    pub(crate) channel: Option<HistoryPlace>,
 }
 
 /// 语音区间合并间隙：相邻语音段间 ≤ 此采样数视为句间停顿（保留），
@@ -63,6 +68,8 @@ impl HistoryDraft {
             reported: false,
             vad_speech_seen: false,
             speech_segments: Vec::new(),
+            game: None,
+            channel: None,
         }
     }
 
@@ -98,6 +105,8 @@ impl HistoryDraft {
             reported: false,
             vad_speech_seen: false,
             speech_segments: Vec::new(),
+            game: None,
+            channel: None,
         }
     }
 }
@@ -220,6 +229,8 @@ impl VoiceInput {
                 outcome,
                 error,
                 audio_file: g.audio_file.clone(),
+                game: g.game.clone(),
+                channel: g.channel.clone(),
             }
         };
         let dir = orch
@@ -238,6 +249,58 @@ impl VoiceInput {
         }
         if outcome != kotone_core::history::HistoryOutcome::Error {
             self.state().history = None;
+        }
+    }
+
+    /// 发完一次：草稿记下发到了哪个游戏、哪个频道（没发出去清掉：输入条上重试成功前的那条 error 不写去处）。
+    pub(crate) fn set_draft_place(&self, sent_to: Option<&ChatOutcome>) {
+        let Some(draft) = self.state().history.clone() else {
+            return;
+        };
+        let (game, channel) = places(sent_to);
+        let mut g = draft.lock().unwrap();
+        g.game = game;
+        g.channel = channel;
+    }
+
+    /// 推送卡片上重发的不是现在这一句（ADR 043 D10）：照那一句原来的记录（同一个 sessionId，最新的一条）再记一条，
+    /// 文字是这次发的、结果是这次的（“失败 → 重发”和输入条上重试一样是两条）。识别记录关着、找不到原来那条就不记。
+    pub(crate) fn copy_history(
+        &self,
+        orch: &Orchestrator,
+        id: &str,
+        text: &str,
+        outcome: HistoryOutcome,
+        error: Option<String>,
+        sent_to: Option<&ChatOutcome>,
+    ) {
+        let cfg = orch.settings().read().unwrap().history.clone();
+        if cfg.mode == kotone_core::history::HistoryMode::Off {
+            return;
+        }
+        let dir = orch
+            .history_dir
+            .clone()
+            .unwrap_or_else(kotone_core::history::history_dir);
+        let Some(mut record) = kotone_core::history::list_in(&dir)
+            .ok()
+            .and_then(|records| records.into_iter().find(|r| r.session_id == id))
+        else {
+            return;
+        };
+        let (game, channel) = places(sent_to);
+        record.ts = kotone_core::eval::utc_now_iso();
+        record.final_text = text.to_string();
+        record.outcome = outcome;
+        record.error = error;
+        record.game = game;
+        record.channel = channel;
+        match kotone_core::history::append_in(&dir, &record, &cfg) {
+            Ok(()) => orch.emitter().emit(
+                "kotone://history-updated",
+                serde_json::json!({ "outcome": outcome }),
+            ),
+            Err(e) => kotone_core::log::log(&format!("history 落账失败（忽略）: {e}")),
         }
     }
 
@@ -327,4 +390,21 @@ pub(crate) fn trim_speech_pcm(pcm: &[f32], segments: &[(usize, usize)]) -> Vec<f
         }
     }
     out
+}
+
+/// 入口的结果 → 识别记录里的游戏、频道（id 和当时的名字）。
+fn places(sent_to: Option<&ChatOutcome>) -> (Option<HistoryPlace>, Option<HistoryPlace>) {
+    match sent_to {
+        Some(o) => (
+            Some(HistoryPlace {
+                id: o.game.clone(),
+                name: o.game_name.clone(),
+            }),
+            Some(HistoryPlace {
+                id: o.channel.clone(),
+                name: o.channel_name.clone(),
+            }),
+        ),
+        None => (None, None),
+    }
 }

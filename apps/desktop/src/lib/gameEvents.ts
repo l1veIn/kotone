@@ -1,6 +1,7 @@
 // 游戏状态和事件（ADR 036）：界面里的事件名、阶段名，自动化“游戏事件触发”的说明，现在在玩什么。
-// 事件目录只有一种登记方式（插件重构第 7 步）：本体的 game.* 在这里；游戏专用的事由带适配器的插件在 plugin.toml 的
-// [[events]] 里登记，界面从插件清单读（`manifest.events`），名字用插件自己的文案（plugin_<id>_event_<名字>）。
+// 事件目录只有一种登记方式（插件重构第 7 步）：本体的 game.* 在这里；游戏专用的事由插件在 plugin.toml 的
+// [[events]] 里登记（带适配器的以适配器 id 开头；没有适配器的插件——语音输入——以插件 id 开头，挂在所有游戏上，ADR 043 D10），
+// 界面从插件清单读（`manifest.events`），名字用插件自己的文案（plugin_<id>_event_<名字>）。
 // 插件关着（或它要的数据开关关着）时它的事不在选择里，但还认得（已经保存的照样显示、能保存）。
 // 规则和后端 games::event_catalog 一致（保存时后端还会再校验一次）。
 import { invoke } from "@tauri-apps/api/core";
@@ -58,7 +59,6 @@ function eventOff(settings: Settings | null | undefined, plugin: PluginManifest,
 export function eventCatalog(plugins: PluginInfo[] | null | undefined, settings: Settings | null | undefined): GameEventInfo[] {
   const out: GameEventInfo[] = GENERIC_EVENTS.map((type) => ({ type, label: type, plugin: null, team: false, off: null }));
   for (const { manifest } of plugins ?? []) {
-    if (!manifest.adapter) continue;
     for (const spec of manifest.events ?? []) {
       if (out.some((e) => e.type === spec.type)) continue;
       out.push({ type: spec.type, label: spec.label, plugin: manifest, team: "team" in (spec.data ?? {}), off: eventOff(settings, manifest, spec) });
@@ -67,9 +67,10 @@ export function eventCatalog(plugins: PluginInfo[] | null | undefined, settings:
   return out;
 }
 
-/** 这个游戏配置现在能选的事（不选游戏 = 只有通用的）：插件关着的不在里面。 */
+/** 这个游戏配置现在能选的事（不选游戏 = 通用的，加上不是游戏插件的，例如语音输入的）：插件关着的不在里面。 */
 export function eventsFor(catalog: GameEventInfo[], game: string | null | undefined): GameEventInfo[] {
-  return catalog.filter((e) => !e.off && (!e.plugin || (!!game && (e.plugin.games.length === 0 || e.plugin.games.includes(game)))));
+  return catalog.filter((e) => !e.off && (!e.plugin || !e.plugin.adapter
+    || (!!game && (e.plugin.games.length === 0 || e.plugin.games.includes(game)))));
 }
 
 /** 这个写法（一种事，或 `<范围>.*`）对上的事。 */

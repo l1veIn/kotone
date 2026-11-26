@@ -106,6 +106,19 @@ pub struct HistoryRecord {
     pub error: Option<String>,
     /// 相对 history/audio/ 的文件名；includeAudio 关闭或音频写入失败时为 null
     pub audio_file: Option<String>,
+    /// 发到了哪个游戏（游戏配置 id 和名字，取自“发到游戏”入口的结果，ADR 043 D10）。没发出去、旧记录没有。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<HistoryPlace>,
+    /// 发到了哪个频道（频道 id 和名字，例如 `team` / “队伍”）。没发出去、旧记录没有。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<HistoryPlace>,
+}
+
+/// 识别记录里“发到了哪里”的一项：id（游戏配置 id、频道 id）和界面上的名字（当时的名字，改了配置也照旧显示）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HistoryPlace {
+    pub id: String,
+    pub name: String,
 }
 
 // ---------- 路径 ----------
@@ -384,6 +397,8 @@ mod tests {
             outcome,
             error: (outcome == HistoryOutcome::Error).then(|| "注入失败".to_string()),
             audio_file: None,
+            game: None,
+            channel: None,
         }
     }
 
@@ -442,6 +457,51 @@ mod tests {
         assert_eq!(records[1].profile_id.as_deref(), Some("lol"));
         assert!(records[1].error.is_none());
         assert_eq!(records[0].outcome, HistoryOutcome::Cancelled);
+    }
+
+    /// ADR 043 D10：记录里多了发到哪个游戏、哪个频道（只加字段，原则 19）。有的写、读回来一样；没有的不写这两个键；
+    /// 旧版本写的记录（没有这两个键）照样读，新版本写的记录旧版本也读得了（多的键不管）。
+    #[test]
+    fn game_and_channel_round_trip_and_old_records_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sent = rec("s1", HistoryOutcome::Sent);
+        sent.game = Some(HistoryPlace {
+            id: "lol".into(),
+            name: "英雄联盟".into(),
+        });
+        sent.channel = Some(HistoryPlace {
+            id: "team".into(),
+            name: "队伍".into(),
+        });
+        let failed = rec("s2", HistoryOutcome::Error);
+        append_in(dir.path(), &sent, &cfg(HistoryMode::KeepAll, 10)).unwrap();
+        append_in(dir.path(), &failed, &cfg(HistoryMode::KeepAll, 10)).unwrap();
+
+        let raw = std::fs::read_to_string(jsonl_path(dir.path())).unwrap();
+        let lines: Vec<serde_json::Value> = raw
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(
+            lines[0]["game"],
+            serde_json::json!({"id": "lol", "name": "英雄联盟"})
+        );
+        assert_eq!(
+            lines[0]["channel"],
+            serde_json::json!({"id": "team", "name": "队伍"})
+        );
+        assert!(lines[1].get("game").is_none() && lines[1].get("channel").is_none());
+
+        let records = list_in(dir.path()).unwrap();
+        assert_eq!(records[1].game, sent.game);
+        assert_eq!(records[1].channel, sent.channel);
+        assert!(records[0].game.is_none() && records[0].channel.is_none());
+
+        // 旧版本写的一行（没有 game / channel、也没有 sourceText 这些后加的键）
+        let old = r#"{"sessionId":"old","ts":"2026-05-01T00:00:00Z","engineId":"e","profileId":null,"finalText":"老的","audioMs":0,"firstPartialMs":null,"finalizeLatencyMs":null,"outcome":"sent","error":null,"audioFile":null}"#;
+        let r: HistoryRecord = serde_json::from_str(old).unwrap();
+        assert!(r.game.is_none() && r.channel.is_none());
+        assert_eq!(r.final_text, "老的");
     }
 
     #[test]

@@ -282,10 +282,13 @@ impl Orchestrator {
         self
     }
 
-    /// 包装为 Arc 并接线 Weak 自引用（VAD 判停 → end() 的回调通道）
+    /// 包装为 Arc 并接线 Weak 自引用（VAD 判停 → end() 的回调通道），再告诉接上的语音输入（[`AfterHearing::attached`]）。
     pub fn into_arc(self) -> Arc<Self> {
         let orch = Arc::new(self);
         *orch.me.write().unwrap() = Some(Arc::downgrade(&orch));
+        if let Some(after) = orch.after_hearing.clone() {
+            after.attached(&orch);
+        }
         orch
     }
 

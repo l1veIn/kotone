@@ -238,9 +238,33 @@ pub fn event_catalog(settings: &kotone_core::settings::Settings) -> EventCatalog
     )
 }
 
+/// 给她看的最近几件事（`game.state`）：不列切进切出窗口；登记为不给她看的字段去掉（语音输入发出去的那句话只经
+/// 推送给她的说明交给她，玩家关得掉，ADR 043 D10）。自动化拿到的是事件本身，不经过这里。
+fn recent_for_her(events: Vec<GameEvent>, catalog: &EventCatalog, now: u64) -> Vec<Value> {
+    events
+        .into_iter()
+        .filter(|e| e.kind != "game.focused" && e.kind != "game.unfocused")
+        .map(|e| {
+            serde_json::json!({
+                "type": e.kind,
+                "secondsAgo": now.saturating_sub(e.time) / 1000,
+                "gameTime": e.game_time,
+                "data": catalog.data_for_her(&e.kind, &e.data),
+            })
+        })
+        .collect()
+}
+
 /// `game.state` 工具：现在在玩什么、在哪个阶段、这局多久了、最近几件事，以及每个游戏能给哪些事。
 pub fn state_json(app: &AppHandle, game: Option<&str>) -> Value {
     let now = now_ms();
+    let settings = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .clone();
+    let catalog = event_catalog(&settings);
     let states: Vec<Value> = states()
         .into_iter()
         .filter(|s| game.map_or(true, |g| g == s.game))
@@ -248,18 +272,7 @@ pub fn state_json(app: &AppHandle, game: Option<&str>) -> Value {
             let name = profile::get(&s.game)
                 .map(|p| p.display_name)
                 .unwrap_or_else(|| s.game.clone());
-            let recent: Vec<Value> = recent(&s.game, 8)
-                .into_iter()
-                .filter(|e| e.kind != "game.focused" && e.kind != "game.unfocused")
-                .map(|e| {
-                    serde_json::json!({
-                        "type": e.kind,
-                        "secondsAgo": now.saturating_sub(e.time) / 1000,
-                        "gameTime": e.game_time,
-                        "data": e.data,
-                    })
-                })
-                .collect();
+            let recent = recent_for_her(recent(&s.game, 8), &catalog, now);
             serde_json::json!({
                 "game": s.game,
                 "name": name,
@@ -274,13 +287,7 @@ pub fn state_json(app: &AppHandle, game: Option<&str>) -> Value {
             })
         })
         .collect();
-    let settings = app
-        .state::<crate::SharedState>()
-        .settings
-        .read()
-        .unwrap()
-        .clone();
-    serde_json::json!({"playing": states, "events": event_catalog(&settings).summary()})
+    serde_json::json!({"playing": states, "events": catalog.summary()})
 }
 
 /// 界面：现在在玩什么（和 `game.state` 工具同一份）。
@@ -338,5 +345,53 @@ mod tests {
         assert_eq!(group["events"], serde_json::json!([]));
         assert!(group["off"].as_str().unwrap().contains("英雄联盟插件关着"));
         assert!(!summary.to_string().contains(lol_kind.as_str()));
+    }
+
+    /// ADR 043 D10：语音输入“发出去一句”在 `game.state` 的最近几件事里只有频道，没有那句话（那句话只经“发出去的话”
+    /// 推送给她的说明交给她，玩家关得掉）；自动化触发时拿到的事件还是带着那句话。
+    #[test]
+    fn game_state_never_shows_what_the_player_said_but_automations_get_it() {
+        use kotone_plugin_voice_input::pushes::{event_kind, EVENT_SENT};
+        let kind = event_kind(EVENT_SENT);
+        let catalog = event_catalog(&Settings::default());
+        assert!(catalog.knows(&kind));
+        let mut hub = Hub::default();
+        hub.observe(
+            "lol",
+            Observation {
+                phase: Phase::InMatch,
+                ..Observation::default()
+            },
+            0,
+        );
+        let mut data = Map::new();
+        data.insert("text".into(), Value::from("打野来中路"));
+        data.insert("channel".into(), Value::from("team"));
+        data.insert("channelName".into(), Value::from("队伍"));
+        let event = hub
+            .push("lol", &kind, "voice-input", data, None, 1_000)
+            .unwrap();
+
+        let shown = recent_for_her(hub.recent("lol", 8), &catalog, 2_000);
+        let said = shown.iter().find(|e| e["type"] == kind.as_str()).unwrap();
+        assert_eq!(said["data"]["channelName"], "队伍");
+        assert!(said["data"].get("text").is_none(), "{said}");
+        assert!(!serde_json::to_string(&shown)
+            .unwrap()
+            .contains("打野来中路"));
+
+        let on: kotone_core::games::EventTrigger =
+            serde_json::from_value(serde_json::json!({"event": [kind.clone()]})).unwrap();
+        let fires = Triggers::default().on_event(
+            &[Armed {
+                id: "a",
+                trigger: &on,
+                per_match: None,
+            }],
+            &event,
+            2_000,
+        );
+        assert_eq!(fires.len(), 1);
+        assert_eq!(fires[0].event.data["text"], "打野来中路");
     }
 }

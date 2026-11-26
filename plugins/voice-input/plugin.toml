@@ -13,6 +13,48 @@ enabled_by_default = true
 uri = "ui://kotone/voice-input/home"
 title = "语音输入"
 
+# 推送的两张卡片（ADR 043 D10）：聊天里的小卡片和点开以后右侧栏里的样子，数据见 src/pushes.rs
+[[pages]]
+uri = "ui://kotone/voice-input/sent"
+title = "发出去的话"
+
+[[pages]]
+uri = "ui://kotone/voice-input/failed"
+title = "没发出去"
+
+# 内置推送（ADR 043 D4、D10）：插件页「设置 → 推送」里每条一个开关，宿主执行。都是卡片、默认开、不要数据开关。
+# “发出去的话”给她留一句说明（发出去的那句话）：下次叫她时这句话随对话发给模型服务商，关掉这条就不给。
+[[pushes]]
+id = "sent"
+title = "发出去的话"
+when = "语音输入往游戏聊天里发出去一句；同一个游戏、同一个频道，上一句发出后 2 分钟内的并进同一张"
+what = "发一张卡片：你向哪个频道发了什么（处理过的话，和原话不一样时也写原话）；给她留一句说明，她就知道你在游戏里说了什么"
+forms = ["card"]
+
+[[pushes]]
+id = "failed"
+title = "没发出去"
+when = "语音输入的一句没发进游戏聊天"
+what = "发一张卡片：为什么没发出去，带一个“重发”按钮；你点了才重发，回到原来那个游戏窗口发"
+forms = ["card"]
+
+# 事件（ADR 043 D10）：给自动化和她用。不是游戏插件、没有适配器，名字以插件 id 开头；游戏中心里这个游戏在跑时才报。
+# 发出去的那句话（text）只交给自动化，她在 game.state 里只看到“在哪个频道发了一句”：那句话只经“发出去的话”推送给她的
+# 说明交给她，玩家关掉那条推送就不给（private）。
+[[events]]
+type = "voice-input.sent"
+label = "语音输入发出去一句"
+data.text = "发出去的话（处理过的）"
+data.channel = "频道 id：team（队伍）/ all（所有人）……"
+data.channelName = "频道的名字（“队伍”）"
+private = ["text"]
+
+[[events]]
+type = "voice-input.failed"
+label = "语音输入有一句没发出去"
+data.reason = "为什么没发出去（给人看的一句话）"
+data.code = "原因的代号：MODIFIERS_STILL_DOWN / INPUT_BUSY / INJECTION_BLOCKED / INJECTION_FAILED……"
+
 # 能绑热键的命令（ADR 040 D1）：宿主在按下 / 松开时经本体的“听一句”调插件（AfterHearing::command）。
 # 只登记命令，不带默认键（D4；新装时“说话”的 CapsLock 写在本体的默认设置里）。都要语音识别（listens）：
 # 识别没在跑时键照常给游戏，按了在悬浮窗提示（ADR 040 实施记录，主会话定的第 2 条）。

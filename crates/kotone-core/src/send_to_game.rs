@@ -99,6 +99,10 @@ pub struct ChatRequest {
     /// 这个时间之前一定返回（工具服务：它自己的期限减一点余量）；None = [`DEFAULT_DEADLINE`]。
     pub deadline: Option<Instant>,
     pub cancel: CancelToken,
+    /// 只发到要发去的那个窗口（语音输入推送卡片上的“重发”：玩家在聊天里点的，这时前台多半是 Kotone 自己，ADR 043 D10）：
+    /// 切不回 `restore` 那个窗口（关了、切不过去）就不发；前台是 Kotone 自己、桌面、没有前台也不发——不退回“发到
+    /// 现在的前台”，免得打进 Kotone 自己的输入框。默认 false：语音输入照旧（窗口没了就发到现在的前台）。
+    pub strict_target: bool,
 }
 
 impl ChatRequest {
@@ -111,6 +115,7 @@ impl ChatRequest {
             restore: None,
             deadline: None,
             cancel: CancelToken::default(),
+            strict_target: false,
         }
     }
 }
@@ -220,6 +225,8 @@ pub enum ChatFailure {
     },
     /// 这里经插件的发法发（客户端接口），没法只打进聊天框不发（`send = false`）
     NoDraftHere,
+    /// 只发到要发去的那个窗口（[`ChatRequest::strict_target`]）：那个窗口关了，或者切不过去
+    WindowGone,
 }
 
 impl ChatFailure {
@@ -245,6 +252,7 @@ impl ChatFailure {
             Self::Provider(stop) => stop.code.as_str(),
             Self::ProviderOff { .. } => "providerOff",
             Self::NoDraftHere => "noDraftHere",
+            Self::WindowGone => "windowGone",
         }
     }
 
@@ -298,6 +306,7 @@ impl std::fmt::Display for ChatFailure {
                 f,
                 "这里的聊天经客户端发，没法只打进聊天框不发，这次没发：要直接发，打开“帮忙打字后自动发送”（唤醒 → 快捷指令）"
             ),
+            Self::WindowGone => write!(f, "要发去的那个窗口已经关了（或者切不过去），这次没发"),
         }
     }
 }
@@ -594,12 +603,18 @@ impl SendToGame for GameChat {
 
         // 第一行之前先等修饰键（在切回窗口之前：等的时候取消了就不切）
         waited_ms += self.wait_modifiers(&cancel, deadline, Duration::ZERO)?;
+        let mut restored = None;
         if let Some(restore) = request.restore {
-            if self.focus.restore(restore.window) && !restore.settle.is_zero() {
+            let back = self.focus.restore(restore.window);
+            if back && !restore.settle.is_zero() {
                 self.clock.sleep(restore.settle);
             }
+            restored = Some((restore.window, back));
         }
         let fg = self.focus.foreground_info();
+        if request.strict_target {
+            strict_front(fg.as_ref(), restored)?;
+        }
         let (active, profiles) = self.games(fg.as_ref());
         let game = pick_game(fg.as_ref(), &profiles, &active, request.speaker)?;
         let (strategy, channel_fell_back) = pick_channel(&game, request.channel.as_ref())?;
@@ -663,6 +678,28 @@ impl SendToGame for GameChat {
         outcome.waited_ms = waited_ms;
         Ok(outcome)
     }
+}
+
+/// [`ChatRequest::strict_target`] 的检查（拿到锁、切回窗口以后，按键以前）：要切回的那个窗口切回来了、就在前台；
+/// 前台不是 Kotone 自己、不是桌面或文件夹。
+fn strict_front(
+    fg: Option<&ForegroundInfo>,
+    restored: Option<(TargetWindow, bool)>,
+) -> Result<(), ChatFailure> {
+    if let Some((window, back)) = restored {
+        if !back || fg.map(|f| f.window) != Some(window) {
+            return Err(ChatFailure::WindowGone);
+        }
+    }
+    let fg = fg.ok_or(ChatFailure::NoForeground)?;
+    if fg.own_process {
+        return Err(ChatFailure::OwnWindow);
+    }
+    let process = fg.process.as_deref().unwrap_or("");
+    if process.is_empty() || process.eq_ignore_ascii_case("explorer.exe") {
+        return Err(ChatFailure::Desktop);
+    }
+    Ok(())
 }
 
 /// 一行一条：`\r\n` / `\n` / `\r` 都算换行，每行去首尾空白，丢掉空行（照 LeagueAkari 的

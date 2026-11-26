@@ -108,12 +108,13 @@ fn plugin_event_names_never_appear_in_the_body() {
 }
 
 #[test]
-fn every_plugin_event_name_is_unique_and_under_its_adapter() {
+fn every_plugin_event_name_is_unique_and_under_its_scope() {
     let mut seen = std::collections::HashSet::new();
     for m in manifests() {
         for e in &m.events {
-            let adapter = m.adapter.as_deref().unwrap();
-            assert!(e.kind.starts_with(&format!("{adapter}.")), "{}", e.kind);
+            // 带适配器的以适配器 id 开头，没有适配器的（语音输入）以插件 id 开头
+            let scope = m.event_scope();
+            assert!(e.kind.starts_with(&format!("{scope}.")), "{}", e.kind);
             assert!(seen.insert(e.kind.clone()), "两个插件都登记了 {}", e.kind);
         }
     }

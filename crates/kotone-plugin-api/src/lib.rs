@@ -79,8 +79,9 @@ pub struct Manifest {
     /// 给她的话（写进系统提示）。
     #[serde(default)]
     pub agent: AgentText,
-    /// 游戏中心的事（ADR 036 D4）：带适配器的插件登记自己会报的事（`[[events]]`：类型、中文说明、`data` 字段和
-    /// 说明、要的数据开关）。类型以 `<适配器>.` 开头；只有登记过的才报得出去。见 [`event_catalog`]。
+    /// 游戏中心的事（ADR 036 D4）：插件登记自己会报的事（`[[events]]`：类型、中文说明、`data` 字段和
+    /// 说明、要的数据开关）。类型以 `<适配器>.` 开头（没有适配器的插件以 `<插件 id>.` 开头，ADR 043 D10）；
+    /// 只有登记过的才报得出去。见 [`event_catalog`]。
     #[serde(default)]
     pub events: Vec<EventSpec>,
     /// 能绑热键的命令（ADR 040 D1，`[[commands]]`：id、名字、一句说明、按一下 / 按住、要不要语音识别）。

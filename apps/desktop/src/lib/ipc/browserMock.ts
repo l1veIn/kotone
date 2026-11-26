@@ -320,6 +320,9 @@ const mock: MockStore = {
       outcome: "sent",
       error: null,
       audioFile: null,
+      // 发到了哪个游戏、哪个频道（ADR 043 D10；下面那条是旧记录，没有）
+      game: { id: "lol", name: "英雄联盟" },
+      channel: { id: "team", name: "队伍" },
     },
     {
       sessionId: "20260725-100524-711",

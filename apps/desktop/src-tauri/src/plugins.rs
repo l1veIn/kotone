@@ -931,12 +931,13 @@ mod tests {
     }
 
     /// 语音输入搬进插件（ADR 038 第 5 步）：插件默认开，关掉以后语音输入热键、频道 / 重发 / 文字处理热键
-    /// 都不登记，呼叫键照常。它不给她工具：`game_chat.send` 是本体的（ADR 039 D2，见下一个测试）。
+    /// 都不登记，呼叫键照常。它不给她工具：`game_chat.send` 是本体的（ADR 039 D2，见下一个测试）；只有推送卡片上的
+    /// “重发”给页面用（ADR 043 D10）。
     #[test]
     fn voice_input_is_a_plugin_and_its_switch_takes_the_hotkeys_with_it() {
         let vi = find("voice-input").expect("语音输入插件");
         assert!(vi.manifest().enabled_by_default);
-        assert!(vi.tools().is_empty());
+        assert!(vi.tools().iter().all(|t| !t.for_model() && t.for_app()));
         assert!(owner("game_chat.send").is_none());
 
         // 语音输入的键存在热键表里（ADR 040 D8）

@@ -859,6 +859,16 @@ export interface HistoryRecord {
   error: string | null;
   /** 相对 history/audio/ 的文件名；无音频为 null */
   audioFile: string | null;
+  /** 发到了哪个游戏（游戏配置 id 和当时的名字，ADR 043 D10）；没发出去、旧记录没有 */
+  game?: HistoryPlace | null;
+  /** 发到了哪个频道（频道 id 和当时的名字，例如 team / 队伍）；没发出去、旧记录没有 */
+  channel?: HistoryPlace | null;
+}
+
+/** 识别记录里“发到了哪里”的一项（后端 `history::HistoryPlace`）。 */
+export interface HistoryPlace {
+  id: string;
+  name: string;
 }
 
 // ---------- 提权（UIPI 方案，docs/development.md §10 R-1） ----------

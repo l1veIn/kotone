@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::EventTrigger;
 
@@ -28,6 +28,7 @@ pub const GENERIC_ADAPTER: &str = "generic";
 /// label = "中文说明"
 /// needs = ["<数据开关>"]
 /// data.team = "哪一边：ally（我方）/ enemy（对面）"
+/// private = ["<字段>"]       # 可选：不给她看的字段（见 EventSpec::private）
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +44,11 @@ pub struct EventSpec {
     /// 插件登记的：要插件里哪些数据开关开着才会发生（本体的为空）。
     #[serde(default)]
     pub needs: Vec<String>,
+    /// `data` 里不给她看的字段（ADR 043 D10：语音输入发出去的那句话，只经那条推送给她的说明交给她，玩家关掉推送就不给）：
+    /// `game.state` 的最近几件事里去掉（[`EventCatalog::data_for_her`]）；自动化照样拿到整份（那是玩家自己的自动化）。
+    /// 要是 `data` 里登记过的字段。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub private: Vec<String>,
 }
 
 /// 说明最多几个字。
@@ -87,6 +93,12 @@ impl EventSpec {
         {
             return Err(format!(
                 "事件 {} 的 data.{field} 要用 camelCase，并且写上说明",
+                self.kind
+            ));
+        }
+        if let Some(field) = self.private.iter().find(|f| !self.data.contains_key(*f)) {
+            return Err(format!(
+                "事件 {} 的 private 里的 {field} 要是 data 里登记过的字段",
                 self.kind
             ));
         }
@@ -143,6 +155,7 @@ pub fn generic_events() -> Vec<EventSpec> {
                 .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
                 .collect(),
             needs: Vec::new(),
+            private: Vec::new(),
         })
         .collect()
 }
@@ -232,6 +245,18 @@ impl EventCatalog {
             })
     }
 
+    /// 给她看的一件事的数据（`game.state` 的最近几件事）：去掉这种事登记为不给她看的字段（[`EventSpec::private`]）。
+    /// 自动化拿到的是事件本身，不经过这里。
+    pub fn data_for_her(&self, kind: &str, data: &Map<String, Value>) -> Map<String, Value> {
+        let private = self
+            .get(kind)
+            .map_or(&[][..], |e| e.spec.private.as_slice());
+        data.iter()
+            .filter(|(field, _)| !private.contains(field))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
     /// 认不认得这个写法（插件关着也认得）。
     pub fn knows(&self, pattern: &str) -> bool {
         self.matching(pattern).next().is_some()
@@ -266,7 +291,14 @@ impl EventCatalog {
                     "events": entries.iter().filter(|e| e.off.is_none()).map(|e| json!({
                         "type": e.spec.kind,
                         "label": e.spec.label,
-                        "data": e.spec.data,
+                        "data": e.spec.data.iter().map(|(field, about)| {
+                            let about = if e.spec.private.contains(field) {
+                                format!("{about}（只交给自动化，这里的最近几件事里不显示）")
+                            } else {
+                                about.clone()
+                            };
+                            (field.clone(), Value::String(about))
+                        }).collect::<Map<String, Value>>(),
                     })).collect::<Vec<_>>(),
                 });
                 if let Some((_, name)) = &first.plugin {

@@ -140,6 +140,7 @@ fn demo_spec(kind: &str, label: &str, fields: &[&str]) -> EventSpec {
             .map(|f| (f.to_string(), format!("{f} 的说明")))
             .collect(),
         needs: vec!["live".into()],
+        private: Vec::new(),
     }
 }
 
@@ -482,4 +483,54 @@ fn catalog_names_follow_the_naming_rule() {
         let text = serde_json::to_value(p).unwrap();
         assert_eq!(text, p.as_str());
     }
+}
+
+/// ADR 043 D10：登记为不给她看的字段（`private`，语音输入发出去的那句话）在 `game.state` 的最近几件事里去掉，
+/// 目录里写明“只交给自动化”；自动化触发时拿到的事件还是整份。`private` 要是 `data` 里登记过的字段。
+#[test]
+fn private_fields_reach_automations_but_not_her() {
+    let mut spec = demo_spec("demo.said", "说了一句", &["text", "channel"]);
+    spec.needs.clear();
+    spec.private = vec!["text".into()];
+    assert!(spec.check("demo").is_ok());
+    let mut bad = spec.clone();
+    bad.private = vec!["words".into()];
+    assert!(bad.check("demo").unwrap_err().contains("words"));
+    let mut catalog = EventCatalog::generic();
+    catalog.add(demo_entry(spec, None)).unwrap();
+
+    let mut hub = Hub::default();
+    hub.observe("demo", seen(Phase::InMatch, ""), 0);
+    let event = hub
+        .push(
+            "demo",
+            "demo.said",
+            "x",
+            data(&[("text", json!("打野来中路")), ("channel", json!("team"))]),
+            None,
+            1,
+        )
+        .unwrap();
+    // 自动化：整份
+    let on = trigger(json!({"event": ["demo.said"]}));
+    let fires = Triggers::default().on_event(
+        &[Armed {
+            id: "a",
+            trigger: &on,
+            per_match: None,
+        }],
+        &event,
+        2,
+    );
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0].event.data["text"], "打野来中路");
+    // 给她看的：没有那句话
+    let shown = catalog.data_for_her(&event.kind, &event.data);
+    assert!(!shown.contains_key("text"));
+    assert_eq!(shown["channel"], "team");
+    // 别的事照旧整份
+    assert_eq!(catalog.data_for_her("demo.other", &event.data), event.data);
+    // 目录里写明这个字段只交给自动化
+    let summary = catalog.summary().to_string();
+    assert!(summary.contains("只交给自动化"), "{summary}");
 }

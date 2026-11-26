@@ -230,10 +230,11 @@ impl VoiceInput {
                         ],
                         false,
                         None,
+                        crate::send::Route::default(),
                     )
                     .await?
                 {
-                    self.run_send(orch, claim).await;
+                    let _ = self.run_send(orch, claim).await;
                 }
             }
             PostFinalize::PreviewConfirm => {

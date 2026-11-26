@@ -14,6 +14,7 @@
 //! - 确认（lifecycle）：[`AfterHearing::confirm_heard`]。
 //! - 会话结束（lifecycle、mod）：锁里停下正在跑的发送（发送权 [`SendOperation`] 留在本体，开始新会话、
 //!   改热键都要看它），锁外 [`AfterHearing::on_session_ended`]。
+//! - 接上（mod 的 `into_arc`）：[`AfterHearing::attached`] 给插件本体的弱引用（“听一句”以外的时候用，例如重发）。
 //!
 //! 插件改会话状态只经 [`Orchestrator::lock_op`]（begin / end / cancel / confirm 共用的临界区）和
 //! [`Orchestrator::session`]（状态那把锁）。**锁的顺序**：op → 状态锁 → 插件自己的锁。本体会在状态锁里调
@@ -37,6 +38,12 @@ pub trait AfterHearing: Send + Sync + 'static {
     /// [`Orchestrator::hearing_command`] 转给 [`AfterHearing::command`]（ADR 040 D1）。
     fn owner(&self) -> &str {
         ""
+    }
+
+    /// 接上了（宿主 [`Orchestrator::into_arc`] 时调一次）：插件要在“听一句”以外的时候用本体（例如玩家在聊天里点了
+    /// 语音输入推送卡片上的“重发”，ADR 043 D10），就在这里记下本体的弱引用。默认什么都不做。
+    fn attached(&self, orch: &Arc<Orchestrator>) {
+        let _ = orch;
     }
 
     /// 这一段登记的命令被按了（ADR 040 D1：插件自己处理的动作）。按住的命令按下、松开各来一次，按物理顺序；
