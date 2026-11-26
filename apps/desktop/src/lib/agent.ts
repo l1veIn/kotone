@@ -25,13 +25,11 @@ export type AgentMessage =
   | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number; display?: ToolDisplay; background?: boolean }
   /** `compaction`：上下文压缩的检查点（摘要）；它之前的消息不再发给模型。 */
   /** `recap`：对局复盘的正文（`text` 是标题），只给玩家看。 */
-  /** `card`：自动卡片（ADR 039 D3），插件不叫她、自己发进聊天的卡片；只给界面。 */
-  | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage; recap?: string; card?: AutoCardInfo };
+  /** `push`：推送（ADR 043 D3），插件不叫她、自己发进聊天的一条（卡片 / 一行 / 语音）；只给界面。 */
+  /** `card`：旧的自动卡片（ADR 039 D3，rc.9 及以前写的），只读旧的，照样画成卡片。 */
+  | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage; recap?: string; card?: AutoCardInfo; push?: PushRecord };
 
-/**
- * 自动卡片（ADR 039 D3，后端 `kotone_agent::auto_card`）：哪个插件发的、卡片名、去重键、消息提示那句；
- * `ui` / `structuredContent` 和工具结果的 `display` 同一个形状（聊天里用同一个卡片组件）。
- */
+/** 旧的自动卡片（ADR 039 D3，rc.9 写在 Notice 的 `card` 里）。新的推送见 `PushRecord`。 */
 export interface AutoCardInfo {
   plugin: string;
   pluginName: string;
@@ -41,8 +39,55 @@ export interface AutoCardInfo {
   ui: ToolDisplay["ui"];
   structuredContent?: unknown;
 }
-/** 自动卡片给她的那一两句（来源 `auto-card` 的用户消息）：界面不显示，显示的是前面那张卡片。 */
-export const AUTO_CARD_SOURCE = "auto-card";
+
+/** 一行里一格的好坏（界面上的颜色）。 */
+export type PushTone = "good" | "ok" | "bad";
+export interface PushCell { text: string; tone?: PushTone }
+/**
+ * 推送（ADR 043 D3，后端 `kotone_agent::push::record`）：Notice 的 `push`。哪个插件、哪条推送（`trigger`，清单 `[[pushes]]`
+ * 的 id；`title` 是它的名字）、`key`（同一个 `plugin:key` 再推一次就是更新，原地重画）；卡片 / 一行 / 语音至少一样：
+ * `card` 和工具结果的 `display` 同一个形状（聊天里用同一个卡片组件）；`voice` 是几个说法、`said` 是这次说的那句。
+ */
+export interface PushRecord {
+  plugin: string;
+  pluginName: string;
+  trigger: string;
+  title: string;
+  key: string;
+  card?: { title: string; ui: ToolDisplay["ui"]; structuredContent?: unknown };
+  line?: { cells: PushCell[] };
+  voice?: string[];
+  said?: string;
+  /** 更新过才有。 */
+  updatedAtMs?: number;
+}
+/**
+ * 推送的界面事件（`kotone://push`，后端 `agent/push.rs` 的 `emit_push`）：聊天页和悬浮窗都听。
+ * `posted`：这个 key 第一次推；`updated`：原地换掉同一个 `plugin:key` 的那条（位置不动）；`held` = 还没记进对话（她在忙），
+ * 界面照样马上显示；`alert` = 带“要提醒”的更新（悬浮窗再弹一次）。`done`：这条推送结束了（悬浮窗收起那一行，聊天里留着）。
+ */
+export type PushEvent =
+  | { kind: "posted" | "updated"; conversationId: string; plugin: string; trigger: string; key: string; held: boolean; alert: boolean; message: AgentMessage }
+  | { kind: "done"; plugin: string; trigger: string; key: string };
+
+/** 聊天里画推送用的样子：新的推送照原样；旧的自动卡片换成一条只有卡片的推送。不是推送时 null。 */
+export function pushOf(message: AgentMessage): PushRecord | null {
+  if (message.role !== "notice") return null;
+  if (message.push) return message.push;
+  const card = message.card;
+  if (!card) return null;
+  return {
+    plugin: card.plugin, pluginName: card.pluginName, trigger: "", title: card.title, key: card.key,
+    card: { title: card.title, ui: card.ui, structuredContent: card.structuredContent },
+  };
+}
+/** 推送的标识：插件 + key（同一个标识再推一次就是更新）。不是推送时 null。 */
+export function pushId(message: AgentMessage): string | null {
+  const push = pushOf(message);
+  return push ? `${push.plugin}:${push.key.trim()}` : null;
+}
+/** 推送给她的那一句（来源 `auto-card` 的用户消息；名字是只有自动卡片时起的，存盘的值不改）：界面不显示。 */
+export const PUSH_NOTE_SOURCE = "auto-card";
 
 /**
  * 交给后台做的事（ADR 029 第三节）：主会话用 `agent.start` 派出去，玩家只看到主会话里的一张卡片。
@@ -100,8 +145,6 @@ export type AgentEvent =
   | { kind: "finished"; stop: StopReason; acpStopReason: string | null }
   /** 派出去的一件事有了新状态（ADR 029）：按 name 更新 `conversation.subagents`。 */
   | { kind: "subagent"; info: SubagentInfo }
-  /** 自动卡片来了，但她正在这一轮里（ADR 039 D3）：卡片先显示，等这一轮结束再记进对话（那时再来一条 appended）。 */
-  | { kind: "autoCard"; message: AgentMessage }
   | { kind: "idle" };
 
 export interface PermissionRequest { callId: string; tool: string; title: string; reason: string; arguments: unknown }
@@ -325,7 +368,12 @@ export async function subscribeAgent(callback: (conversationId: string, event: A
   if (!isTauri) return () => {};
   return listen<{ conversationId: string; event: AgentEvent }>("kotone://agent-event", (e) => callback(e.payload.conversationId, normalizeEvent(e.payload.event)));
 }
-/** 某段对话里压着、还没记进对话的自动卡片（她这一轮说完才记，ADR 039 D3）：重新读对话时照样显示。 */
+/** 推送（ADR 043）：新的一条、原地更新、结束了。 */
+export async function subscribePushes(callback: (event: PushEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri) return () => {};
+  return listen<PushEvent>("kotone://push", (e) => callback(e.payload));
+}
+/** 某段对话里排着、还没记进对话的推送（新的，和排着的原地更新；她这一轮说完才记）：重新读对话时照样显示。 */
 export async function agentHeldCards(id: string): Promise<AgentMessage[]> {
   if (!isTauri) return [];
   try {
@@ -334,7 +382,7 @@ export async function agentHeldCards(id: string): Promise<AgentMessage[]> {
     return [];
   }
 }
-/** 玩家点了消息提示（ADR 039 D4）：主窗口定位到那张自动卡片。 */
+/** 玩家点了消息提示（ADR 039 D4）：主窗口定位到那条推送。 */
 export async function subscribeAutoCardFocus(callback: (focus: { conversationId: string; key: string }) => void): Promise<UnlistenFn> {
   if (!isTauri) return () => {};
   return listen<{ conversationId: string; key: string }>("kotone://auto-card-focus", (e) => callback(e.payload));

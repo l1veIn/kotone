@@ -2,9 +2,9 @@
 // 当前对话由后端决定（游戏内语音与聊天窗口共用“当前对话”）；这里显示的总是 agent_state.current。
 import {
   agentAnswer, agentConversation, agentDeleteConversation, agentHeldCards, agentNewConversation, agentSelectConversation,
-  agentSend, agentState, agentStop, subscribeAgent, subscribeAsks, subscribeAutoCardFocus, subscribeKeyRequests,
-  type AgentAsk, type KeyRequest, type AgentEvent, type AgentMessage, type AgentState, type Answer, type Conversation,
-  type SubagentInfo,
+  agentSend, agentState, agentStop, pushId, subscribeAgent, subscribeAsks, subscribeAutoCardFocus, subscribeKeyRequests,
+  subscribePushes, type AgentAsk, type KeyRequest, type AgentEvent, type AgentMessage, type AgentState, type Answer,
+  type Conversation, type PushEvent, type SubagentInfo,
 } from "../agent";
 import type { LiveState } from "./timeline";
 import { m } from "../paraglide/messages.js";
@@ -18,10 +18,6 @@ function sameMessage(a: AgentMessage, b: AgentMessage): boolean {
   return a.role === b.role && a.atMs === b.atMs && JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** 自动卡片（ADR 039 D3）的标识：插件 + 去重键。不是自动卡片时 null。 */
-function cardId(message: AgentMessage): string | null {
-  return message.role === "notice" && message.card ? `${message.card.plugin}:${message.card.key}` : null;
-}
 
 export class AgentChat {
   state = $state<AgentState | null>(null);
@@ -34,19 +30,19 @@ export class AgentChat {
   keyRequests = $state<KeyRequest[]>([]);
   loading = $state(true);
   loadError = $state("");
-  /** 玩家点了消息提示：要定位到的那张自动卡片（`n` 每次都变，同一张卡片也能再闪一次）。 */
+  /** 玩家点了消息提示：要定位到的那条推送（`n` 每次都变，同一条也能再闪一次）。 */
   focusCard = $state<{ id: string; n: number } | null>(null);
 
   #disposed = false;
   /**
-   * 她这一轮里来的自动卡片（ADR 039 D3）：先显示在当前对话的最后面，这一轮结束后端才把它记进对话。
-   * 这一轮新来的消息插在它们前面（记进对话时卡片就在这一轮后面）。
+   * 她这一轮里来的推送（ADR 043，按 `pushId`）：先显示在当前对话的最后面，这一轮结束后端才把它记进对话。
+   * 这一轮新来的消息插在它们前面（记进对话时推送就在这一轮后面）。
    */
   #held = new Set<string>();
   #focusCount = 0;
   #revision = 0;
   /** 读取对话期间到达的事件：读完后补上（去掉已经在存盘里的）。 */
-  #buffer: { id: string; event: AgentEvent }[] | null = null;
+  #buffer: ({ id: string; event: AgentEvent } | { push: PushEvent })[] | null = null;
   #cleanups: (() => void)[] = [];
 
   get currentId(): string | null { return this.state?.current ?? null; }
@@ -63,6 +59,7 @@ export class AgentChat {
         (requestId) => { this.keyRequests = this.keyRequests.filter((r) => r.requestId !== requestId); },
       ));
       retain(await subscribeAutoCardFocus((focus) => void this.#focus(focus.conversationId, focus.key)));
+      retain(await subscribePushes((event) => this.#onPush(event)));
     } catch (error) {
       this.loadError = m.chat_load_subscribe_failed({ error: errorText(error) });
     }
@@ -88,14 +85,17 @@ export class AgentChat {
       this.runningId = state.running;
       const switched = conversation?.id !== this.conversation?.id;
       this.conversation = conversation;
-      // 压着的自动卡片（还没记进对话）照样显示在最后
+      // 排着的推送（还没记进对话的新推送、排着的原地更新）：对话里有同一条的原地换掉，没有的显示在最后
       this.#held.clear();
-      for (const card of held) this.#showHeld(card);
+      for (const message of held) this.#showHeld(message);
       if (switched || !state.running) this.live = { text: "", thought: "", tools: {} };
       this.loadError = "";
       const buffered = this.#buffer ?? [];
       this.#buffer = null;
-      for (const { id, event } of buffered) this.#apply(id, event, true);
+      for (const item of buffered) {
+        if ("push" in item) this.#onPush(item.push);
+        else this.#apply(item.id, item.event, true);
+      }
     } catch (error) {
       if (!this.#disposed && revision === this.#revision) {
         this.#buffer = null;
@@ -160,22 +160,26 @@ export class AgentChat {
       case "appended": {
         const messages = this.conversation.messages;
         // 刚读出来的对话里可能已经有这条（后端先存盘再发事件）：同内容同时间的就是同一条。
-        // 压着的自动卡片记进对话了也是这样：它已经显示在最后面。
         if (messages.some((m) => sameMessage(m, event.message))) {
-          const id = cardId(event.message);
+          const id = pushId(event.message);
           if (id) this.#held.delete(id);
           break;
         }
-        // 这一轮新来的消息插在压着的自动卡片前面（这一轮结束后卡片才记进对话，排在这一轮后面）
-        let at = messages.length;
-        while (at > 0 && this.#isHeld(messages[at - 1])) at -= 1;
-        messages.splice(at, 0, event.message);
+        // 推送：排着的那条记进对话了（它已经显示着，可能已经原地更新过）——同一个标识的原地换成存盘的这条，不再加一条
+        const id = pushId(event.message);
+        const at = id ? messages.findIndex((m) => pushId(m) === id) : -1;
+        if (id && at >= 0) {
+          messages[at] = event.message;
+          this.#held.delete(id);
+          break;
+        }
+        // 这一轮新来的消息插在排着的推送前面（这一轮结束后推送才记进对话，排在这一轮后面）
+        let end = messages.length;
+        while (end > 0 && this.#isHeld(messages[end - 1])) end -= 1;
+        messages.splice(end, 0, event.message);
         if (event.message.role === "assistant") { this.live.text = ""; this.live.thought = ""; }
         break;
       }
-      case "autoCard":
-        this.#showHeld(event.message);
-        break;
       case "discarded":
         this.live.text = "";
         this.live.thought = "";
@@ -193,16 +197,33 @@ export class AgentChat {
   }
 
   #isHeld(message: AgentMessage): boolean {
-    const id = cardId(message);
+    const id = pushId(message);
     return id !== null && this.#held.has(id);
   }
 
-  /** 她这一轮里来的自动卡片：先显示在最后面（已经在对话里的不重复放）。 */
-  #showHeld(message: AgentMessage) {
-    const id = cardId(message);
-    if (!id || !this.conversation || this.conversation.messages.some((m) => cardId(m) === id)) return;
-    this.#held.add(id);
-    this.conversation.messages.push(message);
+  /**
+   * 推送的界面事件（ADR 043，`kotone://push`）：新的一条、原地更新都按标识（`plugin:key`）放——对话里已经有这一条就原地换掉
+   * （位置不动、不多一条），没有就放在最后面（还排着的，这一轮结束后端才记进对话）。`done` 只给悬浮窗（聊天里的记录留着）。
+   */
+  #onPush(event: PushEvent) {
+    if (this.#disposed || event.kind === "done") return;
+    if (this.#buffer) { this.#buffer.push({ push: event }); return; }
+    if (event.conversationId !== this.conversation?.id) return;
+    this.#showHeld(event.message, event.held);
+  }
+
+  /** 一条推送放进当前对话：同一个标识的原地换掉；没有的放在最后面（`held`：还没记进对话，这一轮新来的消息插在它前面）。 */
+  #showHeld(message: AgentMessage, held = true) {
+    const id = pushId(message);
+    if (!id || !this.conversation) return;
+    const messages = this.conversation.messages;
+    const at = messages.findIndex((m) => pushId(m) === id);
+    if (at >= 0) {
+      messages[at] = message;
+      return;
+    }
+    if (held) this.#held.add(id);
+    messages.push(message);
   }
 
   /** 玩家点了消息提示（ADR 039 D4）：切到聊天页、那段对话，定位到那张卡片（卡片组件看 `focusCard` 滚过去、闪一下）。 */

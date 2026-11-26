@@ -1135,6 +1135,7 @@ fn messages_round_trip_through_json() {
             usage: None,
             recap: None,
             card: None,
+            push: None,
         },
     ];
     let json = serde_json::to_value(&messages).unwrap();
@@ -1675,6 +1676,7 @@ fn store_trims_long_conversations_at_a_user_boundary() {
         usage: None,
         recap: None,
         card: None,
+        push: None,
     });
     for i in 0..5 {
         turn(&mut c, 1000 + i);
@@ -2062,6 +2064,7 @@ fn a_second_compaction_starts_after_the_previous_checkpoint() {
         usage: None,
         recap: None,
         card: None,
+        push: None,
     });
     history.extend(old_turns(3));
     let window = compact::after_checkpoint(&history);

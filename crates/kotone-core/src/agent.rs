@@ -86,8 +86,8 @@ pub struct AgentConfig {
     /// 聊天窗口里的思考强度（同上）。新字段。
     #[serde(default)]
     pub chat_effort: String,
-    /// 自动卡片和消息提示（ADR 039 D3、D4，“游戏陪玩 → 角色 → 交互”）：两个都默认开。新字段（原则 19：
-    /// 旧配置没有这一项时按默认开；旧版本读到它会忽略）。
+    /// 推送时的消息提示（ADR 039 D4，“游戏陪玩 → 角色 → 交互 → 推送”）和旧的“自动卡片”总开关（ADR 039 D3，只读旧值，
+    /// ADR 043 D4）：都默认开。新字段（原则 19：旧配置没有这一项时按默认开；旧版本读到它会忽略）。名字是只有自动卡片时起的，不改。
     #[serde(default)]
     pub auto_cards: AutoCardsConfig,
     // `musicSite`（放歌用哪个网站，ADR 031）在 ADR 034 去掉了：放歌改成 `music` 工具，旧配置里的值读到就丢掉。
@@ -182,14 +182,14 @@ pub struct IdentityConfig {
     pub avatar: String,
 }
 
-/// 自动卡片（ADR 039 D3）：插件看到游戏里的事（英雄联盟进加载、结算），自己往聊天里发一张卡片，不叫模型、不花钱；
-/// 消息提示（D4）：发卡片时屏幕右下角弹的小窗。
+/// 推送（ADR 043）的两个旧开关（`agent.autoCards`，名字是只有自动卡片时起的）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AutoCardsConfig {
-    /// 插件可以往聊天里发自动卡片。关了两种卡片都不发，也不弹消息提示。
+    /// 旧的“自动卡片”总开关（ADR 039 D3）。界面上去掉了（ADR 043 D4），只读旧值：是 false 时内置插件带卡片的推送算关，
+    /// 直到玩家在插件页上动了那一条（`plugins.<id>.pushes.<推送>`，`kotone-plugin-api` 的 `Manifest::push_switch_in`）。
     pub enabled: bool,
-    /// 发卡片时弹消息提示（关了卡片照发）。
+    /// 推送卡片时弹消息提示（ADR 039 D4；关了推送照发）。
     pub popup: bool,
 }
 

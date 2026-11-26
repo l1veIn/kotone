@@ -39,6 +39,22 @@ export interface PluginEventSpec {
   data: Record<string, string>;
   needs: string[];
 }
+/** 推送的样子（ADR 043 D3）：卡片 / 一行 / 语音。 */
+export type PushForm = "card" | "line" | "voice";
+/**
+ * 插件清单里的一条内置推送（`plugin.toml` 的 `[[pushes]]`，ADR 043 D4）：插件页「设置 → 推送」照它画一行（名字、时机、做什么、
+ * 样子、开关）；开关在 `plugins.<id>.pushes.<推送 id>`，由宿主执行。
+ */
+export interface PluginPushSpec {
+  id: string;
+  title: string;
+  when: string;
+  what: string;
+  forms: PushForm[];
+  priority: "high" | "normal" | "low";
+  enabledByDefault: boolean;
+  needs: string[];
+}
 export interface PluginManifest {
   id: string;
   name: string;
@@ -53,6 +69,8 @@ export interface PluginManifest {
   agent: { overview: string; rule: string };
   /** 带适配器的插件登记的游戏事件（没有 = 不登记）。 */
   events?: PluginEventSpec[];
+  /** 内置推送（没有 = 不推送）。 */
+  pushes?: PluginPushSpec[];
 }
 export interface PluginToolInfo {
   name: string;
@@ -80,6 +98,8 @@ export interface PluginConfig {
   enabled?: boolean;
   sources?: Record<string, boolean>;
   settings?: Record<string, unknown>;
+  /** 内置推送的开关（玩家动过的才有；ADR 043 D4）。 */
+  pushes?: Record<string, boolean>;
 }
 
 const store = writable<PluginInfo[]>([]);
@@ -145,6 +165,29 @@ export async function setPluginSource(id: string, source: string, enabled: boole
   settingsStore.set(await updateSettings({ plugins: { [id]: { sources: { [source]: enabled } } } }));
 }
 
+/**
+ * 一条推送的开关在哪个位置（只看这一条；插件关着时开关灰着、位置不变）。和后端 `Manifest::push_switch_in` 同一条规则：
+ * 玩家动过按他的；没动过按清单的默认——但旧配置里“自动卡片”总开关（`agent.autoCards.enabled`）是关的，带卡片的算关（读旧写新）。
+ */
+export function pushSwitch(settings: Settings | null | undefined, manifest: PluginManifest, push: PluginPushSpec): boolean {
+  const own = configOf(settings, manifest.id).pushes?.[push.id];
+  if (own !== undefined) return own;
+  if (settings?.agent?.autoCards?.enabled === false && push.forms.includes("card")) return false;
+  return push.enabledByDefault;
+}
+
+/** 这条推送现在会不会推：插件开着、要的数据开关开着、这一条开着（宿主照同一条规则执行）。 */
+export function pushEnabled(settings: Settings | null | undefined, manifest: PluginManifest, push: PluginPushSpec): boolean {
+  return pluginEnabled(settings, manifest)
+    && push.needs.every((source) => sourceEnabled(settings, manifest, source))
+    && pushSwitch(settings, manifest, push);
+}
+
+/** 玩家在插件页上动了某条推送的开关：写 `plugins.<id>.pushes.<推送>`（从此不再看旧的总开关）。 */
+export async function setPluginPush(id: string, push: string, enabled: boolean): Promise<void> {
+  settingsStore.set(await updateSettings({ plugins: { [id]: { pushes: { [push]: enabled } } } }));
+}
+
 /** 文案键里的插件 id、开关 id：连字符换成下划线（`voice-input` → `voice_input`）。 */
 function keyPart(id: string): string {
   return id.replace(/[^A-Za-z0-9_]/g, "_");
@@ -166,6 +209,10 @@ export const pluginDescription = (m: PluginManifest) => pluginText(m.id, "descri
 export const sourceName = (m: PluginManifest, s: PluginSourceSpec) => pluginText(m.id, `source_${keyPart(s.id)}_name`, s.name);
 export const sourceDescription = (m: PluginManifest, s: PluginSourceSpec) => pluginText(m.id, `source_${keyPart(s.id)}_desc`, s.description);
 export const sourceRisk = (m: PluginManifest, s: PluginSourceSpec) => (s.risk ? pluginText(m.id, `source_${keyPart(s.id)}_risk`, s.risk) : "");
+/** 推送的名字、时机、做什么：插件的文案 `plugin_<id>_push_<推送>_title / _when / _what`，没有时用清单里的中文。 */
+export const pushTitle = (id: string, push: { id: string; title: string }) => pluginText(id, `push_${keyPart(push.id)}_title`, push.title);
+export const pushWhen = (m: PluginManifest, p: PluginPushSpec) => pluginText(m.id, `push_${keyPart(p.id)}_when`, p.when);
+export const pushWhat = (m: PluginManifest, p: PluginPushSpec) => pluginText(m.id, `push_${keyPart(p.id)}_what`, p.what);
 
 /** 左侧栏里插件页面的 id。 */
 export function pluginPageId(id: string): `plugin:${string}` {

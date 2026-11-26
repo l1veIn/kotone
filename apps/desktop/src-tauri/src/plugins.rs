@@ -382,16 +382,37 @@ impl Host for DesktopHost {
         })
     }
 
-    /// 自动卡片（ADR 039 D3）：只给内置插件（这张静态表里的，和 Kotone 一起编译）。插件关着时不发。
-    fn auto_card(&self, card: kotone_plugin_api::AutoCard) -> Result<bool, String> {
+    /// 推送（ADR 043 D3–D5）：只给内置插件（这张静态表里的，和 Kotone 一起编译）。开关由宿主执行：清单 `[[pushes]]` 里
+    /// 没有这条、玩家在插件页关了、插件或它要的数据开关关着，都直接丢掉（`Off`）；只留这条声明过的样子、截字，再交给
+    /// `agent::post_push`（新的、更新、一样）。
+    fn push(
+        &self,
+        push: kotone_plugin_api::Push,
+    ) -> Result<kotone_plugin_api::PushOutcome, String> {
         if !registry().iter().any(|p| p.manifest().id == self.id) {
-            return Err("自动卡片只给内置插件".into());
+            return Err("推送只给内置插件".into());
         }
-        card.check(&self.manifest)?;
-        if !enabled(&settings(&self.app), &self.manifest) {
-            return Ok(false);
+        let Some(spec) = self.manifest.push_spec(&push.trigger) else {
+            kotone_core::log::log(&format!(
+                "插件 {} 推了清单里没有的推送 {}，没收",
+                self.id, push.trigger
+            ));
+            return Ok(kotone_plugin_api::PushOutcome::Off);
+        };
+        if let Some(off) = self.manifest.push_off_in(&settings(&self.app), &spec.id) {
+            kotone_core::log::log(&format!("push: {} {} 没推（{off}）", self.id, push.key));
+            return Ok(kotone_plugin_api::PushOutcome::Off);
         }
-        crate::agent::post_auto_card(&self.app, &self.id, &self.manifest.name, card)
+        let push = push.shaped(spec);
+        push.check(&self.manifest)?;
+        crate::agent::post_push(&self.app, &self.id, &self.manifest.name, spec, push)
+    }
+
+    /// 推送结束了（例如三选一的卡片从屏幕上消失）：悬浮窗收起那一行，聊天里的记录留着。只认清单里有的推送。
+    fn push_done(&self, trigger: &str, key: &str) {
+        if self.manifest.push_spec(trigger).is_some() {
+            crate::agent::push_done(&self.app, &self.id, trigger, key);
+        }
     }
 
     fn companion_enabled(&self) -> bool {

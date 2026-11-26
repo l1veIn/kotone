@@ -129,6 +129,7 @@ fn prompt_skipped_notice(name: &str) -> Message {
         usage: None,
         recap: None,
         card: None,
+        push: None,
     }
 }
 

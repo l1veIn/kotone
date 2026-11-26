@@ -205,7 +205,7 @@ export interface Settings {
    * 搬到 `plugins.lol.sources.client`；旧的 `voiceChat` 搬到 `plugins.game-voice`；旧的 `music`（音质、音量）
    * 搬到 `plugins.music.settings`）。
    */
-  plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown> }>;
+  plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown>; pushes?: Record<string, boolean> }>;
   /**
    * 热键表（ADR 040 D8，后端 `kotone_core::hotkey_bindings`）。热键的旧字段（`hotkey.key`、`channelCycleHotkey`、
    * 呼叫键……）是它的镜像，后端每次保存照表写回；改旧字段也会改进表里。
@@ -369,7 +369,10 @@ export interface AgentConfig {
   /** 游戏里 / 聊天窗口里的思考强度（只对 DeepSeek）：low / high / max / none；空 = 服务商默认。 */
   gameEffort?: string;
   chatEffort?: string;
-  /** 自动卡片和消息提示（ADR 039 D3、D4；默认都开，旧配置没有这一项）。 */
+  /**
+   * `popup`：推送时弹出消息提示（ADR 039 D4，默认开）。`enabled`：旧的“自动卡片”总开关（ADR 039 D3），界面上没有了，只读旧的：
+   * 是 false 时带卡片的推送算关，直到玩家在插件页上动了那一条（ADR 043 D4）。
+   */
   autoCards?: { enabled: boolean; popup: boolean };
 }
 

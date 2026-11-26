@@ -6,7 +6,7 @@
 //!
 //! 第三方插件拿到的宿主能力比内置的窄（ADR 038“不做”：给插件的权力是单向门）：远程插件只用宿主的
 //! 开关、设置（信任记在这里）、凭据库（Key）和后台任务；没有替玩家按键、停下琴音、免问、往聊天里发
-//! 自动卡片（ADR 039 D3）。宿主给它的是一份更窄的 `Host`（桌面端 `remote_plugins.rs` 的 `RemoteHost`），
+//! 推送（ADR 039 D3、ADR 043）。宿主给它的是一份更窄的 `Host`（桌面端 `remote_plugins.rs` 的 `RemoteHost`），
 //! 服务器本身只说 MCP，碰不到这些。
 
 use std::path::PathBuf;

@@ -10,7 +10,9 @@
 //!   `structured_content` 给页面（存进对话记录，聊天卡片用它），`ui` 用哪个页面显示；
 //! - [`Plugin`]：插件实现；[`Host`]：宿主交给插件的本体能力（设置、游戏中心、后台任务……）；
 //! - **MCP App 资源和素材**（[`resource`] 模块，ADR 039 D5、D6）：清单里的页面可以由插件做成独立的 HTML
-//!   （[`Plugin::resource`]），Kotone 和外部宿主显示同一份；图片这类素材经 [`Plugin::asset`] 取。
+//!   （[`Plugin::resource`]），Kotone 和外部宿主显示同一份；图片这类素材经 [`Plugin::asset`] 取；
+//! - **推送**（[`push`] 模块，ADR 043 D3–D5）：清单 `[[pushes]]` 声明的“时机 → 推送”（卡片 / 一行 / 语音），
+//!   插件经 [`Host::push`] 发，宿主按清单和玩家的开关执行。
 //!
 //! 插件 crate 只依赖这个 crate、`kotone-core` 的纯数据类型和自己的第三方库；可以用系统适配层
 //! （`kotone-platform-windows`）里没有状态的系统调用（音频设备、重采样、打字注入……），不碰 Tauri、桌面端、
@@ -35,6 +37,10 @@ pub use kotone_core::send_to_game::provider::{
 
 mod events;
 pub use events::event_catalog;
+pub mod push;
+pub use push::{
+    Push, PushCard, PushCell, PushForm, PushLine, PushOutcome, PushPriority, PushSpec, PushTone,
+};
 pub mod resource;
 pub use resource::{valid_asset_path, Asset, Csp, Resource, ResourceUi, APP_MIME};
 
@@ -90,6 +96,10 @@ pub struct Manifest {
     /// 宿主按前台挑：前台是登记的窗口就调 [`Plugin::send_to_game`]，否则用本体的通用发法。只给内置插件（D7）。
     #[serde(default)]
     pub send_to_game: Vec<SendToGameSpec>,
+    /// 内置推送（ADR 043 D4，`[[pushes]]`：id、名字、时机、做什么、样子、多要紧、默认开不开、要的数据开关）。插件页上
+    /// 每条一个开关，宿主执行开关；插件经 [`Host::push`] 推，`trigger` 是这里的 id。见 [`push`] 模块。
+    #[serde(default)]
+    pub pushes: Vec<PushSpec>,
 }
 
 fn yes() -> bool {
@@ -222,6 +232,7 @@ impl Manifest {
             }
             self.check_needs(&format!("发到游戏（{}）", chat.game), &chat.needs)?;
         }
+        self.check_pushes()?;
         self.check_events()
     }
 
@@ -621,57 +632,6 @@ pub struct ScreenText {
     pub rect: [f64; 4],
 }
 
-// ---------- 自动卡片 ----------
-
-/// 自动卡片（ADR 039 D3）：插件看到游戏里的事（英雄联盟进加载、结算），自己往聊天里发的一张卡片。
-/// 和工具结果的聊天卡片是同一种（`uri` 页面的小尺寸版本 + 给页面的数据），卡片上写明是哪个插件发来的。
-/// **不叫模型、不花钱**；`note` 那一两句追加在对话末尾，之后的对话里琴音看得到。经 [`Host::auto_card`] 发。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AutoCard {
-    /// 去重键：同一个插件同一个键只发一次（例如 `opening:<对局 id>`：同一局、同一种卡片）。
-    pub key: String,
-    /// 卡片的名字（“开局战绩”），聊天里卡片上面那一行和给琴音的那句都用它。
-    pub title: String,
-    /// 显示它的页面：清单 `pages` 里的 `ui://kotone/<插件>/<页面>`。
-    pub uri: String,
-    /// 页面参数（照 MCP Apps 的 `_meta.ui`；没有为 null）。
-    #[serde(default, skip_serializing_if = "Value::is_null")]
-    pub params: Value,
-    /// 给页面的数据（和工具结果的 `structured_content` 一样：存进对话记录，**不发给模型**）。
-    pub data: Value,
-    /// 给琴音的一两句（不超过 [`AutoCard::NOTE_MAX`] 字，例如“对面可能的突破口：……”）。里面有别人起的名字，
-    /// 宿主按不可信数据交给模型。
-    pub note: String,
-    /// 消息提示的那一句（不超过 [`AutoCard::POPUP_MAX`] 字，例如“对面的战绩到了”）；空 = “{插件名}发来一张卡片”。
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub popup: String,
-}
-
-impl AutoCard {
-    /// 给琴音的那句最多几个字（调研第五节：约 120 字；多出的宿主截掉）。
-    pub const NOTE_MAX: usize = 160;
-    /// 消息提示那句最多几个字（设计文档：≤ 16 字，放不下省略；多出的宿主截掉）。
-    pub const POPUP_MAX: usize = 24;
-
-    /// 宿主收卡片前的检查：页面是这个插件清单里的、键和标题不空。
-    pub fn check(&self, manifest: &Manifest) -> Result<(), String> {
-        if self.key.trim().is_empty() || self.title.trim().is_empty() {
-            return Err("自动卡片要有 key 和 title".into());
-        }
-        if manifest.page(&self.uri).is_none() {
-            return Err(format!(
-                "{} 不是「{}」插件清单里的页面",
-                self.uri, manifest.name
-            ));
-        }
-        if !self.params.is_null() && !self.params.is_object() {
-            return Err("自动卡片的 params 要是对象".into());
-        }
-        Ok(())
-    }
-}
-
 // ---------- 插件和宿主 ----------
 
 /// 一个插件。实现放在 `plugins/<id>/src/`，桌面端在 `plugins.rs` 里登记。
@@ -862,18 +822,22 @@ pub trait Host: Send + Sync {
     fn emit(&self, event: &str, payload: Value) {
         let _ = (event, payload);
     }
-    /// 往聊天里发一张自动卡片（ADR 039 D3、D4）：卡片马上出现在当前对话末尾（写明是哪个插件发来的），
-    /// **不叫模型、不花钱**；`note` 那一两句等琴音这一轮说完（她在回答、在说话、玩家在说话时不插进去）
-    /// 再追加在对话末尾，前面的消息一个字不改（前缀缓存照常命中，ADR 024）；玩家开着消息提示就在屏幕右下角
-    /// 弹一个不抢焦点的小窗。
+    /// 推送（ADR 043 D3–D5，见 [`push`] 模块）：卡片发进聊天、一行显示在悬浮窗、语音她说一句固定的短话，全都记进聊天；
+    /// **不调模型、不花钱**。`note` 那一句作为一条隐藏的说明追加在对话末尾（她正忙时等她这一轮说完，不插进去；发给模型的
+    /// 部分只追加，前缀缓存照常命中，ADR 024）。宿主按清单核对：`trigger` 要是 `[[pushes]]` 里的、开着、`needs` 的数据开关
+    /// 开着，否则 [`PushOutcome::Off`]；只留这一条声明过的样子、截字（[`Push::shaped`]）。同一个 `key` 再推一次：内容变了
+    /// 原地更新（[`PushOutcome::Updated`]），一样就什么都不做（[`PushOutcome::Unchanged`]）。
     ///
-    /// 返回 `Ok(true)` 发了；`Ok(false)` 没发：玩家关了自动卡片（“游戏陪玩 → 角色 → 交互”）、同一个 `key` 发过了。
-    ///
-    /// **只给内置插件**（单向门，ADR 039 D3）：往聊天和琴音的上下文里放东西是很大的权力。第三方插件（以后的
-    /// 远程插件、MCP 服务器）的宿主不实现这个方法，用这里的默认实现一律拒绝。
-    fn auto_card(&self, card: AutoCard) -> Result<bool, String> {
-        let _ = card;
-        Err("自动卡片只给内置插件".to_string())
+    /// **只给内置插件**（单向门，ADR 039 D3）：往聊天和她的上下文里放东西是很大的权力。第三方插件（远程插件、MCP 服务器）
+    /// 的宿主不实现这个方法，用这里的默认实现一律拒绝。
+    fn push(&self, push: Push) -> Result<PushOutcome, String> {
+        let _ = push;
+        Err("推送只给内置插件".to_string())
+    }
+    /// 这条推送结束了（例如三选一的卡片从屏幕上消失）：悬浮窗收起它的那一行；聊天里的记录留着。之后同一个 `key` 再推，
+    /// 照旧是更新那一条。默认什么都不做。
+    fn push_done(&self, trigger: &str, key: &str) {
+        let _ = (trigger, key);
     }
     /// 发到游戏（ADR 041 第 3 期，英雄联盟的一键喊话）：把几行字交给本体**唯一的发话入口**——和她的 `game_chat.send`、
     /// 语音输入、自动化同一个入口：前台是哪个游戏、走哪条路（客户端在前台交给登记了发法的插件，对局里是本体按键）、
@@ -1302,9 +1266,9 @@ description = \"发到队伍聊天\"
         assert!(!valid_id(""));
     }
 
-    /// ADR 039 D3：自动卡片只给内置插件。没实现它的宿主（以后的远程插件）一律拒绝；页面要是清单里的。
+    /// ADR 039 D3、ADR 043 D3：推送只给内置插件。没实现它的宿主（远程插件）一律拒绝；`push_done` 什么都不做。
     #[test]
-    fn auto_cards_are_for_built_in_plugins_and_their_own_pages() {
+    fn pushes_are_for_built_in_plugins_only() {
         struct Remote;
         impl Host for Remote {
             fn plugin(&self) -> &str {
@@ -1341,16 +1305,20 @@ description = \"发到队伍聊天\"
             ) {
             }
         }
-        let card = AutoCard {
+        let push = Push {
+            trigger: "opening".into(),
             key: "opening:1".into(),
-            title: "开局战绩".into(),
-            uri: "ui://kotone/lol/match".into(),
-            params: Value::Null,
-            data: json!({"players": []}),
-            note: "对面可能的突破口：……".into(),
-            popup: "对面的战绩到了".into(),
+            card: Some(PushCard {
+                title: "开局战绩".into(),
+                uri: "ui://kotone/lol/match".into(),
+                params: Value::Null,
+                data: json!({"players": []}),
+            }),
+            note: "开局战绩（海斗）。".into(),
+            ..Push::default()
         };
-        assert!(Remote.auto_card(card.clone()).is_err());
+        assert!(Remote.push(push).is_err_and(|e| e.contains("只给内置插件")));
+        Remote.push_done("opening", "opening:1");
         // 发到游戏（ADR 041 第 3 期）同样是单向门：没实现的宿主一律拒绝
         struct Noop;
         impl std::task::Wake for Noop {
@@ -1365,24 +1333,5 @@ description = \"发到队伍聊天\"
             matches!(&sent, std::task::Poll::Ready(Err(e)) if e.contains("只给内置插件")),
             "{sent:?}"
         );
-        let m = Manifest::parse(SAMPLE).unwrap();
-        assert!(card.check(&m).is_ok());
-        let elsewhere = AutoCard {
-            uri: "ui://kotone/music/player".into(),
-            ..card.clone()
-        };
-        assert!(elsewhere.check(&m).is_err());
-        let nameless = AutoCard {
-            key: " ".into(),
-            ..card.clone()
-        };
-        assert!(nameless.check(&m).is_err());
-        // 发给界面时是 camelCase，空的 params / popup 不写
-        let json = serde_json::to_value(AutoCard {
-            popup: String::new(),
-            ..card
-        })
-        .unwrap();
-        assert!(json.get("params").is_none() && json.get("popup").is_none());
     }
 }

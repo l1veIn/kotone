@@ -280,3 +280,75 @@ needs = ["stats"]              # 要哪些数据源开着
 - 别的 crate（桌面端、插件）的测试没有单独跑，它们经过的是同一个 `kotone_dir()`。
 - 如果测试里存了 Key，会在 Windows 凭据管理器里留一条 `kotone@…\kotone-test-home\<进程号>`。现在没有测试这么做。
 - `target/tmp/kotone-test-home/` 下按进程号留着小目录，不自动删，`cargo clean` 会一起清掉。
+
+### 实施记录（推送的接口、原地更新、清单里的推送和插件页开关，2026-11-26）
+
+ADR 043 D3、D4、D5（A 轮第 2 条）。讨论记录第二节、第五节、第八节最后一条。
+
+**玩家看到的**：
+
+- 聊天里插件发来的东西都叫“推送”：卡片上面那一行是“英雄联盟 推送 · 开局战绩 · 时间”（原来是“英雄联盟 发来”）。旧对话里 rc.9 发的自动卡片照样是卡片。
+- 一行和语音在聊天里是一条小字记录：一行是几格带颜色的字（好 = 绿、可以 = 蓝、不好 = 琥珀），语音是喇叭图标 + 她说的那句。现在还没有插件推这两种（英雄联盟的三选一是 B2 的事）。
+- 同一张卡片再推一次时在原地重画：位置不动、不多一张；卡片里的英雄联盟 App 收到新的数据就重画，不重新加载（App 里点到哪还在哪）。
+- 插件页「设置」最下面多了一节“推送”（宿主画的）：每条一行，名字、样子（卡片 / 一行 / 语音）、“时机：……”“做什么：……”、一个开关；说明里写明和自动化的区别（推送是插件自带的、只能开关，想改就自己建自动化）。英雄联盟有两条：开局战绩、这局总结，默认都开。插件关着时开关灰着；要的数据开关关着时那一行写“要先打开上面的‘读客户端数据’”。
+- 「角色 → 交互」里原来的“自动卡片”两个开关只剩一个：“推送时弹出消息提示”（旧的 `agent.autoCards.popup`）。总开关去掉了；旧配置里总开关是关的，带卡片的推送算关，直到玩家在插件页上动了那一条。
+- 消息提示上那句现在是卡片的名字（“开局战绩”“这局总结”），不是原来插件给的“对面的战绩到了”（新接口里没有这一项；悬浮窗做完以后消息提示整个换掉）。
+
+**怎么做的**：
+
+- **接口**（`crates/kotone-plugin-api/src/push.rs`，取代 `AutoCard` / `Host::auto_card`，旧的直接删了，调用方只有英雄联盟）：名字和 ADR D3 的草图一样。
+  - `Push { trigger, key, card: Option<PushCard{title, uri, params, data}>, line: Option<PushLine{cells: [PushCell{text, tone: Option<PushTone>}]}>, voice: Vec<String>, note, alert }`，`PushTone = good | ok | bad`（没有 = 普通）。
+  - `Host::push(Push) -> Result<PushOutcome, String>`，`PushOutcome = posted | updated | unchanged | off`；默认实现拒绝（“推送只给内置插件”）。`Host::push_done(trigger, key)` 默认什么都不做。
+  - 清单 `[[pushes]]`：`PushSpec { id, title, when, what, forms: [card|line|voice], priority: high|normal|low（缺省 normal）, enabled_by_default（缺省 true）, needs }`。`Manifest::parse` 查：id 写法、不重名；title / when / what 不空；forms 至少一种、不重复；needs 是自己的数据开关；不认得的字段不收。
+  - 开关规则只写一处：`Manifest::push_switch_in(settings, id)`（开关的位置：玩家动过按 `plugins.<id>.pushes.<推送>`；没动过按清单默认，但 `agent.autoCards.enabled == false` 时带卡片的算关）和 `Manifest::push_off_in(settings, id)`（插件关着、needs 关着、开关关着、清单里没有 → 原因）。界面 `lib/plugins.ts` 的 `pushSwitch` / `pushEnabled` 照同一条写。
+  - `Push::shaped(spec)`：只留声明过的样子；一行最多 3 格、每格最多 12 字（空格去掉）；语音每个说法最多 20 字（空的去掉，不加“…”）；`note` 160 字。`Push::check(manifest)`：有 key、截完还有样子、卡片的页面是自己清单 `pages` 里的、有名字、params 是对象。
+- **宿主**（`apps/desktop/src-tauri/src/plugins.rs` 的 `DesktopHost::push`）：只给静态表里的内置插件；清单里没有这条 → `Off`（记日志）；`push_off_in` 有原因 → `Off`；`shaped` + `check`；交给 `agent::post_push`。`push_done` 只认清单里有的 trigger。
+- **新的、更新、一样**（纯逻辑 `crates/kotone-agent/src/push.rs`，原来的 `auto_card.rs` 改名重写；桌面端 `apps/desktop/src-tauri/src/agent/push.rs`，原来的 `agent/auto_card.rs`）：
+  - 内容的指纹 `content_hash`（FNV-1a，算 trigger、卡片、一行、语音的说法；不算插件名、这次说的哪句、更新时间）。宿主记住每个 `插件:key` 的 `Record { conversation, at_ms, hash, voice, said }`（最近 256 个，只在内存）；内存里没有（重启过）就去当前对话里找（`find` + `Record::of`，新的 `push` 和旧的 `card` 都认得；旧的自动卡片当作发过、不改它）。`decide`：没有 → 新的；指纹一样 → `Unchanged`（什么都不做，带了 note 也不追加）；不一样 → 更新。一次只处理一条推送（`serial` 锁，在“桌子”和 `Inner` 外面）。
+  - 新的：照旧发到当前主会话（`target_conversation`），推送那条 + 有 note 才有的给她的那句，经 `when_free::post`（她空着马上记，不空排着）。
+  - 更新：新的 Notice 用第一次推的 `at_ms`（聊天里的位置和标识跟着它），`push` 里多一个 `updatedAtMs`。先看排着的里面有没有（`Desk::update_held`：还没记进对话的、排着的更新，直接换掉，最新的为准）；没有就 `when_free::replace` → `replace_queued_locked`：那段对话不在跑、前面也没有排着的，马上 `replace_locked`（`turn.rs`，和 `append_locked` 同一把锁，在跑时不写）换掉那一条（找不到就追加）；在跑就排一个“原地更新”（`Held.replace = true`，同一条只留一个），这一轮结束和别的排着的一起照先后记。上一次那段对话被删了：当成新的发到当前对话。带了 note：再追加一条“插件更新了推送「…」”给她（只追加）。
+  - **发给模型的部分只追加**：推送是 `Notice`（不发给模型），改的是它的 `push`；测试照 ADR 039 的做法比 DeepSeek 请求体（见“测试”）。
+  - 排着的文件照旧是 `agent/auto-cards-held.json`；`Held` 多一个 `replace`（只在 true 时写，旧版本读到会当成追加：多一张，不丢）。启动时读回来的推送也记进 `Record`。
+- **对话里存成什么**（`kotone-ai` 的 `Message::Notice` 新字段 `push`；`card` 留着只读旧的，新的不写它）：
+
+  ```text
+  Notice {
+    role: "notice", text: "英雄联盟 推送：开局战绩", atMs,          // text 给旧版本看
+    push: {
+      plugin: "lol", pluginName: "英雄联盟",
+      trigger: "opening", title: "开局战绩",                       // 清单 [[pushes]] 的 id 和名字
+      key: "opening:<对局 id>",
+      card?: { title, ui: { uri, params? }, structuredContent },     // 和工具结果的 display 同一个形状
+      line?: { cells: [{ text, tone? }] },                           // tone = good / ok / bad
+      voice?: ["说法1", "说法2"], said?: "这次说的那句",
+      updatedAtMs?                                                   // 更新过才有
+    }
+  }
+  ```
+
+  给她的那句：来源 `auto-card` 的用户消息（存盘的值不改），“（系统消息，不是玩家说的话：英雄联盟插件发来一条推送「开局战绩」……）”，更新时是“更新了推送「…」”，`note` 按数据附上。
+- **界面事件** `kotone://push`（`agent/push.rs` 的 `emit_push` / `push_done`；聊天页和悬浮窗都听）：
+
+  ```text
+  { kind: "posted" | "updated", conversationId, plugin, trigger, key,
+    held,      // 还排着没记进对话（她在忙）；界面照样马上显示
+    alert,     // 带 alert 的更新：悬浮窗把卡片再弹一次（posted 总是 false）
+    message }  // 整条 Notice（上面的形状）
+  { kind: "done", plugin, trigger, key }               // Host::push_done
+  ```
+
+  `posted` 在记进对话时还会照常来一条 `kotone://agent-event` 的 `appended`（同一条），界面按标识 `plugin:key` 去重；`updated` 是原地换掉同一个标识的那条。原来的 agent 事件 `autoCard` 去掉了。命令 `agent_held_cards`（排着的推送，含排着的更新）、`auto_card_open`、焦点事件 `kotone://auto-card-focus` 名字不变。
+- **聊天页**（`chatController.svelte.ts`、`timeline.ts`、`PushItem.svelte`，原来的 `AutoCard.svelte`）：`pushOf` 把新的 `push` 和旧的 `card` 都变成同一个样子；推送自成一轮。`posted` / `updated` / 读对话时的排着的推送 / `appended` 都按标识放：对话里已经有同一条就原地换掉，没有就放在最后面（排着的，这一轮新来的消息插在它前面）。每一轮的标识是第一条消息的位置和时间，原地换掉时组件不重建。
+- **卡片里的 MCP App 收到更新**（`McpAppFrame.svelte`）：握手以后 `data` 变了就再推一次 `tool-result`（MCP Apps 的结果通知可以来多次；英雄联盟 App 的页面本来就 `session.onResult` 重画），iframe 不重新加载；握手期间变了的，握手完推最新的。
+- **语音**（纯逻辑 `crates/kotone-agent/src/push_voice.rs`；桌面端 `agent/push.rs` 的 `speak_in_order` + `assistant::speak_push`）：说法按 `插件:trigger` 轮着用；更新时说法没变就不再说（结论没变不重复，三选一不用自己记）。排队：300 毫秒内来的算同时、只留级别最高的（同级留先来的）；开口以后 20 秒内同级和更低级的不说；更高级的可以说，但等正在说的那句说完；从推来时算 5 秒还没开口（排在她的话、另一条推送、麦克风后面）就不说，没说出来的不占冷却。说用的是插件的话那条路（`take_turn_and_speak` 多了一个期限参数：到期还没拿到播报锁、麦克风还开着就不放），说不出来（不是过时、不是被停下）照旧改用弹幕。
+- **插件页**（`PluginPage.svelte` + 新的 `lib/components/plugins/PluginPushes.svelte`）：清单里有推送的插件，栏上就有“设置”按钮；设置里插件自己的设置下面是宿主画的“推送”一节。开关写 `plugins.<id>.pushes.<推送>`（`PluginConfig.pushes`，新字段，没动过的不写），走普通的设置保存（`update_settings`），没加新命令。名字 / 时机 / 做什么用插件的文案 `plugin_<id>_push_<推送>_title|when|what`（英雄联盟的测试查和清单一致）。
+- **英雄联盟**：`plugin.toml` 加 `[[pushes]]` `opening`（开局战绩）、`summary`（这局总结），都是卡片、默认开、要 `client`；`watcher/auto_cards.rs` 改调 `Host::push`，卡片、给她的那句、key 都和原来一样。
+- **设置说明**（`settings_guide.rs`）：`agent.autoCards.popup` 改叫“推送时弹出消息提示”（琴音 → 交互 → 推送）；`agent.autoCards.enabled` 挪进 `INTERNAL`（只读旧值，她不改它）；`plugins.*` 加上 `pushes.<推送 id>` 和英雄联盟的两条。
+- **叫法**：术语表“自动卡片”那一行换成“推送”（不说：`自动卡片`、`事件卡片`），“交互”那一行改了，架构那一节加了“推送（架构）”；“消息提示”那一行只把“发自动卡片时”改成“插件推送卡片时”（整行留给悬浮窗那一轮）。`terminology.spec` 多查 `crates/kotone-agent/src/push.rs`（记进聊天的那一行、给她的那句），插件文案的约定键加上 `push_<推送>_title|when|what`。真机脚本 `auto_card_real.py`、`message_popup_real.py` 跟着改了读法（Notice 的 `push.card`、`push-item`、日志 `push:`），没跑。
+
+**测试**：
+
+- Rust（2026-11-26，League 开着，低于正常优先级 `-j 2`）：`kotone-plugin-api` 26 个（新的：清单的推送和检查、宿主的开关规则含读旧、截字和只留声明过的样子、序列化、默认实现拒绝）；`kotone-agent` 111 个（`push::tests` 9 个：推送不调模型、下一轮看得到那句、追加时前缀逐字节不变、**原地更新以后 DeepSeek 请求体前面的每一条逐字节不变**（没带 note 的更新一个字节都不多，带 note 的只追加）、她在忙时排着、同一个 key 的新 / 更新 / 一样、重启后从对话里找（含 rc.9 的 `card`）、排着的更新换掉排着的那条、存盘读回；`push_voice::tests` 4 个：同时来的只说最要紧的、冷却、更高级的不打断、过时不说和没说出来不占冷却）；`kotone-tauri` 174 个（新的：`turn::tests::a_push_is_replaced_in_place_only_while_its_conversation_is_idle`、`when_free::tests::push_updates_wait_for_a_running_turn_and_then_land_in_place`（在跑时排着、只留最新、这一轮存盘后改在原位、没被盖掉；排着的直接换）、`assistant::tests::a_push_voice_that_waits_past_its_deadline_is_dropped`）；`kotone-plugin-lol` 123 个（两条推送在清单里、文案和清单一致）；`kotone-ai` 93 个、`kotone-core` 414 个、`kotone-remote-plugin` 32 个。clippy（这几个 crate 加 `kotone-core`、`kotone-remote-plugin`，`--all-targets -D warnings`）干净。
+- Playwright `e2e/push.spec.ts` 9 个（原来的 `auto-card.spec.ts`）：卡片“英雄联盟 推送”、rc.9 的自动卡片照样显示、打开右侧栏、给她的那句不显示；**同一个 key 再推一次原地更新：位置不动、只有一张，卡片里的英雄联盟 App 显示新的名字、App 里设的标记还在（没重新加载）**，之后的 `appended` 也不多一张；读对话时排着的更新原地换掉；她在回答时来的推送在最后、她说完后还在；一行三格（颜色）和语音的小字记录、原地换一格；点消息提示定位；交互里没有总开关了、“推送时弹出消息提示”写 `agent.autoCards.popup`；**插件页「设置 → 推送」列出两条、旧总开关关着时显示关、开关写 `plugins.lol.pushes.opening`、插件关着时灰掉**；消息提示窗口。把 `McpAppFrame` 里再推结果那一行注释掉，App 那一条测试就挂（试过）。`terminology.spec` 4 个通过。Playwright 全量（本体 + 插件）220 个通过（一个 worker；第一遍跑到一半 vite 开发服务器没了，后 84 个连不上，单独重跑全过）。
+
+**还没测**：真机（玩家在打游戏）：`auto_card_real.py`、`message_popup_real.py` 改了读法没跑；真的英雄联盟里一局的两张卡片；语音推送真的出声（现在还没有插件推语音，排队的规矩只有单元测试）；悬浮窗听 `kotone://push`（悬浮窗那一轮做）。

@@ -1,5 +1,5 @@
-//! 英雄联盟的自动卡片（ADR 039 D3；时机照调研 `docs/research/2026-11-25-lol-app-parity.md` 第五节、设计文档
-//! `docs/design/lol-app.md` 第四节）。一局最多两张，不叫模型：
+//! 英雄联盟的两条卡片推送（ADR 039 D3、ADR 043 D3：清单 `[[pushes]]` 的 `opening` 和 `summary`；时机照调研
+//! `docs/research/2026-11-25-lol-app-parity.md` 第五节、设计文档 `docs/design/lol-app.md` 第四节）。一局最多两张，不叫模型：
 //!
 //! - **开局战绩**：进加载（游戏开始、局内接口还没有游戏时间）以后，10 个人的战绩都查完就发；进加载 20 秒还没查完
 //!   也发（卡片和那句话里写“还在查 N 人”）。页面是“这局”（`ui://kotone/lol/match`），数据和 `lol.scout` 的一样；
@@ -8,14 +8,15 @@
 //!   读不到每 5 秒再试，60 秒还没有就不发（调研 G29）。页面是“单局详情”（`ui://kotone/lol/game`，带 `justEnded`）。
 //! - 不发：选人、对局中；训练模式、自定义对局（队列 ≤ 0）、观战（这局里没有自己）；Kotone 开的时候已经在对局里了
 //!   （没看到加载）不发开局战绩；重开局（提前投降）不发这局总结；重连、刷新不重发（这里记着，宿主也按 key 去重）。
-//! - 开关在“游戏陪玩 → 角色 → 交互”（宿主管，关了 `Host::auto_card` 回 `Ok(false)`）。
+//! - 开关在插件页「设置 → 推送」，每条一个（宿主管，关了 `Host::push` 回 `Off`）；同一个 key 再推一次宿主当成更新，
+//!   内容一样就什么都不做。
 
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kotone_core::log;
-use kotone_plugin_api::{AutoCard, Host};
+use kotone_plugin_api::{Host, Push, PushCard, PushOutcome};
 use serde_json::{json, Value};
 
 use super::MatchView;
@@ -35,6 +36,9 @@ const REMAKE_SECONDS: i64 = 240;
 
 pub(crate) const TITLE_OPENING: &str = "开局战绩";
 pub(crate) const TITLE_SUMMARY: &str = "这局总结";
+/// 清单 `[[pushes]]` 里这两条推送的 id。
+pub(crate) const PUSH_OPENING: &str = "opening";
+pub(crate) const PUSH_SUMMARY: &str = "summary";
 
 /// 发过哪局的哪种卡片、这局什么时候进的加载。客户端重连时跟着 `State` 一起清掉（宿主那边还按 key 去重）。
 #[derive(Debug, Default)]
@@ -209,16 +213,18 @@ pub(crate) fn summary_note(page: &Value, me: &str) -> String {
     )
 }
 
-fn report(title: &str, result: Result<bool, String>) {
+fn report(title: &str, result: Result<PushOutcome, String>) {
     match result {
-        Ok(true) => {}
-        Ok(false) => log::log(&format!("lol: 自动卡片「{title}」没发（关着或发过了）")),
-        Err(e) => log::log(&format!("lol: 自动卡片「{title}」发不出去：{e}")),
+        Ok(PushOutcome::Posted | PushOutcome::Updated) => {}
+        Ok(outcome) => log::log(&format!(
+            "lol: 推送「{title}」没发（{outcome:?}：关着或发过了）"
+        )),
+        Err(e) => log::log(&format!("lol: 推送「{title}」发不出去：{e}")),
     }
 }
 
 impl LolPlugin {
-    /// 后台每一轮的最后：按阶段决定发不发自动卡片（`previous` 是上一轮的客户端阶段）。
+    /// 后台每一轮的最后：按阶段决定推不推开局战绩、这局总结（`previous` 是上一轮的客户端阶段）。
     pub(super) fn auto_cards(
         &self,
         host: &Arc<dyn Host>,
@@ -278,14 +284,17 @@ impl LolPlugin {
             data.as_deref(),
             &view.stage,
         );
-        let result = host.auto_card(AutoCard {
+        let result = host.push(Push {
+            trigger: PUSH_OPENING.into(),
             key: format!("opening:{game_id}"),
-            title: TITLE_OPENING.into(),
-            uri: pages::PAGE_MATCH.into(),
-            params: Value::Null,
-            data: page,
+            card: Some(PushCard {
+                title: TITLE_OPENING.into(),
+                uri: pages::PAGE_MATCH.into(),
+                params: Value::Null,
+                data: page,
+            }),
             note: opening_note(&view),
-            popup: "对面的战绩到了".into(),
+            ..Push::default()
         });
         report(TITLE_OPENING, result);
     }
@@ -364,14 +373,17 @@ impl LolPlugin {
             // 单局详情带“刚结束”的头部（设计文档第三节 3）
             page["justEnded"] = json!(true);
             let note = summary_note(&page, &me);
-            let result = task_host.auto_card(AutoCard {
+            let result = task_host.push(Push {
+                trigger: PUSH_SUMMARY.into(),
                 key: format!("summary:{game_id}"),
-                title: TITLE_SUMMARY.into(),
-                uri: pages::PAGE_GAME.into(),
-                params: json!({"gameId": page["gameId"]}),
-                data: page,
+                card: Some(PushCard {
+                    title: TITLE_SUMMARY.into(),
+                    uri: pages::PAGE_GAME.into(),
+                    params: json!({"gameId": page["gameId"]}),
+                    data: page,
+                }),
                 note,
-                popup: "这局的总结好了".into(),
+                ..Push::default()
             });
             report(TITLE_SUMMARY, result);
         }));
@@ -381,6 +393,20 @@ impl LolPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR 043 D4：推的两条都在清单 `[[pushes]]` 里（宿主不收没声明的），样子是卡片，要“读客户端数据”，页面是清单里的。
+    #[test]
+    fn both_pushes_are_declared_in_the_manifest() {
+        let m = crate::manifest();
+        for (id, title) in [(PUSH_OPENING, TITLE_OPENING), (PUSH_SUMMARY, TITLE_SUMMARY)] {
+            let spec = m.push_spec(id).expect(id);
+            assert_eq!(spec.title, title);
+            assert_eq!(spec.forms, [kotone_plugin_api::PushForm::Card]);
+            assert_eq!(spec.needs, ["client"]);
+            assert!(spec.enabled_by_default);
+        }
+        assert!(m.page(pages::PAGE_MATCH).is_some() && m.page(pages::PAGE_GAME).is_some());
+    }
     use crate::client::history::{GameRecord, PlayerHistory};
 
     fn player(
@@ -538,7 +564,7 @@ mod tests {
         assert!(note.contains("我方有 3 人开黑"), "{note}");
         assert!(note.contains("还在查 1 人"), "{note}");
         assert!(!note.contains("的玩家"), "不写玩家名：{note}");
-        assert!(note.chars().count() <= AutoCard::NOTE_MAX, "{note}");
+        assert!(note.chars().count() <= Push::NOTE_MAX, "{note}");
     }
 
     fn page(my_damage: i64, win: bool) -> Value {

@@ -464,14 +464,10 @@
   "companion_workspace_saved": "{label}已保存，下一段对话生效",
   "companion_workspace_revert": "还原",
   "companion_saving": "保存中…",
-  "companion_auto_cards_title": "自动卡片",
-  "companion_auto_cards_desc": "插件看到游戏里的事，自己往聊天里发一张卡片，不叫她、不花钱。英雄联盟：进加载时发“开局战绩”，结算时发“这局总结”，一局最多两张。同时给她留一句很短的说明，之后的对话里她看得到；她在回答、在说话时，这句等她说完再记上，不打断她。",
-  "companion_auto_cards_enabled_label": "发自动卡片",
-  "companion_auto_cards_enabled_desc": "关了两种卡片都不发，也不弹消息提示。",
-  "companion_auto_cards_enabled_on": "自动卡片已开启",
-  "companion_auto_cards_enabled_off": "自动卡片已关闭",
-  "companion_auto_cards_popup_label": "消息提示",
-  "companion_auto_cards_popup_desc": "发卡片时，屏幕右下角弹一个小窗：她的头像和一句话，点它打开聊天、定位到那张卡片。不抢焦点，6 秒后自己消失；游戏独占全屏、Kotone 窗口在前台时不弹。",
-  "companion_auto_cards_popup_on": "消息提示已开启",
-  "companion_auto_cards_popup_off": "消息提示已关闭"
+  "companion_pushes_title": "推送",
+  "companion_pushes_desc": "插件在游戏里的关键时刻自己发来卡片、一行字或一句话，不叫{companion}、不花钱，全都记进聊天。每条推送在插件页的「设置 → 推送」里单独开关。",
+  "companion_pushes_popup_label": "推送时弹出消息提示",
+  "companion_pushes_popup_desc": "插件推送卡片时，屏幕右下角弹一个小窗：她的头像和一句话，点它打开聊天、定位到那张卡片。不抢焦点，6 秒后自己消失；游戏独占全屏、Kotone 窗口在前台时不弹。",
+  "companion_pushes_popup_on": "推送时弹出消息提示已开启",
+  "companion_pushes_popup_off": "推送时弹出消息提示已关闭"
 }

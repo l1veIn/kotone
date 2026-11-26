@@ -223,6 +223,7 @@ pub async fn compact<M: ModelClient>(
             usage: reply.usage.filter(|u| !u.is_empty()),
             recap: None,
             card: None,
+            push: None,
         },
     )))
 }

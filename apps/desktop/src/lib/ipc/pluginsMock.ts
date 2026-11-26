@@ -78,6 +78,17 @@ const lol: PluginManifest = {
     { uri: OVERLAY_AUGMENTS, title: lolZh.plugin_lol_best_augments, needs: ["stats"] },
   ],
   agent: { overview: "", rule: "" },
+  // 内置推送（plugin.toml 的 [[pushes]]，ADR 043 D4）：名字、时机、做什么用插件的文案；都是卡片、都要“读客户端数据”
+  pushes: (["opening", "summary"]).map((id) => ({
+    id,
+    title: (lolZh as Record<string, string>)[`plugin_lol_push_${id}_title`],
+    when: (lolZh as Record<string, string>)[`plugin_lol_push_${id}_when`],
+    what: (lolZh as Record<string, string>)[`plugin_lol_push_${id}_what`],
+    forms: ["card" as const],
+    priority: "normal" as const,
+    enabledByDefault: true,
+    needs: ["client"],
+  })),
   // 游戏中心的事（plugin.toml 的 [[events]]）：名字用插件的文案；都要“读客户端数据”；带 team 的能选哪一边
   events: ([
     ["first_blood", true], ["dragon_kill", true], ["herald_kill", true], ["baron_kill", true], ["turret_killed", true],

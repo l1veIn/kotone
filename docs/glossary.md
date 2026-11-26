@@ -22,7 +22,7 @@
 | 游戏陪玩 | 侧栏分组名（ADR 028 D1，玩家定的），不当成名词指她 | | | Game companion |
 | 角色页 | 左侧栏「游戏陪玩」里她那一项（显示她的名字）点开的页面。分页：角色 · 记忆 · 技能 · 唤醒 · 交互 · 权限 · 用量；聊天也在这一页。设置说明里的位置写成“琴音 → 唤醒 → 呼叫键”（第一段是她，界面上换成 `{name}`） | | `AssistantPage`、`AssistantSection` | her page (tabs: Character · Memory · Skills · Wake-up · Interaction · Permissions · Usage) |
 | 唤醒 | 角色页的一个分页：呼叫键、通话、快捷指令、语音唤醒、聊天页的呼叫按钮。旧说法“怎么叫她”（2026-11-25 以前它是「设置」的一页） | `设置 → 怎么叫她` | 分页 ID `call` | Wake-up |
-| 交互 | 角色页的一个分页：气泡、声音与弹幕（回答方式）；自动卡片和消息提示的开关也在这里（ADR 039 D3、D4）。旧说法“她怎么回答”（以前在「设置」里）。她用的模型不在这里，在聊天页输入框旁 | `设置 → 她怎么回答` | 分页 ID `reply` | Interaction |
+| 交互 | 角色页的一个分页：气泡、声音与弹幕（回答方式）；“推送时弹出消息提示”的开关也在这里（ADR 039 D4）。原来的“自动卡片”总开关去掉了：每条推送的开关在插件页的「设置 → 推送」（ADR 043 D4）。旧说法“她怎么回答”（以前在「设置」里）。她用的模型不在这里，在聊天页输入框旁 | `设置 → 她怎么回答` | 分页 ID `reply` | Interaction |
 | 她用的模型 | 聊天页输入框旁的小菜单：她用哪条 API 连接里的哪个模型（照 DeepSeek Harness 的输入框）。2026-11-21 挪进过设置，2026-11-25 玩家要放回聊天页 | （见“她”） | `assistant.connectionId`、连接的 `model` | Her model |
 | 插件 | 装在她身上的一块本事：有自己的页面、工具和开关（英雄联盟、语音输入、网易云音乐……，ADR 038）。照 MCP Apps：她只调用插件的工具或打开它的页面。“应用”在界面里指 Kotone 自己（“桌面应用”），所以插件不叫应用，也不叫 App；浏览器里装的叫“扩展”。每个插件有自己的 logo（原创，不用网易云、拳头这类别人的商标；第三方 MCP 服务器用它自己声明的图标，ADR 039） | | `plugins/<id>`、`kotone-plugin-api` | plugin |
 | 第三方插件 | 玩家自己加进来的别人的 MCP 服务器（插件页上粘贴配置，或者从 Claude Desktop、VS Code 导入）。一个服务器就是一个插件，开关、卡片和内置的一样；它的工具名是 `<名字>.<工具>`，结果只当数据（别人写的），只在 Kotone 里用、不转给外部 Agent（MCP 方案第 2 期）。代码里叫远程插件 | | `kotone-remote-plugin`、`KOTONE_HOME/mcp.json` | third-party plugin |
@@ -60,8 +60,8 @@
 | 全部页面 / 恢复默认 | 左侧栏“⋯”打开：页面在组内上移下移、显示隐藏（设置、关于固定）；恢复默认 = 默认顺序、全部显示 | | `ui.sidebar` | All pages / Restore defaults |
 | 游戏配置 | 一个游戏的聊天键、频道、词表等（游戏列表页里编辑） | `游戏设置`、`游戏档案` | `GameProfile` | game profile |
 | 气泡 / 悬浮窗 / 弹幕 | 气泡只属于她（在听、在想、在说）；悬浮窗只属于语音输入；弹幕是从右往左飘的字 | `对话气泡` | | bubble / overlay / floating text |
-| 自动卡片 | 插件看到游戏里的事（例如英雄联盟进选人、加载、结算），自己发进聊天的一张卡片（双方战绩、这局总结）。不叫她、不花钱；同时给她留一句很短的说明，之后的对话里她看得到；通话中不打断她说话。卡片上写明是哪个插件发来的。现在只有内置插件能发（ADR 039 D3）。文档和代码也用这个词 | `事件卡片`、`推送卡片` | `Host::auto_card`、`kotone_agent::auto_card`、`agent.autoCards.enabled` | auto card (“{plugin} posted a card”) |
-| 消息提示 | 发自动卡片时，屏幕右下角弹出的小窗：她的头像 + 一句话；点它打开聊天、定位到那张卡片；不抢焦点，几秒后自己消失，游戏独占全屏时不弹；开关在“游戏陪玩 → 角色 → 交互”（ADR 039 D4）。和气泡不同：气泡是她在听、在想、在说，点不了。不叫“通知”（和 Windows 的系统通知撞名），不叫“提醒”（那是过一会儿说一句的提醒） | `右下角弹窗`、`通知弹窗` | `message_popup.rs`、`agent.autoCards.popup` | message pop-up |
+| 推送 | 插件在游戏里的某个时机自己发给你的东西，三种样子：**卡片**（发进聊天）、**一行**（一行字，可以分几格，例如三选一的“首选 / 可选 / 可刷新”）、**语音**（她说一句固定的短话，几个说法轮着用）。不叫她、不花钱，全都记进聊天（一行和语音是一条小字记录）；带了给她的一句时留一条很短的说明，之后的对话里她看得到。同一条推送内容变了就在原地更新，不另发一条。每条推送在插件页的「设置 → 推送」里写明时机和做什么、单独一个开关，内容不能改——想改就自己建自动化。卡片上写明是哪个插件推送的。现在只有内置插件能推送（ADR 039 D3、ADR 043）。文档和代码也用这个词 | `自动卡片`、`事件卡片` | `Host::push`、`[[pushes]]`、`kotone_agent::push`、`plugins.<id>.pushes` | push (“{plugin} push”; card / line / voice) |
+| 消息提示 | 插件推送卡片时，屏幕右下角弹出的小窗：她的头像 + 一句话；点它打开聊天、定位到那张卡片；不抢焦点，几秒后自己消失，游戏独占全屏时不弹；开关在“游戏陪玩 → 角色 → 交互”（ADR 039 D4）。和气泡不同：气泡是她在听、在想、在说，点不了。不叫“通知”（和 Windows 的系统通知撞名），不叫“提醒”（那是过一会儿说一句的提醒） | `右下角弹窗`、`通知弹窗` | `message_popup.rs`、`agent.autoCards.popup` | message pop-up |
 | 技能 | 她会的本事包（一个文件夹一个） | `Skill` | `SKILL.md`、`workspace` | skills |
 | 本地 / 在线 | 在这台电脑上算 / 发给服务商算 | `离线`、`云端` | `asrLocal` | local / online |
 
@@ -75,6 +75,7 @@
 | 插件 | 装在本体上的 App（ADR 038），界面上的说法见上一节 | plugin |
 | 琴音 | 角色（默认的那个）。讲“谁在听、谁在说、谁在想”时用；玩家可以换角色 | Kotone (the character) |
 | 共享资源 / 管家 | 共享资源：全进程（或全屏、全机）只有一份、又有两个以上的用户要用的东西，例如热键、往游戏里输入、麦克风、扬声器、屏幕上的位置和前台、聊天流、语音识别。管家：本体里拥有它的那一处代码，“能不能用、谁先用”的规矩只写在这里，插件经宿主向它要（ADR 042）。界面上不说 | shared resource / owner |
+| 推送（架构） | `kotone-plugin-api` 的 `Push`（`trigger` = 清单 `[[pushes]]` 的 id、`key`、`card` / `line` / `voice`、`note`、`alert`）经 `Host::push` 发，结果 `Posted` / `Updated` / `Unchanged` / `Off`；`Host::push_done` 说这一条结束了（悬浮窗收起那一行）。清单 `[[pushes]]`（`PushSpec`：时机、做什么、样子、`priority`、`enabled_by_default`、`needs`）由宿主画开关、执行开关（照 Android 的通知渠道）。同一个 `插件:key` 再推一次就是更新，原地改 `Notice` 里的 `push`（Notice 不发给模型，前缀不变，ADR 043 D5）。语音推送谁先说由宿主排（`kotone_agent::push_voice`）。只给内置插件 | push / `Host::push` / `[[pushes]]` |
 | 命令 / 热键表 | 命令：能绑热键的一件事，`<来源>.<命令 id>`（本体的 `kotone.call`、插件 `plugin.toml` 里 `[[commands]]` 登记的 `voice-input.talk`）。热键表：config.json 的 `hotkeys.bindings`，每条 键 + 命令，或者玩家自己加的（带 `id`、可选 `label`：`say` 跟她说一句、`tool: automation.run` 运行自动化，以后还有调工具、打开页面，ADR 040 第 3 期）；热键的旧字段（`hotkey.key`、`channelCycleHotkey`……、快捷指令 `quickMessages` 前 8 条）是它的镜像（ADR 040 D1、D5、D8）。界面上不说“命令”，行名就是命令的名字；自己加的行名是玩家起的名字，没起就是要做的事 | command / hotkey table |
 
 ## 游戏陪玩的核心概念（ADR 028）

@@ -8,7 +8,8 @@
 //! - [`roles`]：可切换的角色（名字、头像、性格、声音、唤醒词各一份；记忆与 Skill 共用）；
 //! - [`subagents`]：交给后台的事（子代理，ADR 029 第二期）的纯逻辑；
 //! - [`background`]：主会话里超过 3 秒没回来的工具转到后台（ADR 029 §一，MCP 方案第 1.5 期）；
-//! - [`exec`]：后台执行命令、读写文件（ADR 030，kotone-exec 转出给桌面端执行）。
+//! - [`exec`]：后台执行命令、读写文件（ADR 030，kotone-exec 转出给桌面端执行）；
+//! - [`push`]：插件的推送（ADR 043）记进聊天、同一个 key 原地更新、她正忙时排着；[`push_voice`]：语音推送谁先说。
 //!
 //! 循环与模型通信在 `kotone-ai::agent`；工具实现在 `kotone-tools`。本 crate 不依赖 Tauri，
 //! 桌面专属的动作（播报、提醒、打字、执行命令）与询问界面经 [`port::BuiltinHost`] /
@@ -18,7 +19,6 @@
 /// [`catalog::exec_entries`] 从这里取，执行由桌面端经 [`port::BuiltinHost::exec`] 调用。
 pub use kotone_exec as exec;
 
-pub mod auto_card;
 pub mod background;
 pub mod body;
 pub mod browser;
@@ -26,6 +26,8 @@ pub mod catalog;
 pub mod permissions;
 pub mod port;
 pub mod prompt;
+pub mod push;
+pub mod push_voice;
 pub mod roles;
 pub mod speak;
 pub mod subagents;

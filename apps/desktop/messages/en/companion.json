@@ -464,14 +464,10 @@
   "companion_workspace_saved": "Saved “{label}”. Takes effect in the next conversation",
   "companion_workspace_revert": "Revert",
   "companion_saving": "Saving…",
-  "companion_auto_cards_title": "Auto cards",
-  "companion_auto_cards_desc": "When a plugin sees something happen in your game, it posts a card in the chat on its own. She isn't asked and nothing is spent. League of Legends: a starting-stats card during loading and a match summary at the end, at most two per match. She also gets a one-line note she can see later in the conversation; while she's answering or talking, the note waits until she's done, so she's never interrupted.",
-  "companion_auto_cards_enabled_label": "Post auto cards",
-  "companion_auto_cards_enabled_desc": "When off, neither card is posted and no message pop-up appears.",
-  "companion_auto_cards_enabled_on": "Auto cards on",
-  "companion_auto_cards_enabled_off": "Auto cards off",
-  "companion_auto_cards_popup_label": "Message pop-up",
-  "companion_auto_cards_popup_desc": "When a card arrives, a small window pops up in the bottom-right corner with her avatar and one line. Click it to open the chat at that card. It never takes focus and goes away after 6 seconds; it doesn't appear over exclusive-fullscreen games or while a Kotone window is in front.",
-  "companion_auto_cards_popup_on": "Message pop-up on",
-  "companion_auto_cards_popup_off": "Message pop-up off"
+  "companion_pushes_title": "Pushes",
+  "companion_pushes_desc": "At key moments in a game, plugins send you a card, a line of text or a spoken line by themselves. {companion} isn't asked, nothing is spent, and everything is recorded in the chat. Each push has its own switch in the plugin's page under Settings → Pushes.",
+  "companion_pushes_popup_label": "Show a message pop-up for pushes",
+  "companion_pushes_popup_desc": "When a plugin pushes a card, a small window pops up in the bottom-right corner with her avatar and one line. Click it to open the chat at that card. It never takes focus and goes away after 6 seconds; it doesn't appear over exclusive-fullscreen games or while a Kotone window is in front.",
+  "companion_pushes_popup_on": "Message pop-up for pushes on",
+  "companion_pushes_popup_off": "Message pop-up for pushes off"
 }

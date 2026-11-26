@@ -20,7 +20,9 @@
   // - 请求换显示方式：聊天卡片请求 fullscreen 时在右侧栏打开完整页面，自己还是 inline；pip 先不支持（方案第 4 期映射到覆盖层）；
   // - `ui/message`（替玩家往聊天里发话）：先不给，回 isError（往聊天和她的上下文里放东西是大权力，ADR 039 D3）；
   // - `ui/update-model-context`：接住、回成功，但不存、不进她的上下文（同上，以后再定；宿主能力里也不声明它）；
-  // - inline：进入可视区才加载（长对话里不一下子起一堆 iframe），高度跟 App 报的走（有上限）。
+  // - inline：进入可视区才加载（长对话里不一下子起一堆 iframe），高度跟 App 报的走（有上限）；
+  // - 数据变了（推送同一个 key 再推一次，ADR 043 D5）：握手以后把新的结果再推给 App（MCP Apps 的 tool-result 通知可以来
+  //   多次，App 照“宿主又推来一个结果”重画），iframe 不重新加载、App 里点到哪还在哪。
   import { onMount } from "svelte";
   import { get } from "svelte/store";
   import type { AppBridge, McpUiHostContext } from "@modelcontextprotocol/ext-apps/app-bridge";
@@ -70,6 +72,9 @@
   let plugin = $state("");
 
   const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value ?? null));
+  /** 握手完的桥（之后数据变了用它再推结果）和最后推给 App 的数据。 */
+  let live: AppBridge | null = null;
+  let sentJson = "";
 
   /** App 请求打开的外部网址，等玩家回答（`ui/open-link`）。 */
   let linkAsk = $state<{ url: string; plugin: string; answer: (open: boolean) => void } | null>(null);
@@ -108,6 +113,7 @@
     const cleanups: (() => void)[] = [];
     const dispose = () => {
       disposed = true;
+      live = null;
       linkAsk?.answer(false);
       for (const cleanup of cleanups) cleanup();
       if (bridge && initialized) void bridge.teardownResource({}).catch(() => {});
@@ -199,10 +205,14 @@
         if (disposed) return;
         initialized = true;
         phase = "ready";
-        if (pushed) {
+        live = b;
+        // 握手期间数据可能又变了（推送原地更新）：推最新的
+        const latest: CallToolResult | null = data != null ? { content: [], structuredContent: plain(data) as Record<string, unknown> } : pushed;
+        sentJson = JSON.stringify(data ?? null);
+        if (latest) {
           // 对话记录里的数据是 Svelte 的响应式代理，postMessage 克隆不了：先变成普通对象
           void b.sendToolInput({ arguments: args });
-          void b.sendToolResult(pushed as never);
+          void b.sendToolResult(latest as never);
         }
       });
 
@@ -234,6 +244,14 @@
     }
     return dispose;
   }
+
+  // 推送同一个 key 再推一次（ADR 043 D5）：卡片原地重画——握手以后数据变了就把新的结果再推给 App，不重新加载
+  $effect(() => {
+    const json = JSON.stringify(data ?? null);
+    if (!live || data == null || json === sentJson) return;
+    sentJson = json;
+    void live.sendToolResult({ content: [], structuredContent: plain(data) } as never);
+  });
 
   onMount(() => {
     let dispose: (() => void) | null = null;

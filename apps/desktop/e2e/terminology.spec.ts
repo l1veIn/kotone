@@ -25,9 +25,9 @@ const pluginUiFiles = () => pluginIds.flatMap((id) => ["ui", join("app", "src")]
   try { return walk(join(pluginsDir, id, dir), [".svelte", ".ts"]); } catch { return []; }
 }));
 /** 插件的名字、说明、数据开关的名字 / 说明 / 风险提示、登记的游戏事件的名字（`event_<名字>`，lib/gameEvents.ts）由宿主按约定的键取
- * （lib/plugins.ts 的 pluginText），插件登记的命令在热键表里的名字（`command_<命令>_name`，lib/hotkeyNames.ts）也是，
- * 代码里不直接写 m.xxx。 */
-const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk)|event_[a-z0-9_]+|command_[a-z0-9_]+_name)$/;
+ * （lib/plugins.ts 的 pluginText），插件登记的命令在热键表里的名字（`command_<命令>_name`，lib/hotkeyNames.ts）、内置推送的名字 /
+ * 时机 / 做什么（`push_<推送>_title|when|what`，插件页「设置 → 推送」）也是，代码里不直接写 m.xxx。 */
+const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk)|event_[a-z0-9_]+|command_[a-z0-9_]+_name|push_[a-z0-9_]+_(title|when|what))$/;
 
 function walk(dir: string, exts: string[]): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -212,6 +212,8 @@ test("words the glossary says not to use stay out of everything players see or s
     "crates/kotone-core/src/hotkey_commands.rs",
     "crates/kotone-agent/src/prompt.rs",
     "crates/kotone-agent/src/catalog.rs",
+    // 推送记进聊天的那一行、给她的那句（ADR 043）
+    "crates/kotone-agent/src/push.rs",
     "apps/desktop/src-tauri/src/bubble.rs",
     "apps/desktop/src-tauri/src/fillers.rs",
     "apps/desktop/src-tauri/src/voice_ask.rs",

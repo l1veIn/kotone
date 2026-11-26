@@ -450,6 +450,7 @@ pub async fn speak_in_turn(app: &AppHandle, text: &str) -> Result<(), String> {
         &runtime.active_captures,
         speaker,
         request,
+        None,
     )
     .await;
     if waited_for_her {
@@ -461,8 +462,49 @@ pub async fn speak_in_turn(app: &AppHandle, text: &str) -> Result<(), String> {
     match result {
         Ok(()) => Ok(()),
         Err(Unspoken::Stopped) => Err("玩家让她停下了，这句没有放完".into()),
+        Err(Unspoken::TooLate) => Err("过时了，这句没有放".into()),
         Err(Unspoken::Failed(error)) => {
             kotone_core::log::log(&format!("assistant: 插件的话没能放出来，改用弹幕：{error}"));
+            if let Err(e) = deliver_text(app, text.to_string(), vec![DeliveryKind::Danmaku]).await {
+                kotone_core::log::log(&format!("assistant: 弹幕也没能显示：{e}"));
+            }
+            Err(format!("没能在玩家这边放出来：{error}"))
+        }
+    }
+}
+
+/// 推送的语音（ADR 043 D3，`agent/push.rs` 排好了轮到它）：和插件的话走同一条路（排在她的话、提醒、填充话后面，放的时候
+/// 算她在出声，跟着她停），只是有期限：到 `deadline` 还没轮到开口（她一直在说、麦克风一直开着）就不放了（过时了），
+/// 返回 `Ok(false)`。放完返回 `Ok(true)`。放不出来（不是被停下、不是过时）时和插件的话一样改用弹幕显示这句。
+pub async fn speak_push(
+    app: &AppHandle,
+    text: &str,
+    deadline: std::time::Instant,
+) -> Result<bool, String> {
+    let (speaker, request) = {
+        let (app, text) = (app.clone(), text.to_string());
+        tauri::async_runtime::spawn_blocking(move || speaker_and_request(&app, &text))
+            .await
+            .map_err(|e| e.to_string())??
+    };
+    let runtime = app.state::<AssistantRuntime>();
+    let result = take_turn_and_speak(
+        &runtime.output_lock,
+        &runtime.output_cancel,
+        &runtime.active_captures,
+        speaker,
+        request,
+        Some(deadline),
+    )
+    .await;
+    match result {
+        Ok(()) => Ok(true),
+        Err(Unspoken::TooLate) => Ok(false),
+        Err(Unspoken::Stopped) => Err("玩家让她停下了，这句没有放完".into()),
+        Err(Unspoken::Failed(error)) => {
+            kotone_core::log::log(&format!(
+                "assistant: 推送的语音没能放出来，改用弹幕：{error}"
+            ));
             if let Err(e) = deliver_text(app, text.to_string(), vec![DeliveryKind::Danmaku]).await {
                 kotone_core::log::log(&format!("assistant: 弹幕也没能显示：{e}"));
             }
@@ -476,6 +518,8 @@ pub async fn speak_in_turn(app: &AppHandle, text: &str) -> Result<(), String> {
 enum Unspoken {
     /// 玩家让她停下了（停止、呼叫键打断：[`stop_speech`]）。
     Stopped,
+    /// 到期限还没轮到开口（推送的语音：过时了，[`speak_push`]）。
+    TooLate,
     /// 别的原因：麦克风一直开着、语音出错、超时。
     Failed(String),
 }
@@ -488,20 +532,34 @@ const PLUGIN_CAPTURE_WAIT: Duration = Duration::from_secs(30);
 ///    她下一句也等它放完，[`she_is_audible`] 也就是真的（音乐压低、通话里不把这句当成玩家说的）；
 /// 2. 麦克风开着先不出声（免得录进去），一直开着就不放了；
 /// 3. 记进“她最近说过的话”（通话里开着回声消除时认回声用），和她整段念的话一样；
-/// 4. 玩家让她停下（[`stop_speech`]）、或者调用方不等了（future 被丢掉）时这句也停。
+/// 4. 玩家让她停下（[`stop_speech`]）、或者调用方不等了（future 被丢掉）时这句也停；
+/// 5. 给了 `deadline`（推送的语音）：到那时还没拿到播报锁、麦克风还开着，就不放了（[`Unspoken::TooLate`]）；开口以后不看它。
 async fn take_turn_and_speak(
     lock: &tokio::sync::Mutex<()>,
     outputs: &OutputCancellation,
     captures: &AtomicUsize,
     speaker: Arc<dyn SpeechOutput>,
     request: SpeechRequest,
+    deadline: Option<std::time::Instant>,
 ) -> Result<(), Unspoken> {
-    let _turn = lock.lock().await;
+    let _turn = match deadline {
+        None => lock.lock().await,
+        Some(at) => {
+            match tokio::time::timeout_at(tokio::time::Instant::from_std(at), lock.lock()).await {
+                Ok(turn) => turn,
+                Err(_) => return Err(Unspoken::TooLate),
+            }
+        }
+    };
     let stop = outputs.begin();
     let text = request.text.clone();
+    const TOO_LATE: &str = "过时了";
     let spoken = until_output_stopped(&stop, async {
         let waited = std::time::Instant::now();
         while captures.load(Ordering::SeqCst) != 0 {
+            if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                return Err(TOO_LATE.to_string());
+            }
             if waited.elapsed() >= PLUGIN_CAPTURE_WAIT {
                 return Err("麦克风一直开着，这句没有放".to_string());
             }
@@ -527,6 +585,7 @@ async fn take_turn_and_speak(
             Ok(())
         }
         Err(_) if stop.is_cancelled() => Err(Unspoken::Stopped),
+        Err(error) if error == TOO_LATE => Err(Unspoken::TooLate),
         Err(error) => Err(Unspoken::Failed(error)),
     }
 }
@@ -1740,6 +1799,7 @@ mod tests {
                     &turns.captures,
                     speaker,
                     request,
+                    None,
                 )
                 .await
             })
@@ -1771,6 +1831,49 @@ mod tests {
         eventually("轮到插件的话", || speaker.started() == 1).await;
         speaker.release();
         plugin.await.unwrap().unwrap();
+    }
+
+    /// 推送的语音（ADR 043 D3，`speak_push`）：她一直在说，到期限还没轮到就不放了（过时了），不叠在她的话上，也不占着锁；
+    /// 期限前轮到了照常放。
+    #[tokio::test]
+    async fn a_push_voice_that_waits_past_its_deadline_is_dropped() {
+        let turns = Turns::default();
+        let speaker = Arc::new(PlayingSpeaker::default());
+        let her_words = turns.lock.clone().lock_owned().await;
+        let request = speech_request(TtsEngine::Kokoro, &AssistantConfig::default(), "中间那个");
+        let deadline = std::time::Instant::now() + Duration::from_millis(150);
+        let late = take_turn_and_speak(
+            &turns.lock,
+            &turns.outputs,
+            &turns.captures,
+            speaker.clone(),
+            request.clone(),
+            Some(deadline),
+        )
+        .await;
+        assert_eq!(late, Err(Unspoken::TooLate));
+        assert_eq!(speaker.started(), 0, "过时了：一个字都不放");
+        drop(her_words);
+        // 她说完了、期限还没到：照常放
+        let on_time = {
+            let turns = turns.clone();
+            let speaker: Arc<dyn SpeechOutput> = speaker.clone();
+            tokio::spawn(async move {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                take_turn_and_speak(
+                    &turns.lock,
+                    &turns.outputs,
+                    &turns.captures,
+                    speaker,
+                    request,
+                    Some(deadline),
+                )
+                .await
+            })
+        };
+        eventually("轮到推送的语音", || speaker.started() == 1).await;
+        speaker.release();
+        on_time.await.unwrap().unwrap();
     }
 
     #[tokio::test]

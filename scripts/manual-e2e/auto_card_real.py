@@ -7,7 +7,7 @@ KOTONE_HOME=target/auto-card-real/home, the real DeepSeek key in memory only, in
 speech volume 0) but no automations are switched on and the match recap is off, so the only thing the timeline can
 do on its own is post auto cards. KOTONE_POPUP_CAPTURABLE=1 lets this script screenshot the pop-up (in normal use it
 is excluded from screen capture). No OS input at all, no clicks: clicking the pop-up is covered by Playwright
-(e2e/auto-card.spec.ts) and the Rust unit tests.
+(e2e/push.spec.ts) and the Rust unit tests.
 
 Checks:
 C0. typed “你好，一句话就行” (agent_send = typed in the chat page) → one real model turn: the conversation the cards go to;
@@ -86,7 +86,13 @@ def describe(hwnd):
 
 def cards_in(cid):
     msgs = bt.conversation(cid).get("messages", [])
-    return msgs, [(i, m) for i, m in enumerate(msgs) if m.get("role") == "notice" and m.get("card")]
+    # 推送（ADR 043）：卡片在 Notice 的 push.card 里；整理成原来 card 的样子（plugin、key、title、ui、structuredContent）
+    out = []
+    for i, m in enumerate(msgs):
+        push = m.get("push") if m.get("role") == "notice" else None
+        if push and push.get("card"):
+            out.append((i, dict(m, card=dict(push["card"], plugin=push.get("plugin"), key=push.get("key")))))
+    return msgs, out
 
 
 def main():
@@ -143,7 +149,7 @@ def main():
         bt.wait_until(lambda: ge.lol_phase() == "pre_match", 20, 1)
         time.sleep(4)
         _, picked = cards_in(main_id)
-        check("C1: champion select → no auto card", not picked and "auto card:" not in log_text(), str(picked)[:200])
+        check("C1: champion select → no auto card", not picked and "push: lol" not in log_text(), str(picked)[:200])
 
         def opening():
             msgs, cards = cards_in(main_id)
@@ -217,7 +223,7 @@ def main():
         check("C7: her next turn answers from the cards (one more model call)",
               reply and ledger_count() > spent and any(w in reply for w in ("开局", "总结", "突破口", "赢", "输", "战绩")),
               reply[:200])
-        lines = [line for line in log_text().splitlines() if "auto card" in line or "消息提示" in line or "自动卡片" in line]
+        lines = [line for line in log_text().splitlines() if "push:" in line or "消息提示" in line or "推送" in line]
         print("   log:\n     " + "\n     ".join(lines[:12]))
     finally:
         real_deepseek.delete_connection(bt.EXE, bt.ENV)

@@ -10,7 +10,7 @@
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolCallCard from "./ToolCallCard.svelte";
   import BackgroundTaskCard from "./BackgroundTaskCard.svelte";
-  import AutoCard from "./AutoCard.svelte";
+  import PushItem from "./PushItem.svelte";
   import TurnFooter from "./TurnFooter.svelte";
   import type { Turn } from "./timeline";
   import { formatToolJson } from "./toolPresentation";
@@ -45,9 +45,9 @@
 </script>
 
 <section class="space-y-3" data-turn-anchor={turn.id} data-testid="agent-turn" data-turn-active={turn.active}>
-  {#if turn.card}
-    <!-- 自动卡片（ADR 039 D3）：插件自己发来的，单独一轮 -->
-    <AutoCard card={turn.card} atMs={turn.endedAtMs ?? 0} />
+  {#if turn.push}
+    <!-- 推送（ADR 043 D3）：插件自己发来的，单独一轮 -->
+    <PushItem push={turn.push} atMs={turn.endedAtMs ?? 0} />
   {/if}
   {#if user && system}
     <details class="group/system min-w-0 text-[13px] text-muted-foreground" data-testid="agent-system-message">

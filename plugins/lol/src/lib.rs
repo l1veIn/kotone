@@ -201,6 +201,13 @@ mod tests {
                 c.name.clone(),
             ));
         }
+        // 内置推送（ADR 043 D4）：插件页「设置 → 推送」照这几条画
+        for p in &m.pushes {
+            let id = p.id.replace('-', "_");
+            expect.push((format!("plugin_lol_push_{id}_title"), p.title.clone()));
+            expect.push((format!("plugin_lol_push_{id}_when"), p.when.clone()));
+            expect.push((format!("plugin_lol_push_{id}_what"), p.what.clone()));
+        }
         for s in &m.sources {
             expect.push((format!("plugin_lol_source_{}_name", s.id), s.name.clone()));
             expect.push((

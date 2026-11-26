@@ -22,7 +22,7 @@
   import CompanionInputSettings from "./assistant/CompanionInputSettings.svelte";
   import WakeSettings from "./assistant/WakeSettings.svelte";
   import BubbleSettings from "./assistant/BubbleSettings.svelte";
-  import AutoCardSettings from "./assistant/AutoCardSettings.svelte";
+  import PushSettings from "./assistant/PushSettings.svelte";
   import OutputSettings from "./assistant/OutputSettings.svelte";
   import AgentSettings from "./assistant/AgentSettings.svelte";
   import UsageSettings from "./assistant/UsageSettings.svelte";
@@ -160,8 +160,8 @@
           </p>
           <div id="settings-reply-bubble" class="scroll-mt-16"><BubbleSettings /></div>
           <div id="settings-reply-output" class="scroll-mt-16"><OutputSettings /></div>
-          <!-- 自动卡片和消息提示（ADR 039 D3、D4） -->
-          <div id="settings-reply-auto-cards" class="scroll-mt-16"><AutoCardSettings /></div>
+          <!-- 推送时的消息提示（ADR 039 D4、ADR 043 D4；每条推送的开关在插件页） -->
+          <div id="settings-reply-pushes" class="scroll-mt-16"><PushSettings /></div>
         </div>
       {:else if section === "permissions"}
         <div class="space-y-6" data-testid="settings-permissions"><AgentSettings /></div>

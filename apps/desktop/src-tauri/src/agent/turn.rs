@@ -171,7 +171,7 @@ struct Started {
     inbox: Arc<Inbox>,
 }
 
-/// 认领主会话，**认领之后再读对话**。往对话末尾追加的（自动卡片、复盘提示、自动化的结果、交回的后台结果，
+/// 认领主会话，**认领之后再读对话**。往对话末尾追加的（推送、复盘提示、自动化的结果、交回的后台结果，
 /// [`append_locked`]）和这里用同一把锁，读、改、存都在锁里，而且那段对话在跑时不写；所以认领之前写进去的，
 /// 认领之后再读一定读得到，这一轮存盘不会把它们盖掉（审查 2026-11-25：先读对话再认领，中间那一下写进去的
 /// 卡片会被这一轮拿着旧对话存盘时盖掉）。
@@ -278,6 +278,27 @@ pub(super) fn append_locked(
         return Ok(Appended::Gone);
     };
     conversation.messages.extend(messages.iter().cloned());
+    store.save(&mut conversation)?;
+    Ok(Appended::Saved)
+}
+
+/// 原地换掉对话里的一条推送（ADR 043 D5：同一个 key 再推一次，内容变了；找不到那一条就追加），不叫模型。规矩和
+/// [`append_locked`] 一样：同一把锁；那段对话正在跑时不写（那一轮存盘时会盖掉），返回 [`Appended::Busy`]，调用方排着、
+/// 这一轮结束再改（`when_free.rs`）。推送是 `Notice`，不发给模型，改它不动发给模型的前缀。
+pub(super) fn replace_locked(
+    inner: &Mutex<Inner>,
+    store: &ConversationStore,
+    id: &str,
+    notice: &Message,
+) -> Result<Appended, String> {
+    let inner = inner.lock().unwrap();
+    if running_in(&inner, id).is_some() {
+        return Ok(Appended::Busy);
+    }
+    let Some(mut conversation) = store.load(id)? else {
+        return Ok(Appended::Gone);
+    };
+    kotone_agent::push::apply_replace(&mut conversation.messages, notice);
     store.save(&mut conversation)?;
     Ok(Appended::Saved)
 }
@@ -424,6 +445,7 @@ fn fail_early(
             usage: None,
             recap: None,
             card: None,
+            push: None,
         },
     ] {
         conversation.messages.push(m.clone());
@@ -977,29 +999,38 @@ mod tests {
 
     fn card() -> Vec<Message> {
         vec![
-            Message::Notice {
-                text: "英雄联盟 发来一张卡片：开局战绩".into(),
-                at_ms: 1,
-                compaction: None,
-                usage: None,
-                recap: None,
-                card: Some(json!({"plugin": "lol", "key": "opening:42"})),
-            },
+            pushed("开局战绩"),
             Message::User {
                 text: "（系统消息，不是玩家说的话：……）".into(),
                 attachments: Vec::new(),
-                source: kotone_agent::auto_card::SOURCE.into(),
+                source: kotone_agent::push::SOURCE.into(),
                 at_ms: 1,
                 context: String::new(),
             },
         ]
     }
 
-    fn has_card(messages: &[Message]) -> bool {
-        kotone_agent::auto_card::posted_in(messages, "lol", "opening:42")
+    /// 一条推送（卡片），卡片名是 `title`（原地更新时换它）。
+    fn pushed(title: &str) -> Message {
+        Message::Notice {
+            text: format!("英雄联盟 推送：{title}"),
+            at_ms: 1,
+            compaction: None,
+            usage: None,
+            recap: None,
+            card: None,
+            push: Some(
+                json!({"plugin": "lol", "trigger": "opening", "key": "opening:42",
+                "card": {"title": title, "ui": {"uri": "ui://kotone/lol/match"}, "structuredContent": {}}}),
+            ),
+        }
     }
 
-    /// 审查 2026-11-25 的交错：玩家的话进来、主会话选好了对话（读了盘）还没认领，自动卡片正好在这一下记进对话。
+    fn has_card(messages: &[Message]) -> bool {
+        kotone_agent::push::find(messages, "lol:opening:42").is_some()
+    }
+
+    /// 审查 2026-11-25 的交错：玩家的话进来、主会话选好了对话（读了盘）还没认领，推送正好在这一下记进对话。
     /// 认领之后再读，这一轮拿到的是带卡片的对话；这一轮存盘（照 `turn` 的 on_event）以后卡片和那句话都还在。
     #[test]
     fn a_card_saved_between_picking_and_claiming_survives_the_turn() {
@@ -1010,7 +1041,7 @@ mod tests {
         let picked = pick_conversation(&store).unwrap();
         assert_eq!(picked.id, id);
         assert!(!has_card(&picked.messages));
-        // 这时候还没人认领：自动卡片记进去了
+        // 这时候还没人认领：推送记进去了
         assert_eq!(
             append_locked(&inner, &store, &id, &card()).unwrap(),
             Appended::Saved
@@ -1032,7 +1063,7 @@ mod tests {
         let saved = store.load(&id).unwrap().unwrap();
         assert!(has_card(&saved.messages), "存盘没盖掉卡片");
         assert!(saved.messages.iter().any(
-            |m| matches!(m, Message::User { source, .. } if source == kotone_agent::auto_card::SOURCE)
+            |m| matches!(m, Message::User { source, .. } if source == kotone_agent::push::SOURCE)
         ));
         assert_eq!(saved.messages.len(), 6);
     }
@@ -1094,6 +1125,52 @@ mod tests {
         let saved = store.load(&id).unwrap().unwrap().messages;
         assert!(matches!(&saved[saved.len() - 3], Message::Assistant { text, .. } if text == "在"));
         assert!(has_card(&saved[saved.len() - 2..]));
+    }
+
+    /// ADR 043 D5：原地更新一条推送也守同一条规矩——那段对话在跑时不写（Busy，调用方排着）；不在跑时换掉那一条，
+    /// 位置不动、不多一条；那一条不在了就追加；对话没了报 Gone。
+    #[test]
+    fn a_push_is_replaced_in_place_only_while_its_conversation_is_idle() {
+        let (_dir, store) = open_store();
+        let id = current(&store);
+        let inner = Mutex::new(Inner::default());
+        assert_eq!(
+            append_locked(&inner, &store, &id, &card()).unwrap(),
+            Appended::Saved
+        );
+        let Claim::Started(started) = claim_main(&inner, &store, Message::user("在吗")).unwrap()
+        else {
+            panic!()
+        };
+        let mut conversation = started.conversation;
+        let position = conversation
+            .messages
+            .iter()
+            .position(|m| kotone_agent::push::push_id(m).is_some())
+            .unwrap();
+        assert_eq!(
+            replace_locked(&inner, &store, &id, &pushed("开局战绩（更新）")).unwrap(),
+            Appended::Busy,
+            "在跑：不写"
+        );
+        // 这一轮存盘、结束
+        conversation.messages.push(Message::user("在吗"));
+        conversation.messages.push(assistant("在", &[]));
+        store.save(&mut conversation).unwrap();
+        inner.lock().unwrap().running = None;
+        let length = store.load(&id).unwrap().unwrap().messages.len();
+        assert_eq!(
+            replace_locked(&inner, &store, &id, &pushed("开局战绩（更新）")).unwrap(),
+            Appended::Saved
+        );
+        let saved = store.load(&id).unwrap().unwrap().messages;
+        assert_eq!(saved.len(), length, "不多一条");
+        assert_eq!(saved[position], pushed("开局战绩（更新）"), "位置不动");
+        assert!(matches!(saved.last(), Some(Message::Assistant { text, .. }) if text == "在"));
+        assert_eq!(
+            replace_locked(&inner, &store, "c-gone", &pushed("x")).unwrap(),
+            Appended::Gone
+        );
     }
 
     /// 后台的一件事在跑时它那段对话也不写；转到后台的工具没有模型读收件箱，插不进话（算在忙）。

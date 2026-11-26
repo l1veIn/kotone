@@ -186,6 +186,10 @@ pub struct PluginConfig {
     /// 插件自己的其余设置（插件自己解析，宿主原样存）。
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub settings: serde_json::Map<String, serde_json::Value>,
+    /// 插件的内置推送开关（清单的 `[[pushes]]`，ADR 043 D4，插件页「设置 → 推送」）：玩家动过的才写；没写的按清单的
+    /// 默认（规则在 `kotone-plugin-api` 的 `Manifest::push_switch_in`）。新字段，旧版本会忽略。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub pushes: std::collections::BTreeMap<String, bool>,
 }
 
 impl Settings {
@@ -203,6 +207,13 @@ impl Settings {
             .get(id)
             .and_then(|p| p.sources.get(source).copied())
             .unwrap_or(by_default)
+    }
+
+    /// 玩家给插件的某条推送设的开关（`plugins.<id>.pushes.<推送>`）；没动过是 None（按清单的默认，ADR 043 D4）。
+    pub fn plugin_push(&self, id: &str, push: &str) -> Option<bool> {
+        self.plugins
+            .get(id)
+            .and_then(|p| p.pushes.get(push).copied())
     }
 }
 

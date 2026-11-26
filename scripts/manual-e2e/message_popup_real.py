@@ -165,8 +165,8 @@ return seen;
 """
 
 CARD_IN_VIEW = """
-const card = document.querySelector('[data-testid=auto-card][data-key="%s"]');
-if (!card) return { found: false, cards: [...document.querySelectorAll('[data-testid=auto-card]')].map((c) => c.dataset.key) };
+const card = document.querySelector('[data-testid=push-item][data-key="%s"]');
+if (!card) return { found: false, cards: [...document.querySelectorAll('[data-testid=push-item]')].map((c) => c.dataset.key) };
 const r = card.getBoundingClientRect();
 return { found: true, inView: r.bottom > 0 && r.top < window.innerHeight && r.height > 0, top: r.top, height: r.height,
   viewport: window.innerHeight };
@@ -323,7 +323,9 @@ def conversation_cards():
     if not cid:
         return []
     conv = fs.invoke("agent_conversation", {"id": cid}).get("ok") or {}
-    return [m for m in conv.get("messages", []) if m.get("role") == "notice" and m.get("card")]
+    # 推送（ADR 043）：卡片在 Notice 的 push.card 里；整理成原来 card 的样子（key 在 push 上）
+    return [dict(m, card=dict(m["push"]["card"], key=m["push"].get("key")))
+            for m in conv.get("messages", []) if m.get("role") == "notice" and (m.get("push") or {}).get("card")]
 
 
 def main():
@@ -376,7 +378,7 @@ def main():
             fs.stop_kotone(app)
         if server is not None:
             server.shutdown()
-        lines = [line for line in log_text().splitlines() if "消息提示" in line or "auto card" in line]
+        lines = [line for line in log_text().splitlines() if "消息提示" in line or "push:" in line]
         print("log:\n  " + "\n  ".join(lines[-12:]))
         if "--keep" not in sys.argv:
             for _ in range(10):

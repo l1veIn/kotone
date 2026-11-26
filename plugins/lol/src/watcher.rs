@@ -37,7 +37,7 @@ use crate::tools::{
 };
 use crate::LolPlugin;
 
-/// 自动卡片（ADR 039 D3）：进加载发“开局战绩”，结算发“这局总结”。
+/// 卡片推送（ADR 039 D3、ADR 043）：进加载推“开局战绩”，结算推“这局总结”。
 mod auto_cards;
 /// 选人阶段的“这局”（调研 G1）。
 mod champ_select;
@@ -121,7 +121,7 @@ pub(crate) struct State {
     live_seen: Option<i64>,
     /// 上一轮玩家自己是不是阵亡了。
     was_dead: Option<bool>,
-    /// 自动卡片发过哪局的哪种（[`auto_cards`]）。
+    /// 推送过哪局的哪种卡片（[`auto_cards`]）。
     cards: auto_cards::CardState,
     /// “这局”页面的阶段和进这个阶段的时间（Unix 毫秒）。
     stage: Option<(pages::MatchPhase, i64)>,
@@ -290,7 +290,7 @@ impl LolPlugin {
             s.was_dead = None;
         }
         self.report_phase(host.as_ref(), &phase, live.as_ref().map(|(_, game)| game));
-        // 自动卡片（ADR 039 D3）：进加载查完战绩发“开局战绩”，结算发“这局总结”
+        // 卡片推送（ADR 039 D3、ADR 043）：进加载查完战绩推“开局战绩”，结算推“这局总结”
         let live_ready = live.as_ref().is_some_and(|(_, game)| game.time > 0.0);
         self.update_stage(&phase, live_ready);
         self.auto_cards(host, &previous, &phase, live_ready);

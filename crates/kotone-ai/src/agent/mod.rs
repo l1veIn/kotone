@@ -119,11 +119,15 @@ pub enum Message {
         /// 对局复盘的正文（游戏一退出 Kotone 自动整理的；`text` 是标题）。只给玩家看，不发给模型。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recap: Option<String>,
-        /// 自动卡片（ADR 039 D3）：插件不叫模型、自己发进聊天的一张卡片（哪个插件、标题、页面和页面数据，
-        /// 形状见 `kotone_agent::auto_card`）。只给界面；给模型的那一两句是另一条用户消息（来源 `auto-card`）。
-        /// 旧版本读到这一条只显示 `text`。
+        /// 旧的自动卡片（ADR 039 D3，rc.9 及以前写的）：插件发进聊天的一张卡片。新的写 `push`；这个字段只读旧的
+        /// （界面照样画成卡片，原则 19），不再写。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         card: Option<Value>,
+        /// 推送（ADR 043 D3）：插件不叫模型、自己发进聊天的一条（卡片 / 一行 / 语音，形状见 `kotone_agent::push`）。
+        /// 只给界面；给模型的那一句是另一条用户消息（来源 `auto-card`）。同一个 key 再推一次时宿主原地改这里（D5：
+        /// Notice 不发给模型，改它不动发给模型的前缀）。旧版本读到这一条只显示 `text`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        push: Option<Value>,
     },
 }
 
@@ -147,6 +151,7 @@ impl Message {
             usage: None,
             recap: None,
             card: None,
+            push: None,
         }
     }
 

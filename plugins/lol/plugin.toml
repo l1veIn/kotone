@@ -112,6 +112,24 @@ description = "把两边谁和谁开黑发到队伍聊天"
 tool = "lol.shout"
 args = { what = "premade", side = "all", channel = "team" }
 
+# 内置推送（ADR 043 D3、D4）：插件页「设置 → 推送」里每条一个开关（宿主画、宿主执行），内容不能改。插件经 Host::push 推，
+# trigger 是这里的 id；同一个 key 再推一次就是更新。界面上的名字、时机、做什么在 messages 里（plugin_lol_push_<id>_title / _when / _what）。
+[[pushes]]
+id = "opening"
+title = "开局战绩"
+when = "进加载、10 个人的战绩查完（最多等 20 秒）"
+what = "发一张双方战绩的卡片，给她留一句很短的说明"
+forms = ["card"]
+needs = ["client"]
+
+[[pushes]]
+id = "summary"
+title = "这局总结"
+when = "结算、拿到这局的结果"
+what = "发一张这局总结的卡片（单局详情），给她留一句很短的说明"
+forms = ["card"]
+needs = ["client"]
+
 # 覆盖层（照 aramhex）：选英雄时的胜率、海斗三选一时贴在卡片上的海克斯评分
 [[overlays]]
 uri = "ui://kotone/lol/champ-select"

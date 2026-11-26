@@ -325,6 +325,7 @@ pub async fn recap(app: &AppHandle, game_id: &str, start: u64, end: u64) -> Resu
         usage: reply.usage.clone().filter(|u| !u.is_empty()),
         recap: Some(body.clone()),
         card: None,
+        push: None,
     };
     // 她正忙就排着，空了再进聊天（不丢，`agent/when_free.rs`）
     let posted = crate::agent::post_notice(app, note);
