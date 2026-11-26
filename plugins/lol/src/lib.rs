@@ -8,6 +8,7 @@
 //! - [`stats`]：数据开关“用网上的统计”（`stats`）背后的东西：腾讯 101、aramhex-data、外号和名字表，
 //!   以及默认关的 OP.GG（`opgg`）；工具在 `stats_tools.rs`；
 //! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现；
+//! - [`pushes`]：选英雄卡片、海克斯三选一两条推送（ADR 043 D7，原来的两个覆盖层；开局战绩、这局总结在 `watcher/auto_cards.rs`）；
 //! - [`app`]：做成 MCP App 的页面（`app/` 里独立的 HTML，ADR 039 D5），Kotone 和外部宿主显示同一份；
 //! - [`chat`]：发到游戏（ADR 041 D3，数据开关“在客户端里发聊天” `chat`）：客户端在前台时（选英雄、房间里）经客户端的
 //!   聊天接口发，不按键；
@@ -29,8 +30,8 @@ pub mod client;
 pub mod control;
 #[cfg(test)]
 mod event_catalog_tests;
-mod overlays;
 pub mod pages;
+mod pushes;
 pub mod stats;
 mod stats_tools;
 pub mod tools;
@@ -55,8 +56,8 @@ pub struct LolPlugin {
     state: Arc<Mutex<watcher::State>>,
     /// 网上的统计（第一次用时按宿主给的目录建）。
     stats: OnceLock<stats::Stats>,
-    /// 覆盖层（选英雄、海克斯评分）现在的样子。
-    overlay: Mutex<overlays::OverlayState>,
+    /// 选英雄卡片、海克斯三选一两条推送现在的样子（ADR 043 D7）。
+    pushes: Arc<Mutex<pushes::PushState>>,
     /// 操作客户端（自动接受、自动选 / 禁）做过什么。
     control: Mutex<control::ControlState>,
 }

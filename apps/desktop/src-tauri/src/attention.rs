@@ -7,18 +7,21 @@
 //!   照 Windows 自己的前台锁：后台程序要前台时，系统也只是闪它的任务栏按钮，玩家切出来就看得到。
 //! - [`show_for_player`]：玩家自己按了要看 Kotone 窗口的热键（“打开页面”，ADR 040 第 3 期 P1）：是他自己要的，拿到前面；
 //!   只有游戏独占全屏时不拿（拿了游戏会被切到后台、可能最小化），照 [`present`] 不能拿时的做法。
-//! - [`popup_blocked`]：消息提示（ADR 039 D4）现在能不能弹：Kotone 在前台、独占全屏、演示模式、别的程序全屏时不弹。
+//! - [`popup_blocked`]：插件推送时悬浮窗（ADR 043 D6）现在能不能弹出来（一行、小窗）：Kotone 在前台（推送就在聊天里）、
+//!   独占全屏、演示模式、别的程序全屏时不弹。原来管的是消息提示（ADR 039 D4），它并进了悬浮窗。
+//! - [`floating_hidden`]：悬浮窗现在能不能显示（她在说话也算）：独占全屏、演示模式时不显示。
 //! - [`remember_player_window`] / [`give_back_foreground`]：玩家点了盖在游戏上面、又必须能点的 Kotone 小窗
-//!   （语音输入悬浮窗开着“允许交互并拖动”时）：点完把前台还给他原来在用的窗口，游戏马上又收得到键。
-//!   悬浮窗不能做成不可聚焦：它设成 `WS_EX_NOACTIVATE` 时，WebView2 收不到鼠标的按下和点击（2026-11-25 真机，
+//!   （语音输入的输入条开着“允许交互并拖动”时）：点完把前台还给他原来在用的窗口，游戏马上又收得到键。
+//!   输入条不能做成不可聚焦：它设成 `WS_EX_NOACTIVATE` 时，WebView2 收不到鼠标的按下和点击（2026-11-25 真机，
 //!   `focus_steal_real.py` B2 / B3：页面一个事件都没收到，按钮点不了、也拖不动）。这不是所有不可聚焦窗口都这样：
-//!   消息提示不可聚焦照样点得到（同一天真机 `message_popup_real.py` M4、M6），所以它保持不可聚焦，点 × 时前台不动。
-//! - [`exclusive_fullscreen`]：游戏独占全屏时，盖在游戏上的透明置顶窗口（悬浮窗、气泡）不出来——在独占全屏的
-//!   Direct3D 游戏上面显示，Windows 可能把游戏最小化。消息提示的 [`popup_blocked`] 也包括这一条。
+//!   消息提示不可聚焦照样点得到（同一天真机 `message_popup_real.py` M4、M6），所以接替它的悬浮窗也不可聚焦，
+//!   点 ×、点卡片里的按钮、拖动时前台都不动。
+//! - [`exclusive_fullscreen`]：游戏独占全屏时，盖在游戏上的透明置顶窗口（输入条、悬浮窗）不出来——在独占全屏的
+//!   Direct3D 游戏上面显示，Windows 可能把游戏最小化。[`popup_blocked`]、[`floating_hidden`] 也包括这一条。
 //!
-//! 还各自查独占全屏的：弹幕（`assistant.rs` 的 `present_danmaku_active`，出错时要说“请切换为无边框”）。插件覆盖层
-//! 没有查（只在目标游戏窗口在前台时显示，见 `overlay_layer.rs`）。诊断（`diagnostics.rs`）和全屏提醒
-//! （`compatibility.rs`）要“查不到”这第三种结果，直接读 `fullscreen::is_exclusive_fullscreen_active`。
+//! 还各自查独占全屏的：弹幕（`assistant.rs` 的 `present_danmaku_active`，出错时要说“请切换为无边框”）。
+//! 诊断（`diagnostics.rs`）和全屏提醒（`compatibility.rs`）要“查不到”这第三种结果，直接读
+//! `fullscreen::is_exclusive_fullscreen_active`。
 
 /// 前台窗口，和它是不是 Kotone 自己（这个进程）的窗口；没有前台窗口时 None。
 /// 只看进程号：不用挨个向 Kotone 的窗口要句柄（那要经过界面线程，界面线程正忙或窗口正在关的时候就得等）。
@@ -132,7 +135,17 @@ pub fn exclusive_fullscreen() -> bool {
     kotone_platform_windows::fullscreen::is_exclusive_fullscreen_active() == Some(true)
 }
 
-/// 消息提示现在不弹的原因（None = 可以弹）。
+/// 悬浮窗现在不显示的原因（None = 可以显示）：游戏独占全屏（盖上去 Windows 可能把游戏最小化）、演示模式。
+/// 她在说话时也照这个：别的程序全屏、Kotone 在前台时她的气泡照样出来（原来说话气泡就是这样）。
+pub fn floating_hidden() -> Option<&'static str> {
+    match kotone_platform_windows::fullscreen::notification_state() {
+        Some(3) => Some("游戏独占全屏"),
+        Some(4) => Some("演示模式"),
+        _ => None,
+    }
+}
+
+/// 插件推送时悬浮窗现在不弹的原因（None = 可以弹）。
 pub fn popup_blocked() -> Option<&'static str> {
     if kotone_in_front() {
         return Some("Kotone 的窗口在前台");
@@ -152,11 +165,11 @@ pub fn popup_blocked() -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    /// 盖在游戏上面的窗口（悬浮窗、气泡、弹幕、消息提示、插件覆盖层）建的时候都不要焦点（`focus: false`），
-    /// 显示时走 `SW_SHOWNA`：出现的时候前台照样是游戏。只看、不点的（气泡、弹幕、插件覆盖层）还不可聚焦。
-    /// 消息提示能点，也不可聚焦：这样点 × 时前台一直是游戏；它不可聚焦照样收得到点击（2026-11-25 真机
-    /// `message_popup_real.py` M4、M6）。
-    /// 语音输入悬浮窗例外：开着“允许交互并拖动”时要能点，它不可聚焦时 WebView2 收不到点击（`focus_steal_real.py`），
+    /// 盖在游戏上面的窗口（输入条、悬浮窗、弹幕）建的时候都不要焦点（`focus: false`），显示时走 `SW_SHOWNA`：
+    /// 出现的时候前台照样是游戏。只看、不点的（弹幕）不可聚焦。
+    /// 悬浮窗（ADR 043 D6）能点、能拖，也不可聚焦：这样点 ×、点卡片里的按钮时前台一直是游戏；它接替的消息提示
+    /// 不可聚焦照样收得到点击（2026-11-25 真机 `message_popup_real.py` M4、M6）。
+    /// 语音输入的输入条例外：开着“允许交互并拖动”时要能点，它不可聚焦时 WebView2 收不到点击（`focus_steal_real.py`），
     /// 所以它可聚焦、点完把前台还回去（[`super::give_back_foreground`]）。主窗口是玩家自己打开的，能拿焦点。
     #[test]
     fn windows_over_the_game_never_take_the_focus() {
@@ -171,7 +184,7 @@ mod tests {
         };
         let over_game: Vec<&serde_json::Value> =
             windows.iter().filter(|w| w["label"] != "main").collect();
-        assert!(over_game.len() >= 5, "{windows:?}");
+        assert!(over_game.len() >= 3, "{windows:?}");
         for w in over_game {
             assert_eq!(
                 w["focus"], false,
@@ -179,22 +192,26 @@ mod tests {
                 w["label"]
             );
         }
-        for label in ["companion", "danmaku", "plugin-overlay"] {
-            assert_eq!(
-                window(label)["focusable"],
-                false,
-                "{label} 只看不点，要 focusable: false"
+        assert_eq!(
+            window("danmaku")["focusable"],
+            false,
+            "弹幕只看不点，要 focusable: false"
+        );
+        assert_eq!(
+            window("floating")["focusable"],
+            false,
+            "悬浮窗不可聚焦照样点得到（真机 message_popup_real.py）；可聚焦的话点 × 会把游戏的前台拿走"
+        );
+        for gone in ["companion", "message-popup"] {
+            assert!(
+                windows.iter().all(|w| w["label"] != gone),
+                "{gone} 并进了悬浮窗（ADR 043 D6）"
             );
         }
-        assert_eq!(
-            window("message-popup")["focusable"],
-            false,
-            "消息提示不可聚焦照样点得到（真机 message_popup_real.py）；可聚焦的话点 × 会把游戏的前台拿走"
-        );
         assert_ne!(
             window("overlay")["focusable"],
             false,
-            "悬浮窗要能点（不可聚焦时 WebView2 收不到点击），点完把前台还回去"
+            "输入条要能点（不可聚焦时 WebView2 收不到点击），点完把前台还回去"
         );
         let main = window("main");
         assert_ne!(main["focusable"], false, "主窗口要能拿焦点（能打字）");

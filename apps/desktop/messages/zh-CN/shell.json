@@ -37,7 +37,7 @@
   "shell_settings_voice_setup_prompt": "帮我配置语音输入：",
   "shell_settings_load_failed": "加载配置失败：{error}",
   "shell_settings_close_sidebar": "关闭侧边栏",
-  "shell_settings_overlay_degraded": "悬浮窗显示异常，已自动关闭。语音输入仍可使用。",
+  "shell_settings_overlay_degraded": "输入条显示异常，已自动关闭。语音输入仍可使用。",
   "shell_settings_loading": "加载配置中…",
   "shell_sidebar_group_companion": "游戏陪玩",
   "shell_sidebar_game_adapt": "游戏适配",

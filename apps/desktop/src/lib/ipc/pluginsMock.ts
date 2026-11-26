@@ -21,7 +21,7 @@ import {
   findSampleChampion, sampleChampionList, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift,
 } from "./lolStatsMock";
 import {
-  OVERLAY_AUGMENTS, OVERLAY_CHAMP_SELECT, PAGE_CHAMPION, PAGE_GAME, PAGE_MATCH, PAGE_PLAYER, PAGE_TIER,
+  PAGE_AUGMENT_OCR, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_GAME, PAGE_MATCH, PAGE_PLAYER, PAGE_TIER,
 } from "$plugins/lol/ui/types";
 
 const lol: PluginManifest = {
@@ -71,23 +71,27 @@ const lol: PluginManifest = {
     { uri: PAGE_GAME, title: lolZh.plugin_lol_page_game, needs: ["client"] },
     { uri: PAGE_CHAMPION, title: lolZh.plugin_lol_page_champion, needs: ["stats"] },
     { uri: PAGE_TIER, title: lolZh.plugin_lol_page_tier, needs: ["stats"] },
+    // 只在推送里出现的两张卡片（ADR 043 D7）
+    { uri: PAGE_CHAMP_SELECT, title: lolZh.plugin_lol_page_champ_select, needs: ["stats"] },
+    { uri: PAGE_AUGMENT_OCR, title: lolZh.plugin_lol_page_augment_ocr, needs: ["stats"] },
     { uri: "ui://kotone/lol/settings", title: lolZh.plugin_lol_tab_settings, needs: [] },
   ],
-  overlays: [
-    { uri: OVERLAY_CHAMP_SELECT, title: lolZh.plugin_lol_overlay_team_mayhem, needs: ["client", "stats"] },
-    { uri: OVERLAY_AUGMENTS, title: lolZh.plugin_lol_best_augments, needs: ["stats"] },
-  ],
   agent: { overview: "", rule: "" },
-  // 内置推送（plugin.toml 的 [[pushes]]，ADR 043 D4）：名字、时机、做什么用插件的文案；都是卡片、都要“读客户端数据”
-  pushes: (["opening", "summary"]).map((id) => ({
+  // 内置推送（plugin.toml 的 [[pushes]]，ADR 043 D4）：名字、时机、做什么用插件的文案
+  pushes: ([
+    ["opening", ["card"], "normal", ["client"]],
+    ["summary", ["card"], "normal", ["client"]],
+    ["champ-select", ["card"], "normal", ["client", "stats"]],
+    ["augment-pick", ["line", "voice", "card"], "high", ["stats"]],
+  ] as [string, ("card" | "line" | "voice")[], "high" | "normal", string[]][]).map(([id, forms, priority, needs]) => ({
     id,
-    title: (lolZh as Record<string, string>)[`plugin_lol_push_${id}_title`],
-    when: (lolZh as Record<string, string>)[`plugin_lol_push_${id}_when`],
-    what: (lolZh as Record<string, string>)[`plugin_lol_push_${id}_what`],
-    forms: ["card" as const],
-    priority: "normal" as const,
+    title: (lolZh as Record<string, string>)[`plugin_lol_push_${id.replace(/-/g, "_")}_title`],
+    when: (lolZh as Record<string, string>)[`plugin_lol_push_${id.replace(/-/g, "_")}_when`],
+    what: (lolZh as Record<string, string>)[`plugin_lol_push_${id.replace(/-/g, "_")}_what`],
+    forms,
+    priority,
     enabledByDefault: true,
-    needs: ["client"],
+    needs,
   })),
   // 游戏中心的事（plugin.toml 的 [[events]]）：名字用插件的文案；都要“读客户端数据”；带 team 的能选哪一边
   events: ([
@@ -111,7 +115,6 @@ const gameVoice: PluginManifest = {
   enabledByDefault: false,
   sources: [],
   pages: [{ uri: "ui://kotone/game-voice/home", title: gameVoiceZh.plugin_game_voice_name, needs: [] }],
-  overlays: [],
   agent: { overview: "", rule: "" },
 };
 
@@ -125,7 +128,6 @@ const music: PluginManifest = {
   enabledByDefault: true,
   sources: [],
   pages: [{ uri: "ui://kotone/music/home", title: musicZh.plugin_music_name, needs: [] }],
-  overlays: [],
   agent: { overview: "", rule: "" },
 };
 
@@ -139,7 +141,6 @@ const interpreter: PluginManifest = {
   enabledByDefault: true,
   sources: [],
   pages: [{ uri: "ui://kotone/interpreter/home", title: interpreterZh.plugin_interpreter_name, needs: [] }],
-  overlays: [],
   agent: { overview: "", rule: "" },
 };
 
@@ -153,7 +154,6 @@ const voiceInput: PluginManifest = {
   enabledByDefault: true,
   sources: [],
   pages: [{ uri: "ui://kotone/voice-input/home", title: voiceInputZh.plugin_voice_input_name, needs: [] }],
-  overlays: [],
   agent: { overview: "", rule: "" },
 };
 
@@ -170,6 +170,7 @@ const TOOLS: Record<string, MockTool[]> = {
     { name: "lol.tier", needs: ["stats"], visibility: BOTH, page: PAGE_TIER },
     { name: "lol.client", needs: ["client", "control"], visibility: BOTH, page: null },
     { name: "lol.champions", needs: [], visibility: ["app"], page: "ui://kotone/lol/settings" },
+    { name: "lol.augment_ocr", needs: ["stats"], visibility: ["app"], page: PAGE_AUGMENT_OCR },
   ],
   "game-voice": [
     { name: "voice_chat.status", needs: [], visibility: BOTH, page: "ui://kotone/game-voice/home" },
@@ -239,9 +240,11 @@ async function sourceOff(source: string): Promise<boolean> {
   return (config.enabled ?? true) === false || (config.sources?.[source] ?? spec?.enabledByDefault ?? true) === false;
 }
 
-/** 预览里插件工具被调过的记录（测试看 App 调工具时宿主绑定的是哪个插件）：`window.__kotonePluginCalls`。 */
-const calls: { plugin: string; tool: string }[] = [];
-if (typeof window !== "undefined") (window as unknown as { __kotonePluginCalls: typeof calls }).__kotonePluginCalls = calls;
+/** 预览里插件工具被调过的记录（测试看 App 调工具时宿主绑定的是哪个插件）：`window.__kotonePluginCalls`。
+ * 开发服务器热更新过这个文件时，页面里可能有两份这个模块（带不同的 `?t=`）：两份记进同一个数组，不互相盖掉。 */
+const calls: { plugin: string; tool: string }[] = typeof window !== "undefined"
+  ? ((window as unknown as { __kotonePluginCalls?: { plugin: string; tool: string }[] }).__kotonePluginCalls ??= [])
+  : [];
 
 export async function pluginCall(plugin: string, tool: string, args: Record<string, unknown>): Promise<PluginToolResult> {
   calls.push({ plugin, tool });
@@ -275,6 +278,13 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   switch (tool) {
     case "lol.champions":
       return { content: { status: "ok" }, structuredContent: { champions: sampleChampionList() }, ui: { uri: "ui://kotone/lol/settings" } };
+    case "lol.augment_ocr": {
+      // 预览里不真的下载：点“下载”马上算下好了，点“不用”记下（和真的一样回卡片的数据）
+      const action = typeof args.action === "string" ? args.action : "status";
+      const state = action === "download" ? "ready" : action === "decline" ? "declined" : "ask";
+      const card = state === "declined" ? { state } : { state, model: "PP-OCRv5 mobile", sizeMb: state === "ask" ? 21 : 0 };
+      return { content: { status: "ok", text: state }, structuredContent: card, ui: { uri: PAGE_AUGMENT_OCR } };
+    }
     case "lol.client":
       // 预览里没有客户端：照真的回答“现在不在这个阶段”
       return { content: { status: "not_now", text: "dev:web" } };
@@ -321,6 +331,7 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
  * `plugin_apps::tests::app_pages_agree_with_the_frontend` 报错。 */
 const APP_PAGES: Record<string, string> = {
   [PAGE_MATCH]: "client", [PAGE_PLAYER]: "client", [PAGE_GAME]: "client", [PAGE_CHAMPION]: "stats", [PAGE_TIER]: "stats",
+  [PAGE_CHAMP_SELECT]: "stats", [PAGE_AUGMENT_OCR]: "stats",
 };
 /** 预览里代理路径的“密钥”（真的是每次启动随机的 64 位十六进制）。 */
 const MOCK_KEY = "0000feed";

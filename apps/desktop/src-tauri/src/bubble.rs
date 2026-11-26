@@ -1,20 +1,19 @@
-//! 琴音的对话气泡（屏幕角落，默认右下角）：语音入口（唤醒、呼叫键、追问）的状态与回答。
+//! 她在悬浮窗气泡里的那一行（ADR 043 D6；原来是单独的对话气泡窗口，ADR 018）：语音入口（唤醒、呼叫键、追问）的状态与回答。
 //!
 //! 参考成熟桌宠（dsh-pet、VPet、AIRI）的做法：
-//! - 只有一个气泡位，状态依次是 在听 → 听清了 → 在想 / 在用工具 → 在说 / 等你回答 → 收起；
+//! - 只有一个位置，状态依次是 在听 → 听清了 → 在想 / 在用工具 → 在说 / 等你回答 → 收起；
 //! - 念出来的话：说的时候挂住，说完再按字数停留几秒才收（迟到的“说完了”按序号丢弃）；
-//! - 窗口透明、置顶、不抢焦点，鼠标整窗穿透（右下角常是游戏小地图，不能挡操作）；
 //! - 独占全屏时不显示，只靠语音。
 //!
-//! 线程约定（吸取悬浮窗死锁的教训）：状态只在短临界区里改；窗口的显示、隐藏、摆位一律经
-//! `run_on_main_thread` 在主线程按顺序执行，执行时读最新状态；不在持锁时等主线程，也不在
-//! 窗口回调里发事件。
+//! 这里只管她这一行的状态（[`Model`]），每次改了发 `kotone://bubble`（内容）、告诉悬浮窗（`floating::her`：显示不显示）；
+//! 窗口的显示、摆位、拖动、× 在 `floating/mod.rs`。悬浮窗现在能点能拖（原来整窗鼠标穿透），玩家可以把它拖离小地图。
+//!
+//! 线程约定（吸取输入条死锁的教训）：状态只在短临界区里改；窗口的事交给悬浮窗，在主线程按顺序做。
 
 use std::sync::Mutex;
 use std::time::Duration;
 
 use kotone_core::assistant::{BubbleConfig, BubbleCorner};
-use kotone_core::log;
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
@@ -22,11 +21,6 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::SharedState;
 
 pub const EVENT: &str = "kotone://bubble";
-const LABEL: &str = "companion";
-/// 窗口的逻辑尺寸（气泡贴着靠角的一边，从角落往外长）。
-const WINDOW_SIZE: (f64, f64) = (440.0, 260.0);
-/// 离屏幕边缘的基础距离（逻辑像素）。
-const MARGIN: f64 = 24.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -343,7 +337,7 @@ fn config(app: &AppHandle) -> Option<BubbleConfig> {
     })
 }
 
-/// 气泡开着吗（关掉 = 只用声音和弹幕；不借用语音输入的悬浮窗，ADR 028）。
+/// 悬浮窗开着吗（“显示悬浮窗”；关掉 = 只用声音和弹幕；不借用语音输入的输入条，ADR 028）。
 pub fn enabled(app: &AppHandle) -> bool {
     config(app).is_some_and(|c| c.enabled)
 }
@@ -378,7 +372,10 @@ fn update(app: &AppHandle, change: impl FnOnce(&mut Model) -> Option<Snapshot>) 
     };
     let revision = snapshot.revision;
     let _ = app.emit(EVENT, &snapshot);
-    apply_window(app);
+    crate::floating::her(
+        app,
+        (snapshot.phase != Phase::Hidden).then_some(snapshot.phase),
+    );
     Some(revision)
 }
 
@@ -568,8 +565,8 @@ pub fn note(app: &AppHandle, text: &str) {
     }
 }
 
-/// 语音识别没准备好时按了呼叫键：气泡里提示怎么启动（ADR 028，D8）。
-/// 气泡只属于角色：气泡关着（或琴音还没启用）就不提示，绝不借用悬浮窗。
+/// 语音识别没准备好时按了呼叫键：悬浮窗的气泡里提示怎么启动（ADR 028，D8）。
+/// 悬浮窗关着（或琴音还没启用）就不提示，绝不借用语音输入的输入条。
 pub fn hint(app: &AppHandle, title: &str, detail: &str) {
     if !enabled(app) {
         return;
@@ -599,48 +596,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or_default()
-}
-
-/// 按最新状态显示 / 隐藏 / 摆位。在主线程上按顺序执行。
-fn apply_window(app: &AppHandle) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Some(window) = handle.get_webview_window(LABEL) else {
-            return;
-        };
-        let Some(snap) = snapshot(&handle) else {
-            return;
-        };
-        if snap.phase == Phase::Hidden {
-            crate::hide_window(&window);
-            return;
-        }
-        if crate::attention::exclusive_fullscreen() {
-            // 独占全屏时透明窗口会让游戏最小化或显示不出来：只靠语音。
-            crate::hide_window(&window);
-            return;
-        }
-        let config = config(&handle).unwrap_or_default();
-        if let Err(e) = place(&window, &config) {
-            log::log(&format!("bubble: place failed: {e}"));
-        }
-        let _ = window.set_ignore_cursor_events(true);
-        crate::show_window_no_focus(&window);
-    });
-}
-
-/// 摆到前台窗口所在显示器的工作区角落（避开任务栏），DPI 按那块屏幕换算；同一个角上有语音输入悬浮窗时
-/// 让开它（屏幕角落分配，`screen_corner.rs`）。
-fn place(window: &tauri::WebviewWindow, config: &BubbleConfig) -> Result<(), String> {
-    use crate::screen_corner::Corner;
-    let corner = match config.corner {
-        BubbleCorner::BottomRight => Corner::BottomRight,
-        BubbleCorner::BottomLeft => Corner::BottomLeft,
-        BubbleCorner::TopRight => Corner::TopRight,
-        BubbleCorner::TopLeft => Corner::TopLeft,
-    };
-    let offset = config.offset_y as f64;
-    crate::screen_corner::place(window, corner, WINDOW_SIZE, (MARGIN, MARGIN + offset))
 }
 
 #[tauri::command]

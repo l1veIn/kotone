@@ -530,7 +530,7 @@ fn a_broken_entry_is_a_plugin_that_explains_itself() {
     assert!(plugin.manifest().description.contains("配置不对"));
     assert!(plugin.server().error().unwrap().contains("要写 command"));
     let m = plugin.manifest();
-    assert!(m.enabled_by_default && m.sources.is_empty() && m.overlays.is_empty());
+    assert!(m.enabled_by_default && m.sources.is_empty() && m.pages.is_empty());
     assert!(m.agent.overview.contains("只当数据"));
 }
 

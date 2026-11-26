@@ -248,7 +248,7 @@ export async function remotePlugins(): Promise<PluginInfo[]> {
     return {
       manifest: {
         id: s.id, name: s.id, description: "error" in f ? f.error : f.summary, games: [], adapter: null,
-        enabledByDefault: true, sources: [], pages: [], overlays: [], agent: { overview: "", rule: "" },
+        enabledByDefault: true, sources: [], pages: [], agent: { overview: "", rule: "" },
       },
       enabled,
       sources: {},

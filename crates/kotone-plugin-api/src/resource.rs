@@ -6,7 +6,6 @@
 //!   外部宿主（`kotone.exe mcp` 的 `resources/read`）显示的是同一份。
 //! - 没做成 App 的页面（`resource` 给 `None`）照旧是宿主里的 Svelte 页面：不列进 `resources/list`，
 //!   工具的 `_meta.ui.resourceUri` 对外（MCP）也不带它，免得外部宿主去读一个读不到的资源。
-//! - 覆盖层（`overlays`）不是资源：本体的覆盖层显示它们（ADR 038 D5），宿主不会拿覆盖层的地址来问。
 //! - 资源跟着页面的数据开关走（`needs`）：插件关着或要的开关关着时，宿主不列、不给读。
 //! - 页面要连的外部地址写在 `_meta.ui.csp`（照 MCP Apps 规范 2026-01-26）：宿主从 `default-src 'none'`
 //!   开始，只放行这里声明的；没声明的一律挡。[`crate::Manifest::check_resource`] 检查写法。

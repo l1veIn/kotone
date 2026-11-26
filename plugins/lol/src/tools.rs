@@ -22,6 +22,8 @@ pub const TOOL_CLIENT: &str = "lol.client";
 pub const TOOL_CHAMPIONS: &str = "lol.champions";
 /// 一键喊话（ADR 041 第 3 期）：现生成几行、经本体的发话入口发到游戏聊天。给她和热键（插件命令），不给页面。
 pub const TOOL_SHOUT: &str = "lol.shout";
+/// 只给页面用：海克斯三选一要的本地文字识别模型，卡片上的“下载 / 不用”（ADR 043 D7）。
+pub const TOOL_AUGMENT_OCR: &str = "lol.augment_ocr";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -140,6 +142,17 @@ ban 禁、hover 只亮出来（还没轮到也行）。champion 写名字、称�
         )
         .app_only()
         .page(crate::pages::PAGE_SETTINGS),
+        ToolSpec::new(
+            TOOL_AUGMENT_OCR,
+            "海克斯三选一要用的本地文字识别模型（问要不要下载的那张卡片上的按钮）：action = download 下载推荐的本地模型\
+（在后台下，不改全局的文字识别选择）、decline 不用（记进插件设置，以后不再问）、status 现在怎样。",
+            json!({"type": "object", "additionalProperties": false, "properties": {
+                "action": {"enum": ["status", "download", "decline"]}
+            }}),
+        )
+        .needs(&["stats"])
+        .app_only()
+        .page(crate::pushes::PAGE_AUGMENT_OCR),
     ]
 }
 
@@ -188,21 +201,25 @@ mod tests {
                 TOOL_TIER,
                 TOOL_CLIENT,
                 TOOL_SHOUT,
-                TOOL_CHAMPIONS
+                TOOL_CHAMPIONS,
+                TOOL_AUGMENT_OCR
             ]
         );
         for s in &specs {
             assert_eq!(s.parameters["type"], "object");
             assert_eq!(s.for_app(), s.name != TOOL_SHOUT, "{}", s.name);
             let needs: &[&str] = match s.name.as_str() {
-                TOOL_CHAMPION | TOOL_TIER => &["stats"],
+                TOOL_CHAMPION | TOOL_TIER | TOOL_AUGMENT_OCR => &["stats"],
                 TOOL_CLIENT => &["client", "control"],
                 TOOL_CHAMPIONS => &[],
                 _ => &["client"],
             };
             assert_eq!(s.needs, needs, "{}", s.name);
             // 读到别人写的字的都按不可信数据
-            let trusted = matches!(s.name.as_str(), TOOL_CLIENT | TOOL_CHAMPIONS | TOOL_SHOUT);
+            let trusted = matches!(
+                s.name.as_str(),
+                TOOL_CLIENT | TOOL_CHAMPIONS | TOOL_SHOUT | TOOL_AUGMENT_OCR
+            );
             assert_eq!(s.untrusted, !trusted, "{}", s.name);
         }
         let client = specs.iter().find(|s| s.name == TOOL_CLIENT).unwrap();
@@ -212,10 +229,12 @@ mod tests {
             "默认先问玩家"
         );
         // 给她的都马上返回；单局详情和英雄列表只给页面
-        for s in specs
-            .iter()
-            .filter(|s| !matches!(s.name.as_str(), TOOL_GAME | TOOL_CHAMPIONS))
-        {
+        for s in specs.iter().filter(|s| {
+            !matches!(
+                s.name.as_str(),
+                TOOL_GAME | TOOL_CHAMPIONS | TOOL_AUGMENT_OCR
+            )
+        }) {
             assert!(s.instant && s.for_model(), "{}", s.name);
         }
         // 一键喊话：和 game_chat.send 一样的副作用（默认允许，绑热键时不问）
@@ -223,6 +242,10 @@ mod tests {
         assert_eq!(shout.side_effects, ["input", "records-run"]);
         let game = specs.iter().find(|s| s.name == TOOL_GAME).unwrap();
         assert!(!game.for_model());
+        // 下载识别模型的按钮只给页面（ADR 043 D7），页面是那张卡片
+        let ocr = specs.iter().find(|s| s.name == TOOL_AUGMENT_OCR).unwrap();
+        assert!(!ocr.for_model() && ocr.for_app());
+        assert_eq!(ocr.page.as_deref(), Some(crate::pushes::PAGE_AUGMENT_OCR));
         assert_eq!(specs[2].page.as_deref(), Some(PAGE_MATCH));
     }
 }

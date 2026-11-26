@@ -9,6 +9,6 @@ test("overlay can be disabled completely", async ({ page }) => {
   await expect(neverButton).toBeVisible();
   await neverButton.click();
 
-  await expect(page.getByText("悬浮窗已切换：不显示", { exact: true })).toBeVisible();
+  await expect(page.getByText("输入条已切换：不显示", { exact: true })).toBeVisible();
   await expect(neverButton).toHaveAttribute("aria-pressed", "true");
 });

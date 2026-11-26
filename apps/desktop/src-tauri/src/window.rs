@@ -91,6 +91,27 @@ fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = win.hide();
 }
 
+/// 不进截图（`WDA_EXCLUDEFROMCAPTURE`：自己的截图识别、录屏软件的整屏捕获都看不到它；游戏捕获照常只录游戏）。
+/// 盖在游戏上的悬浮窗用它（她看屏幕、截图识别时不会把它认进去）。原来在覆盖层（`overlay_layer.rs`）里，覆盖层去掉了
+/// （ADR 043 D7），挪到这里。
+pub(crate) fn exclude_from_capture(window: &tauri::WebviewWindow) {
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+        };
+        // SAFETY: hwnd 来自活着的 Tauri 窗口；失败（老系统）只是截图里会有它，不影响显示。
+        unsafe {
+            let _ = SetWindowDisplayAffinity(
+                windows::Win32::Foundation::HWND(hwnd.0),
+                WDA_EXCLUDEFROMCAPTURE,
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+}
+
 /// 把 WebView2 收敛为桌面应用壳：关闭右键浏览器菜单、开发者工具和浏览器快捷键。
 ///
 /// 前端还有 capture 阶段的快捷键拦截作为跨平台兜底；Windows 侧必须从

@@ -3,7 +3,8 @@
   // （宿主画，写明是哪个插件发的）；下面照样子画：一行（几格，带好坏的颜色）、语音（她说的那句）、卡片（插件页面的卡片——
   // 和工具结果的卡片同一个组件 PluginCard：点开在右侧栏打开完整页面）。同一个 key 再推一次时这一条原地重画，位置不动
   // （卡片里的 MCP App 收到新的数据、不重新加载）。旧对话里的自动卡片也画成这个（只有卡片）。
-  // 玩家点了右下角的消息提示（ADR 039 D4）：滚到这里，外圈闪一下主色。
+  // 玩家点了悬浮窗里的卡片（ADR 043 D6）：滚到这里，外圈闪一下主色。悬浮窗的小窗里也画它：给了 `onOpen`，
+  // 卡片上面那一行就交给它（打开 Kotone、定位到这一条），不在右侧栏打开。
   import { Volume2 } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
   import type { PushRecord, PushTone } from "../agent";
@@ -12,7 +13,7 @@
   import PluginCard from "./PluginCard.svelte";
   import { tryAgentChat } from "./context";
 
-  let { push, atMs }: { push: PushRecord; atMs: number } = $props();
+  let { push, atMs, onOpen }: { push: PushRecord; atMs: number; onOpen?: () => void } = $props();
 
   const chat = tryAgentChat();
   const name = $derived(pluginText(push.plugin, "name", push.pluginName));
@@ -68,7 +69,7 @@
     </p>
   {/if}
   {#if display}
-    <PluginCard {display} />
+    <PluginCard {display} {onOpen} />
   {/if}
 </div>
 

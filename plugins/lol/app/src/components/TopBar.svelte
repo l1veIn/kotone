@@ -1,6 +1,7 @@
 <script lang="ts" module>
-  /** App 里的页面；顶栏上的分页是这局、战绩、英雄、强度榜（单局详情从战绩、这局点进去）。插件的设置是宿主的页面（插件页顶栏的“设置”）。 */
-  export type PageId = "match" | "player" | "game" | "champion" | "tier";
+  /** App 里的页面；顶栏上的分页是这局、战绩、英雄、强度榜（单局详情从战绩、这局点进去）。插件的设置是宿主的页面（插件页顶栏的“设置”）。
+   * 选英雄、文字识别模型只在推送的卡片里出现（ADR 043 D7），没有分页。 */
+  export type PageId = "match" | "player" | "game" | "champion" | "tier" | "champ-select" | "augment-ocr";
   export const TABS: PageId[] = ["match", "player", "champion", "tier"];
 </script>
 

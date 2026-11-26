@@ -22,7 +22,6 @@
   import CompanionInputSettings from "./assistant/CompanionInputSettings.svelte";
   import WakeSettings from "./assistant/WakeSettings.svelte";
   import BubbleSettings from "./assistant/BubbleSettings.svelte";
-  import PushSettings from "./assistant/PushSettings.svelte";
   import OutputSettings from "./assistant/OutputSettings.svelte";
   import AgentSettings from "./assistant/AgentSettings.svelte";
   import UsageSettings from "./assistant/UsageSettings.svelte";
@@ -151,7 +150,7 @@
           </SettingsSection>
         </div>
       {:else if section === "reply"}
-        <!-- 交互（原「设置 → 她怎么回答」）：气泡、声音与弹幕。以后的开关（例如右下角弹窗）照样加一个 SettingsSection 进来。
+        <!-- 交互（原「设置 → 她怎么回答」）：悬浮窗（她的气泡、推送的一行和小窗，ADR 043 D6）、声音与弹幕。
              她用的模型不在这里了：在聊天页输入框旁边，这里留一行指过去。 -->
         <div class="space-y-6" data-testid="settings-reply">
           <p class="mt-0 text-xs text-muted-foreground" data-testid="settings-reply-model-moved">
@@ -160,8 +159,6 @@
           </p>
           <div id="settings-reply-bubble" class="scroll-mt-16"><BubbleSettings /></div>
           <div id="settings-reply-output" class="scroll-mt-16"><OutputSettings /></div>
-          <!-- 推送时的消息提示（ADR 039 D4、ADR 043 D4；每条推送的开关在插件页） -->
-          <div id="settings-reply-pushes" class="scroll-mt-16"><PushSettings /></div>
         </div>
       {:else if section === "permissions"}
         <div class="space-y-6" data-testid="settings-permissions"><AgentSettings /></div>

@@ -86,7 +86,7 @@ pub struct AgentConfig {
     /// 聊天窗口里的思考强度（同上）。新字段。
     #[serde(default)]
     pub chat_effort: String,
-    /// 推送时的消息提示（ADR 039 D4，“游戏陪玩 → 角色 → 交互 → 推送”）和旧的“自动卡片”总开关（ADR 039 D3，只读旧值，
+    /// 推送时弹出小窗（ADR 043 D6，“角色 → 交互 → 悬浮窗”；原来是消息提示，ADR 039 D4）和旧的“自动卡片”总开关（ADR 039 D3，只读旧值，
     /// ADR 043 D4）：都默认开。新字段（原则 19：旧配置没有这一项时按默认开；旧版本读到它会忽略）。名字是只有自动卡片时起的，不改。
     #[serde(default)]
     pub auto_cards: AutoCardsConfig,
@@ -189,7 +189,7 @@ pub struct AutoCardsConfig {
     /// 旧的“自动卡片”总开关（ADR 039 D3）。界面上去掉了（ADR 043 D4），只读旧值：是 false 时内置插件带卡片的推送算关，
     /// 直到玩家在插件页上动了那一条（`plugins.<id>.pushes.<推送>`，`kotone-plugin-api` 的 `Manifest::push_switch_in`）。
     pub enabled: bool,
-    /// 推送卡片时弹消息提示（ADR 039 D4；关了推送照发）。
+    /// 推送卡片时弹出悬浮窗的小窗（ADR 043 D6；原来是消息提示，ADR 039 D4；关了推送照发）。
     pub popup: bool,
 }
 

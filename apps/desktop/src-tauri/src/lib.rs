@@ -19,6 +19,7 @@ mod diagnostics;
 mod diagnostics_cmd;
 mod events;
 mod fillers;
+mod floating;
 mod follow_up;
 mod game_chat;
 mod game_session;
@@ -31,12 +32,10 @@ mod hotkey_run;
 mod hotkey_table_cmd;
 mod key_request;
 mod mcp_servers_cmd;
-mod message_popup;
 mod model_catalog;
 mod models_cmd;
 mod ocr_engines;
 mod overlay;
-mod overlay_layer;
 mod overlay_window;
 mod plugin_apps;
 mod plugins;
@@ -355,8 +354,6 @@ pub fn run() {
             agent::resume_held_cards(app.handle());
             // 插件（ADR 038）：各自开后台循环（英雄联盟：客户端开着时盯对局阶段，进加载界面先查这局的战绩）
             plugins::init(app.handle());
-            // 游戏上方的覆盖层（ADR 038）：插件给了条目才建窗口；跟着前台的目标窗口挪、切走就藏
-            overlay_layer::start(app.handle());
             if companion_enabled {
                 // 琴音原来的名字和头像记进她的角色卡（只做一次）。
                 roles::migrate(app.handle());
@@ -531,9 +528,12 @@ pub fn run() {
             wake::wake_status,
             bubble::bubble_snapshot,
             bubble::bubble_preview,
-            message_popup::message_popup_current,
-            message_popup::message_popup_close,
-            message_popup::message_popup_open,
+            floating::floating_current,
+            floating::floating_layout,
+            floating::floating_hover,
+            floating::floating_close,
+            floating::floating_drag,
+            floating::floating_reposition,
             wake::wake_download_model,
             speech_models::cancel_speech_model_download,
             automation::automation_runs,

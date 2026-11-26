@@ -37,7 +37,7 @@
   "shell_settings_voice_setup_prompt": "Help me set up voice input:",
   "shell_settings_load_failed": "Couldn't load settings: {error}",
   "shell_settings_close_sidebar": "Close sidebar",
-  "shell_settings_overlay_degraded": "The overlay wasn't displaying correctly, so it was turned off. Voice input still works.",
+  "shell_settings_overlay_degraded": "The input bar wasn't displaying correctly, so it was turned off. Voice input still works.",
   "shell_settings_loading": "Loading settings…",
   "shell_sidebar_group_companion": "Game companion",
   "shell_sidebar_game_adapt": "Game profiles",

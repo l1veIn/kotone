@@ -293,35 +293,6 @@ impl Host for DesktopHost {
         self.app.package_info().version.to_string()
     }
 
-    fn overlay(&self, items: Vec<kotone_plugin_api::OverlayItem>) {
-        // 只认清单里登记过的覆盖层；插件关着、或者覆盖层要的数据开关关着时不显示
-        let settings = settings(&self.app);
-        let items: Vec<_> = items
-            .into_iter()
-            .filter(|item| {
-                self.manifest
-                    .overlays
-                    .iter()
-                    .find(|o| o.uri == item.uri)
-                    .is_some_and(|o| {
-                        enabled(&settings, &self.manifest)
-                            && o.needs
-                                .iter()
-                                .all(|s| source_enabled(&settings, &self.manifest, s))
-                    })
-            })
-            .collect();
-        // 记一笔（插件只在变了时才发）：真机测试靠它看覆盖层要了什么，不用真的盖在玩家屏幕上
-        let uris: Vec<&str> = items.iter().map(|i| i.uri.as_str()).collect();
-        kotone_core::log::log(&format!(
-            "插件 {} 的覆盖层：{} 项 {:?}",
-            self.id,
-            items.len(),
-            uris
-        ));
-        crate::overlay_layer::set(&self.app, &self.id, items);
-    }
-
     fn screen_text(
         &self,
         process: &str,
@@ -338,6 +309,39 @@ impl Host for DesktopHost {
             })
             .await
             .map_err(|e| e.to_string())?
+        })
+    }
+
+    /// 本地文字识别能不能用（ADR 043 D7：海斗三选一固定用本地识别，`ocr_engines::local_status`）。
+    fn local_ocr(&self) -> kotone_plugin_api::LocalOcr {
+        crate::ocr_engines::local_status(&self.app)
+    }
+
+    /// 下载推荐的本地文字识别模型：和「设置 → 模型 → 文字识别」的下载同一套（`model_catalog::download`：同一时间只下
+    /// 一个、逐文件校验、进度照常发 `kotone://download`），**不改**全局的文字识别选择。已经有能用的就什么都不做。
+    fn download_local_ocr(&self) -> BoxFuture<'static, Result<(), String>> {
+        let app = self.app.clone();
+        let plugin = self.id.clone();
+        Box::pin(async move {
+            let model = match crate::ocr_engines::local_status(&app) {
+                kotone_plugin_api::LocalOcr::Ready { .. } => return Ok(()),
+                kotone_plugin_api::LocalOcr::Missing { model, .. } => model,
+                kotone_plugin_api::LocalOcr::Failed { reason } => return Err(reason),
+            };
+            kotone_core::log::log(&format!(
+                "插件 {plugin} 要下载本地文字识别模型 {model}（玩家点了下载）"
+            ));
+            let result = crate::model_catalog::download(
+                &app,
+                kotone_core::model_catalog::ModelCategory::Ocr,
+                &model,
+            )
+            .await;
+            kotone_core::log::log(&match &result {
+                Ok(()) => format!("本地文字识别模型 {model} 下好了"),
+                Err(e) => format!("本地文字识别模型 {model} 没下成：{e}"),
+            });
+            result
         })
     }
 
@@ -413,6 +417,15 @@ impl Host for DesktopHost {
         if self.manifest.push_spec(trigger).is_some() {
             crate::agent::push_done(&self.app, &self.id, trigger, key);
         }
+    }
+
+    /// 这条推送现在推不推得出去：和 [`DesktopHost::push`] 收推送时同一条规则（内置插件、`push_off_in` 没有原因）。
+    fn push_enabled(&self, trigger: &str) -> bool {
+        registry().iter().any(|p| p.manifest().id == self.id)
+            && self
+                .manifest
+                .push_off_in(&settings(&self.app), trigger)
+                .is_none()
     }
 
     fn companion_enabled(&self) -> bool {

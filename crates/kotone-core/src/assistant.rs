@@ -124,8 +124,9 @@ pub enum BubbleCorner {
     BottomRight,
 }
 
-/// 琴音的对话气泡：语音入口（唤醒、陪玩热键、追问）的状态与回答显示在屏幕角落，
-/// 不再借用语音输入法的悬浮窗；回答默认不再走弹幕。
+/// 悬浮窗（ADR 043 D6）：她在听、在想、在说，插件推送的一行（气泡），推送的卡片（小窗）。字段名是只有对话气泡时起的
+/// （`assistant.bubble`），不改（原则 19）：`enabled` = 显示悬浮窗；`corner` / `offset_y` = 没拖过时摆在哪个角、离边多远；
+/// 玩家拖过就用 `position`。回答默认不再走弹幕。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BubbleConfig {
@@ -135,6 +136,24 @@ pub struct BubbleConfig {
     pub offset_y: u32,
     /// 回答同时用弹幕显示。
     pub also_danmaku: bool,
+    /// 玩家把悬浮窗拖到的地方（新字段，缺省 null = 没拖过，摆在 `corner` 上）。“位置还原”就是把它改回 null。
+    pub position: Option<FloatingPosition>,
+}
+
+/// 悬浮窗拖到的地方，按屏幕工作区（去掉任务栏）记，换一块屏幕、换分辨率照样用：窗口的哪个角（`corner`，拖完时窗口在
+/// 工作区的哪一块就是哪个角）贴在工作区里的哪一点（`x` / `y`，从工作区左上角量，单位是工作区宽 / 高的万分之一）。
+/// 窗口从这个角往另外三边长：气泡和小窗大小不同，这个角不动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FloatingPosition {
+    pub corner: BubbleCorner,
+    pub x: u32,
+    pub y: u32,
+}
+
+impl FloatingPosition {
+    /// 万分之一（`x` / `y` 的单位）。
+    pub const SCALE: u32 = 10_000;
 }
 
 pub const BUBBLE_OFFSET_RANGE: std::ops::RangeInclusive<u32> = 0..=800;
@@ -146,6 +165,7 @@ impl Default for BubbleConfig {
             corner: BubbleCorner::default(),
             offset_y: 0,
             also_danmaku: false,
+            position: None,
         }
     }
 }
@@ -495,7 +515,14 @@ impl AssistantConfig {
             return Err("在线语音合成模型无效".into());
         }
         if !BUBBLE_OFFSET_RANGE.contains(&self.bubble.offset_y) {
-            return Err("气泡的偏移必须在 0 到 800 之间".into());
+            return Err("悬浮窗离边缘的距离必须在 0 到 800 之间".into());
+        }
+        if self
+            .bubble
+            .position
+            .is_some_and(|p| p.x > FloatingPosition::SCALE || p.y > FloatingPosition::SCALE)
+        {
+            return Err("悬浮窗拖到的位置 x / y 必须在 0 到 10000 之间（工作区的万分之一）".into());
         }
         if !WAKE_NO_SPEECH_RANGE_MS.contains(&self.wake.no_speech_timeout_ms) {
             return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());

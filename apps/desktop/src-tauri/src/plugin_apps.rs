@@ -189,7 +189,13 @@ mod tests {
         "ui://kotone/lol/player",
         "ui://kotone/lol/game",
     ];
-    const LOL_STATS_APPS: [&str; 2] = ["ui://kotone/lol/champion", "ui://kotone/lol/tier"];
+    /// 要“用网上的统计”的：英雄、强度榜，和只在推送里出现的选英雄、文字识别模型两张卡片（ADR 043 D7）。
+    const LOL_STATS_APPS: [&str; 4] = [
+        "ui://kotone/lol/champion",
+        "ui://kotone/lol/tier",
+        "ui://kotone/lol/champ-select",
+        "ui://kotone/lol/augment-ocr",
+    ];
 
     fn listed_uris(settings: &Settings) -> Vec<String> {
         list(settings)
@@ -208,8 +214,9 @@ mod tests {
         s
     }
 
-    /// 英雄联盟的五页（这局、战绩、单局详情、英雄、强度榜）都是 App（没打包时是占位页），设置页不是；页面要的数据开关
-    /// 关着就没有那一页（“读客户端数据”管前三页，“用网上的统计”管后两页）；关掉插件全没有；覆盖层不是资源。
+    /// 英雄联盟的七页（这局、战绩、单局详情、英雄、强度榜，和只在推送里出现的选英雄、文字识别模型）都是 App（没打包时是
+    /// 占位页），设置页不是；页面要的数据开关关着就没有那一页（“读客户端数据”管前三页，“用网上的统计”管后四页）；
+    /// 关掉插件全没有。
     #[test]
     fn app_pages_follow_the_switches() {
         let s = Settings::default();
@@ -246,7 +253,8 @@ mod tests {
         assert!(read(&s, "ui://kotone/lol/settings")
             .unwrap_err()
             .contains("不是 App"));
-        assert!(read(&s, "ui://kotone/lol/champ-select").is_err(), "覆盖层");
+        // 原来的海克斯评分只是覆盖层，覆盖层去掉了（ADR 043 D7）：它从来不是页面
+        assert!(read(&s, "ui://kotone/lol/augment-scores").is_err());
         assert!(read(&s, "ui://kotone/nope/tier").is_err());
 
         for (source, gone, kept) in [

@@ -23,7 +23,7 @@
 //! （[`Desk::update_held`]）。排着的存一份在盘上（[`Desk::restore`]），Kotone 退出了下次启动接着记；记进对话连着失败
 //! [`MAX_FAILURES`] 次就放弃。
 //!
-//! 桌面端（`apps/desktop/src-tauri/src/agent/push.rs`、`when_free.rs`）管开关、存盘、界面事件、消息提示和语音。
+//! 桌面端（`apps/desktop/src-tauri/src/agent/push.rs`、`when_free.rs`）管开关、存盘、界面事件、悬浮窗和语音。
 
 use std::collections::VecDeque;
 
@@ -470,6 +470,7 @@ mod tests {
             forms: forms.to_vec(),
             priority: PushPriority::Normal,
             enabled_by_default: true,
+            until_done: false,
             needs: Vec::new(),
         }
     }

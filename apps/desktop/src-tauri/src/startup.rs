@@ -137,11 +137,11 @@ pub(crate) fn auto_elevate_before_tauri_init() {
     }
 }
 
-/// 建启动时就要有的窗口（`tauri.conf.json` 里标了 `create: false`；悬浮窗另由 [`overlay`] 按需建）。
+/// 建启动时就要有的窗口（`tauri.conf.json` 里标了 `create: false`；输入条另由 [`overlay`] 按需建）：弹幕、悬浮窗（她一开口就要出来）、主窗口。
 ///
 /// 这些窗口建的时候都藏着，配置里都是 `focus: false`：建窗口时要焦点，WebView2 会把键盘焦点移进还藏着的
 /// 窗口（wry 的 `MoveFocus`），把它激活成前台，`--background` 启动就抢走了游戏或终端的焦点。要显示设置窗口的
-/// 地方（正常启动、托盘、第二个实例、点消息提示）都用 [`show_and_focus`]。
+/// 地方（正常启动、托盘、第二个实例、点悬浮窗里的卡片）都用 [`show_and_focus`]。
 pub(crate) fn create_startup_windows(app: &tauri::AppHandle, companion_enabled: bool) {
     // 管理员身份运行时（ADR 044）：让普通权限再打开的那一次也能把窗口唤出来（见 auto_elevate_before_tauri_init）
     #[cfg(windows)]
@@ -153,8 +153,10 @@ pub(crate) fn create_startup_windows(app: &tauri::AppHandle, companion_enabled: 
             ));
         }
     }
-    for label in ["danmaku", "companion", "main"] {
-        if (label == "companion" && !companion_enabled) || app.get_webview_window(label).is_some() {
+    for label in ["danmaku", crate::floating::LABEL, "main"] {
+        if (label == crate::floating::LABEL && !companion_enabled)
+            || app.get_webview_window(label).is_some()
+        {
             continue;
         }
         let Some(config) = app

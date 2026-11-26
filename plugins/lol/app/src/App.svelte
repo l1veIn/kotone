@@ -3,10 +3,13 @@
   // 之后在 App 里自己换页：顶栏的分页（这局 · 战绩 · 英雄 · 强度榜）、点一个人看战绩、点一局看单局详情、点一个英雄看
   // 英雄页。在 Kotone 的插件页里和在 Claude 这类宿主里都是同一套导航（插件的设置是宿主的页面）。
   // 显示方式（inline 聊天卡片 / fullscreen 插件页）跟着宿主上下文变（docs/design/lol-app.md 第一节 2）。
+  // 选英雄、文字识别模型这两页只在推送的卡片里出现（ADR 043 D7），不在顶栏的分页里。
   import { onMount } from "svelte";
   import type { PageId } from "./components/TopBar.svelte";
   import { connect, currentPage, displayOf, type DisplayMode, type Session } from "./host";
   import { m } from "./i18n.svelte";
+  import AugmentOcr from "./pages/AugmentOcr.svelte";
+  import ChampSelect from "./pages/ChampSelect.svelte";
   import Champion from "./pages/Champion.svelte";
   import Game from "./pages/Game.svelte";
   import Match from "./pages/Match.svelte";
@@ -20,7 +23,7 @@
     key: number;
   }
 
-  const PAGES: PageId[] = ["match", "player", "game", "champion", "tier"];
+  const PAGES: PageId[] = ["match", "player", "game", "champion", "tier", "champ-select", "augment-ocr"];
   const first = currentPage();
 
   let session = $state<Session | null>(null);
@@ -70,6 +73,10 @@
       <Game {session} {initial} {display} args={view.args} onTab={tab} onPlayer={player} onBack={back ? goBack : undefined} backTo={back?.page} />
     {:else if view.page === "champion"}
       <Champion {session} {initial} {display} args={view.args} onTab={tab} onChampion={champion} />
+    {:else if view.page === "champ-select"}
+      <ChampSelect {session} {initial} {display} />
+    {:else if view.page === "augment-ocr"}
+      <AugmentOcr {session} {initial} {display} />
     {:else}
       <Tier {session} {initial} {display} args={view.args} onTab={tab} onChampion={champion} />
     {/if}

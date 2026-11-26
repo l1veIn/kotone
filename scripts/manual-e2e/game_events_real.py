@@ -16,8 +16,12 @@ G2. loading → the template ran: a system message in the conversation, she call
 G3. the dragon → the speak automation “对面拿了{dragon_name}” ran as “对面拿了火龙” (event data as args);
 G4. game.state lists the recent events (phase changes, lol.dragon_kill);
 G5. EndOfGame → game.match_ended → the recap ran for lol (she was asked something during the match).
-G6. (ADR 038 step 3) champion select → the LoL plugin asked the overlay layer for the champ-select panel (log only:
-    the overlay shows only when the real client window is in front, so nothing is drawn on the player's screen).
+G6. (ADR 043 D7) champion select → the champ-select card (push `champ-select`, page ui://kotone/lol/champ-select) is in
+    the chat; at 12 s the synthetic session rerolls (my champion swaps with the first bench seat) and the same card is
+    updated in place (same key, still one card, `updatedAtMs`, my row shows the new champion); when the game starts the
+    card is marked over and a short note for her is appended. The fake client reports the Mayhem queue (2400; so the
+    opening / summary cards and, with no local OCR model in the isolated home, the “文字识别模型” question card are
+    pushed too); the Mayhem table comes from Tencent 101 (network). Pushes don't pop the floating window (popup off).
 usage: python -X utf8 -I scripts/manual-e2e/game_events_real.py [--probe DIR] [--gamedata DIR]
 """
 import json
@@ -41,6 +45,8 @@ check = bt.check
 
 TIMELINE = [(0, "Lobby"), (8, "ChampSelect"), (16, "InProgress"), (60, "EndOfGame"), (70, "Lobby")]
 LIVE_FROM, LIVE_UNTIL, DRAGON_AT = 22, 60, 40
+# 选英雄里重随（我和备选席第一个换英雄）的时刻；海斗的队列（选英雄卡片按海斗的胜率表画）
+REROLL_AT, MAYHEM_QUEUE = 12, 2400
 
 
 class Timeline(lt.Recording):
@@ -65,9 +71,29 @@ class Timeline(lt.Recording):
         return [name for at, name in TIMELINE if t >= at][-1]
 
     def lcu(self, path):
-        if path.partition("?")[0] == "/lol-gameflow/v1/gameflow-phase":
+        bare = path.partition("?")[0]
+        if bare == "/lol-gameflow/v1/gameflow-phase":
             return self.phase()
+        if bare == "/lol-gameflow/v1/session":
+            # 海斗的队列（选英雄卡片照海斗的胜率表画）
+            session = json.loads(json.dumps(self.session))
+            session["gameData"]["queue"]["id"] = MAYHEM_QUEUE
+            return session
+        if bare == "/lol-champ-select/v1/session" and self.champ_select is not None and self.elapsed() >= REROLL_AT:
+            return self.rerolled()
         return super().lcu(path)
+
+    def rerolled(self):
+        """重随以后的选英雄：我的英雄和备选席第一个换了。"""
+        cs = json.loads(json.dumps(self.champ_select))
+        me = next(m for m in cs["myTeam"] if m["cellId"] == cs["localPlayerCellId"])
+        bench = cs["benchChampions"]
+        me["championId"], bench[0]["championId"] = bench[0]["championId"], me["championId"]
+        return cs
+
+    def my_champion(self, rerolled):
+        cs = self.rerolled() if rerolled else self.champ_select
+        return next(m["championId"] for m in cs["myTeam"] if m["cellId"] == cs["localPlayerCellId"])
 
     def live_data(self, path):
         t = self.elapsed()
@@ -98,6 +124,18 @@ def lol_phase():
     return playing[0]["phase"] if playing else None
 
 
+def champ_select_cards():
+    """当前对话里选英雄的推送（Notice 的 push）。"""
+    cid_ = bt.state().get("current") or ""
+    msgs = bt.conversation(cid_).get("messages", []) if cid_ else []
+    return [m["push"] for m in msgs if m.get("role") == "notice" and (m.get("push") or {}).get("trigger") == "champ-select"]
+
+
+def my_row(push):
+    team = ((push.get("card") or {}).get("structuredContent") or {}).get("team") or []
+    return next((r for r in team if r.get("me")), {})
+
+
 def main():
     shutil.rmtree(bt.WORK, ignore_errors=True)
     os.makedirs(bt.HOME)
@@ -112,8 +150,10 @@ def main():
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
                    "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": 0,
-                                 "wake": {"enabled": False}},
-                   "agent": {"permissions": {"mode": "allow-all", "rules": lt.DENIED}}}, f)
+                                 "wake": {"enabled": False}, "bubble": {"enabled": False}},
+                   # 推送（选英雄卡片）不弹悬浮窗的小窗：玩家可能正在用这台电脑
+                   "agent": {"autoCards": {"popup": False},
+                             "permissions": {"mode": "allow-all", "rules": lt.DENIED}}}, f)
     app = subprocess.Popen([bt.EXE, "--background"], env=bt.ENV)
     try:
         bt.wait_ui()
@@ -140,12 +180,27 @@ def main():
         active = (settings.get("settings") or settings).get("activeProfileId")
         check("G1: D7 switched the current game profile to lol", active == "lol" or "自动切到 lol" in log_text(), str(active))
 
-        panel = bt.wait_until(lambda: "ui://kotone/lol/champ-select" in log_text(), 10, 1)
-        check("G6: champion select → the LoL plugin asked for the champ-select overlay", panel,
-              [l for l in log_text().splitlines() if "覆盖层" in l][-3:])
+        # 选英雄卡片（ADR 043 D7）：选英雄一开始就在聊天里；重随以后同一张原地更新
+        first = bt.wait_until(lambda: (champ_select_cards() or [None])[0], 12, 1)
+        before = lt.REC.my_champion(False)
+        check("G6: champion select → the champ-select card is in the chat",
+              first and first["card"]["ui"]["uri"] == "ui://kotone/lol/champ-select"
+              and my_row(first).get("champion", {}).get("id") == before,
+              json.dumps(first, ensure_ascii=False)[:300] if first else [l for l in log_text().splitlines() if "push:" in l][-3:])
+        after = lt.REC.my_champion(True)
+        updated = bt.wait_until(lambda: next((p for p in champ_select_cards()
+                                              if my_row(p).get("champion", {}).get("id") == after), None), 10, 1)
+        cards = champ_select_cards()
+        check("G6: the reroll updated the same card in place (one card, same key, updatedAtMs)",
+              updated and len(cards) == 1 and updated["key"] == first["key"] and updated.get("updatedAtMs"),
+              json.dumps(cards, ensure_ascii=False)[:300])
 
         loading = bt.wait_until(lambda: lol_phase() == "loading", 20, 1)
         check("G2: InProgress without in-game data → loading", loading, str(lol_phase()))
+        ended = bt.wait_until(lambda: next((p for p in champ_select_cards()
+                                            if (p.get("card") or {}).get("structuredContent", {}).get("ended")), None), 10, 1)
+        check("G6: champion select over → the card is marked over (still one card)",
+              ended and len(champ_select_cards()) == 1, json.dumps(champ_select_cards(), ensure_ascii=False)[:300])
         main = bt.state().get("current") or ""
 
         def asked():

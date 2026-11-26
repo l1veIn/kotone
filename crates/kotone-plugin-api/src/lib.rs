@@ -2,7 +2,7 @@
 //!
 //! 照 MCP 和 MCP Apps（<https://modelcontextprotocol.io/docs/extensions/apps>）：
 //! - **清单** [`Manifest`]（`plugins/<id>/plugin.toml`）：我是谁、挂在哪些游戏上、带哪个游戏中心适配器、
-//!   数据开关和风险提示、页面（`ui://kotone/<id>/<页面>`）、覆盖层、给她的两段话；
+//!   数据开关和风险提示、页面（`ui://kotone/<id>/<页面>`）、给她的两段话；
 //! - **工具** [`ToolSpec`]：照 MCP 的 `tools/list`，加上 MCP Apps 的 `_meta.ui`：`visibility`
 //!   （`model` 给她、`app` 给页面）和 `resourceUri`（[`ToolSpec::page`]）。说明和参数（JSON Schema）写在
 //!   插件的 Rust 代码里，和工具的实现放在一起；
@@ -76,9 +76,6 @@ pub struct Manifest {
     /// 页面（右侧栏、左侧栏打开的完整页面；聊天里是它的小尺寸快照）。
     #[serde(default)]
     pub pages: Vec<PageSpec>,
-    /// 游戏上方的覆盖层页面。
-    #[serde(default)]
-    pub overlays: Vec<PageSpec>,
     /// 给她的话（写进系统提示）。
     #[serde(default)]
     pub agent: AgentText,
@@ -122,7 +119,7 @@ pub struct SourceSpec {
     pub risk: String,
 }
 
-/// 一个页面或覆盖层。
+/// 一个页面。
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct PageSpec {
@@ -189,7 +186,7 @@ impl Manifest {
             }
         }
         let mut uris = std::collections::HashSet::new();
-        for page in self.pages.iter().chain(&self.overlays) {
+        for page in &self.pages {
             if !self.owns_uri(&page.uri) || !uris.insert(page.uri.as_str()) {
                 return Err(format!(
                     "插件 {} 的页面 {} 要写成 ui://kotone/{}/<页面>，并且不重名",
@@ -341,14 +338,13 @@ impl Manifest {
         Ok(())
     }
 
-    /// 清单里的页面（`pages`；不含覆盖层）。
+    /// 清单里的页面（`pages`）。
     pub fn page(&self, uri: &str) -> Option<&PageSpec> {
         self.pages.iter().find(|p| p.uri == uri)
     }
 
-    /// 检查插件给的 MCP App 资源（[`Plugin::resource`]，对应规则见 [`resource`] 模块）：地址是清单 `pages` 里的
-    /// （覆盖层不算）、类型是 [`APP_MIME`]、有内容、CSP 声明的每一项都是规范的源（[`resource::normalize_csp_source`]
-    /// 不改它）。
+    /// 检查插件给的 MCP App 资源（[`Plugin::resource`]，对应规则见 [`resource`] 模块）：地址是清单 `pages` 里的、
+    /// 类型是 [`APP_MIME`]、有内容、CSP 声明的每一项都是规范的源（[`resource::normalize_csp_source`] 不改它）。
     pub fn check_resource(&self, resource: &Resource) -> Result<(), String> {
         if self.page(&resource.uri).is_none() {
             return Err(format!(
@@ -557,79 +553,33 @@ impl ToolResult {
     }
 }
 
-// ---------- 覆盖层 ----------
-
-/// 覆盖层盖在哪个窗口上（只在它在前台时显示）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "exe", rename_all = "camelCase")]
-pub enum OverlayTarget {
-    /// 这个进程的窗口（`League of Legends.exe`）。
-    Process(String),
-    /// 这几个进程里任何一个的窗口。
-    AnyOf(Vec<String>),
-}
-
-/// 放在目标窗口客户区的哪里。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum Anchor {
-    /// 一块区域，按客户区的比例（0..1）。
-    Rect { x: f64, y: f64, w: f64, h: f64 },
-    /// 贴一个角，大小 `w` × `h`（客户区的比例）。`corner`：`top-left` / `top-right` / `bottom-left` /
-    /// `bottom-right`；`margin` 离边多远（比例）。
-    Corner {
-        corner: String,
-        margin: f64,
-        w: f64,
-        h: f64,
-    },
-}
-
-impl Anchor {
-    /// 在客户区里的位置 `[x, y, w, h]`（比例，夹在 0..1 里）。
-    pub fn rect(&self) -> [f64; 4] {
-        let clamp = |v: f64| v.clamp(0.0, 1.0);
-        match self {
-            Anchor::Rect { x, y, w, h } => {
-                let (w, h) = (clamp(*w), clamp(*h));
-                [clamp(*x).min(1.0 - w), clamp(*y).min(1.0 - h), w, h]
-            }
-            Anchor::Corner {
-                corner,
-                margin,
-                w,
-                h,
-            } => {
-                let (w, h, m) = (clamp(*w), clamp(*h), clamp(*margin));
-                let left = corner.ends_with("left");
-                let top = corner.starts_with("top");
-                let x = if left { m } else { 1.0 - m - w };
-                let y = if top { m } else { 1.0 - m - h };
-                [clamp(x), clamp(y), w, h]
-            }
-        }
-    }
-}
-
-/// 覆盖层上的一项（照 MCP Apps 的页面：`uri` 是插件登记的覆盖层页面，`data` 是它的数据）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OverlayItem {
-    /// 插件自己起的 id（同一个插件里不重）。
-    pub id: String,
-    /// `ui://kotone/<插件>/<覆盖层>`，要在清单的 `overlays` 里。
-    pub uri: String,
-    pub target: OverlayTarget,
-    pub anchor: Anchor,
-    #[serde(default)]
-    pub data: Value,
-}
+// ---------- 截图识别 ----------
 
 /// 截图识别出来的一行字（[`Host::screen_text`]）：位置是前台窗口客户区的比例 `[x, y, w, h]`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenText {
     pub text: String,
     pub rect: [f64; 4],
+}
+
+/// 本地文字识别能不能用（[`Host::local_ocr`]）：`screen_text(.., local_only = true)` 用的是哪个本地模型，或者为什么用不了。
+/// 和全局的文字识别选择无关（ADR 043 D7：海斗三选一固定用本地识别）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum LocalOcr {
+    /// 能用：用的是这个本地模型（清单 id 和名字）。
+    #[serde(rename_all = "camelCase")]
+    Ready { model: String, name: String },
+    /// 一个能用的本地模型都没装：推荐下载这个（清单 id、名字、一共多少字节）。[`Host::download_local_ocr`] 下的就是它。
+    #[serde(rename_all = "camelCase")]
+    Missing {
+        model: String,
+        name: String,
+        bytes: u64,
+    },
+    /// 用不了（原因，玩家看得懂的一句）。
+    #[serde(rename_all = "camelCase")]
+    Failed { reason: String },
 }
 
 // ---------- 插件和宿主 ----------
@@ -839,6 +789,13 @@ pub trait Host: Send + Sync {
     fn push_done(&self, trigger: &str, key: &str) {
         let _ = (trigger, key);
     }
+    /// 这条推送现在推不推得出去（清单里有、开着、要的数据开关开着；规则和 [`Host::push`] 收推送时一样）。推送前要先做
+    /// 花力气的事（例如海斗三选一每秒截图识别）的插件先看一眼，关着就不做；开关照旧由宿主执行，不靠插件查。
+    /// 默认是 false（默认的 [`Host::push`] 一律拒绝）。
+    fn push_enabled(&self, trigger: &str) -> bool {
+        let _ = trigger;
+        false
+    }
     /// 发到游戏（ADR 041 第 3 期，英雄联盟的一键喊话）：把几行字交给本体**唯一的发话入口**——和她的 `game_chat.send`、
     /// 语音输入、自动化同一个入口：前台是哪个游戏、走哪条路（客户端在前台交给登记了发法的插件，对局里是本体按键）、
     /// 频道、一把输入锁、等修饰键、不补发都在入口里。插件拿到的只是“经入口发一段话”，自己不按键
@@ -855,14 +812,11 @@ pub trait Host: Send + Sync {
         let _ = (text, channel);
         Box::pin(async { Err("发到游戏只给内置插件".to_string()) })
     }
-    /// 换掉这个插件在覆盖层上的全部条目（空 = 什么都不显示）。覆盖层只有一个，在本体里：置顶、点击穿透、
-    /// 只在目标窗口在前台时显示、不进截图（ADR 038 D5）。
-    fn overlay(&self, items: Vec<OverlayItem>) {
-        let _ = items;
-    }
-    /// 截前台窗口的一块区域（客户区比例 `[x, y, w, h]`）并识别文字（本体的文字识别，玩家选的模型）。
-    /// 前台不是 `process` 这个进程的窗口时不截（报错）。覆盖层不会被截进去。
-    /// `local_only`：只用本地模型（在线识别要十几秒、要花钱时不识别，直接报错）。
+    /// 截前台窗口的一块区域（客户区比例 `[x, y, w, h]`）并识别文字。前台不是 `process` 这个进程的窗口时不截（报错，
+    /// 以“前台不是”开头）。Kotone 自己盖在游戏上的窗口（悬浮窗）不进截图，不会被认进去。
+    /// `local_only = false`：用玩家在「设置 → 模型 → 文字识别」选的模型（可能是在线的）。
+    /// `local_only = true`：**固定用本地模型，和全局的选择无关**（ADR 043 D7）：全局选的是本地的就用它，否则用装好的
+    /// 第一个本地模型；一个都没有时报错（先看 [`Host::local_ocr`]）。
     fn screen_text(
         &self,
         process: &str,
@@ -871,6 +825,19 @@ pub trait Host: Send + Sync {
     ) -> BoxFuture<'static, Result<Vec<ScreenText>, String>> {
         let _ = (process, region, local_only);
         Box::pin(async { Err("这里没有截图识别".to_string()) })
+    }
+    /// 本地文字识别能不能用（`screen_text(.., local_only = true)` 会用哪个模型；没有时推荐下载哪个、多大）。
+    /// 要快：插件在循环里看它（只核对文件，不加载模型）。
+    fn local_ocr(&self) -> LocalOcr {
+        LocalOcr::Failed {
+            reason: "这里没有本地文字识别".to_string(),
+        }
+    }
+    /// 下载 [`LocalOcr::Missing`] 里推荐的那个本地文字识别模型（和「设置 → 模型 → 文字识别」的下载同一套：同一时间只下
+    /// 一个、逐文件校验）。**不改**全局的文字识别选择。下完（或者本来就装好了）返回 Ok。只在玩家点了插件页面上的
+    /// “下载”时调。
+    fn download_local_ocr(&self) -> BoxFuture<'static, Result<(), String>> {
+        Box::pin(async { Err("这里不能下载文字识别模型".to_string()) })
     }
 }
 
@@ -1111,45 +1078,33 @@ description = \"发到队伍聊天\"
         assert_eq!(lf, crlf);
     }
 
+    /// 覆盖层去掉了（ADR 043 D7）：清单里写 `[[overlays]]` 读不进来（不认得的字段不收）；本地文字识别的状态
+    /// 是 `{state, ...}`（camelCase）。
     #[test]
-    fn overlay_items_round_trip() {
-        let item = OverlayItem {
-            id: "card-1".into(),
-            uri: "ui://kotone/lol/augment-scores".into(),
-            target: OverlayTarget::Process("League of Legends.exe".into()),
-            anchor: Anchor::Rect {
-                x: 0.2,
-                y: 0.3,
-                w: 0.15,
-                h: 0.05,
-            },
-            data: json!({"delta": 3.2}),
-        };
-        let v = serde_json::to_value(&item).unwrap();
-        assert_eq!(
-            v["target"],
-            json!({"kind": "process", "exe": "League of Legends.exe"})
+    fn overlays_are_gone_and_local_ocr_status_serializes() {
+        let old = format!(
+            "{SAMPLE}\n[[overlays]]\nuri = \"ui://kotone/lol/augment-scores\"\ntitle = \"海克斯评分\"\n"
         );
-        assert_eq!(v["anchor"]["kind"], "rect");
-        let back: OverlayItem = serde_json::from_value(v).unwrap();
-        assert_eq!(back, item);
-        let corner = Anchor::Corner {
-            corner: "top-right".into(),
-            margin: 0.01,
-            w: 0.2,
-            h: 0.3,
+        assert!(Manifest::parse(&old).is_err(), "覆盖层不再是清单的字段");
+        let m = Manifest::parse(SAMPLE).unwrap();
+        assert!(serde_json::to_value(&m).unwrap().get("overlays").is_none());
+        let missing = LocalOcr::Missing {
+            model: "ppocrv5-ch-mobile".into(),
+            name: "PP-OCRv5 mobile".into(),
+            bytes: 21_450_882,
         };
-        assert_eq!(serde_json::to_value(&corner).unwrap()["kind"], "corner");
-        let [x, y, w, h] = corner.rect();
-        assert!((x - 0.79).abs() < 1e-9 && (y - 0.01).abs() < 1e-9 && w == 0.2 && h == 0.3);
-        let off = Anchor::Rect {
-            x: 0.95,
-            y: -0.1,
-            w: 0.2,
-            h: 0.1,
-        }
-        .rect();
-        assert_eq!(off, [0.8, 0.0, 0.2, 0.1], "超出客户区的挪回来");
+        assert_eq!(
+            serde_json::to_value(&missing).unwrap(),
+            json!({"state": "missing", "model": "ppocrv5-ch-mobile", "name": "PP-OCRv5 mobile", "bytes": 21_450_882})
+        );
+        let failed: LocalOcr =
+            serde_json::from_value(json!({"state": "failed", "reason": "坏了"})).unwrap();
+        assert_eq!(
+            failed,
+            LocalOcr::Failed {
+                reason: "坏了".into()
+            }
+        );
     }
 
     #[test]
@@ -1166,26 +1121,20 @@ description = \"发到队伍聊天\"
         assert!(m.check_tools(&[lol]).is_err(), "有前缀时只认前缀");
     }
 
-    /// 资源只能是清单 `pages` 里的页面（覆盖层不算）、类型对、CSP 声明写成源。
+    /// 资源只能是清单 `pages` 里的页面、类型对、CSP 声明写成源。
     #[test]
     fn resources_follow_the_manifest_pages() {
-        let m = Manifest::parse(&format!(
-            "{SAMPLE}\n[[overlays]]\nuri = \"ui://kotone/lol/augment-scores\"\ntitle = \"海克斯评分\"\n"
-        ))
-        .unwrap();
+        let m = Manifest::parse(SAMPLE).unwrap();
         assert_eq!(m.page("ui://kotone/lol/match").unwrap().title, "这局");
-        assert!(
-            m.page("ui://kotone/lol/augment-scores").is_none(),
-            "覆盖层不是页面"
-        );
+        assert!(m.page("ui://kotone/lol/augment-scores").is_none());
         let ok = Resource::app("ui://kotone/lol/match", "<!doctype html><html></html>").csp(Csp {
             resource_domains: vec!["https://raw.communitydragon.org".into()],
             connect_domains: vec!["wss://*.example.com".into()],
             ..Csp::default()
         });
         assert!(m.check_resource(&ok).is_ok());
-        let overlay = Resource::app("ui://kotone/lol/augment-scores", "<html></html>");
-        assert!(m.check_resource(&overlay).is_err());
+        let not_a_page = Resource::app("ui://kotone/lol/augment-scores", "<html></html>");
+        assert!(m.check_resource(&not_a_page).is_err());
         let other = Resource::app("ui://kotone/music/match", "<html></html>");
         assert!(m.check_resource(&other).is_err());
         let mut wrong_type = ok.clone();

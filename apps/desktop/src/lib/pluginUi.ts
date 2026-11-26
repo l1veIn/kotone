@@ -80,12 +80,6 @@ export interface PluginChatBannerProps {
   plugin: PluginInfo;
 }
 
-/** 覆盖层上一项拿到的东西（ADR 038：覆盖层在本体里；插件只给数据，位置由宿主算好）。 */
-export interface PluginOverlayProps {
-  /** 插件给的数据（`OverlayItem.data`）。 */
-  data: unknown;
-}
-
 export interface PluginUi {
   /** 左侧栏和插件列表里的图标。 */
   icon: Component;
@@ -110,8 +104,6 @@ export interface PluginUi {
   views?: Record<string, PluginView>;
   /** 聊天里工具那一行的名字（`lol.scout` → “查这局的战绩”）。 */
   toolLabels?: Record<string, () => string>;
-  /** 游戏上方覆盖层的页面（按 `ui://` 地址；清单的 `overlays`）。只读、不能点，要小、要在任何画面上都看得清。 */
-  overlays?: Record<string, Component<PluginOverlayProps>>;
 }
 
 export const PLUGIN_UI: Record<string, PluginUi> = { "voice-input": voiceInput, lol, "game-voice": gameVoice, music, interpreter };
@@ -153,9 +145,4 @@ export function enabledSlots<K extends "sidebarFooter" | "chatBanner">(
       const component = PLUGIN_UI[plugin.manifest.id]?.[slot];
       return component ? [{ plugin, component: component as NonNullable<PluginUi[K]> }] : [];
     });
-}
-
-/** 覆盖层页面（插件和地址都登记过才有）。 */
-export function overlayOf(plugin: string, uri: string): Component<PluginOverlayProps> | null {
-  return PLUGIN_UI[plugin]?.overlays?.[uri] ?? null;
 }

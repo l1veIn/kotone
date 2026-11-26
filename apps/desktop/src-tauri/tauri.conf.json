@@ -12,23 +12,6 @@
   "app": {
     "windows": [
       {
-        "label": "plugin-overlay",
-        "create": false,
-        "title": "Kotone 覆盖层",
-        "url": "index.html#/plugin-overlay",
-        "width": 800,
-        "height": 600,
-        "transparent": true,
-        "decorations": false,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "focus": false,
-        "focusable": false,
-        "visible": false
-      },
-      {
         "label": "danmaku",
         "create": false,
         "title": "Kotone 提醒",
@@ -46,12 +29,12 @@
         "visible": false
       },
       {
-        "label": "message-popup",
+        "label": "floating",
         "create": false,
-        "title": "Kotone 消息提示",
-        "url": "index.html#/message-popup",
-        "width": 344,
-        "height": 104,
+        "title": "Kotone 悬浮窗",
+        "url": "index.html#/floating",
+        "width": 376,
+        "height": 112,
         "transparent": true,
         "decorations": false,
         "shadow": false,
@@ -61,23 +44,6 @@
         "focus": false,
         "focusable": false,
         "visible": false
-      },
-      {
-        "label": "companion",
-        "create": false,
-        "title": "琴音",
-        "url": "index.html#/companion",
-        "width": 440,
-        "height": 260,
-        "transparent": true,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "focus": false,
-        "focusable": false,
-        "visible": false,
-        "shadow": false,
-        "resizable": false
       },
       {
         "label": "overlay",

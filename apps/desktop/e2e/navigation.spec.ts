@@ -59,7 +59,7 @@ test("chat is home; sidebar groups; companion settings live on her page; one con
   await expect(page.getByTestId("assistant-open-settings")).toHaveCount(0);
   for (const [tab, texts] of [
     ["call", ["呼叫琴音", "呼叫键", "快捷指令", "语音唤醒"]],
-    ["reply", ["气泡", "声音与弹幕", "回答方式", "她用的模型在聊天页输入框旁边选"]],
+    ["reply", ["悬浮窗", "声音与弹幕", "回答方式", "她用的模型在聊天页输入框旁边选"]],
     ["permissions", ["她怎么做事"]],
     ["usage", ["用量与费用"]],
   ] as const) {

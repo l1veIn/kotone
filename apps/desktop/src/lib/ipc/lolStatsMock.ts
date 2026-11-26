@@ -1,11 +1,10 @@
 /**
- * dev:web 和 e2e 用的英雄联盟“网上的统计”示例数据（ADR 038 第 3 步）：英雄页（峡谷 / 海斗）、强度榜、覆盖层。
- * 形状照后端 plugins/lol/src/stats_tools.rs 和 overlays.rs。数字是编的（看上去合理就行），不是真实统计。
+ * dev:web 和 e2e 用的英雄联盟“网上的统计”示例数据（ADR 038 第 3 步）：英雄页（峡谷 / 海斗）、强度榜、选英雄卡片。
+ * 形状照后端 plugins/lol/src/stats_tools.rs 和 pushes/champ_select.rs。数字是编的（看上去合理就行），不是真实统计。
  */
 import type {
   ChampionMayhem, ChampionRift, Named, StatChampion, TierMayhem, TierRift, TierRow,
 } from "$plugins/lol/ui/types";
-import { OVERLAY_AUGMENTS, OVERLAY_CHAMP_SELECT } from "$plugins/lol/ui/types";
 
 // i18n-ignore-start：整个文件是浏览器预览的示例数据（真实应用里来自腾讯 101、aramhex-data），不是界面文字
 const CHAMPS: StatChampion[] = [
@@ -153,71 +152,50 @@ export function sampleTierMayhem(): TierMayhem {
   };
 }
 
-/** 覆盖层的示例（`#/plugin-overlay?demo=augments|champ-select`）：rect 是覆盖层窗口里的比例（预览里窗口是整个屏幕）。
- * 评级、判断和插件（plugins/lol/src/overlays.rs、overlays/rules.rs）算出来的一样：海斗榜 172 个英雄，前 10% S、30% A、60% B、85% C。 */
-export function sampleOverlay(kind: string) {
-  // i18n-ignore-start：示例数据
-  if (kind === "champ-select") {
-    // 5 个人 + 备选 4 个（两个一行）：高度 0.075 + 0.029 × 8（和插件的 champ_select_item 一样算）
+/** 选英雄卡片的示例（推送 `champ-select` 的数据，页面 `ui://kotone/lol/champ-select`）。
+ * 评级和插件（plugins/lol/src/pushes/champ_select.rs、pushes/rules.rs）算出来的一样：海斗榜 172 个英雄，前 10% S、30% A、60% B、85% C。
+ * `me`：我现在是谁（重随以后换了：测试看卡片原地更新）。 */
+// i18n-ignore-start：示例数据
+export function sampleChampSelect(mode: "mayhem" | "rift" = "mayhem", me = "艾瑞莉娅", ended = false) {
+  const champ = (id: number, short: string) => ({ id, short, icon: `/lol-game-data/assets/v1/champion-icons/${id}.png` });
+  if (mode === "rift") {
     return {
-      items: [{
-        plugin: "lol",
-        rect: [0.79, 0.01, 0.2, 0.307],
-        item: {
-          id: "champ-select", uri: OVERLAY_CHAMP_SELECT, target: { kind: "process", exe: "LeagueClientUx.exe" },
-          anchor: { kind: "corner", corner: "top-right", margin: 0.01, w: 0.2, h: 0.307 },
-          data: {
-            mode: "mayhem", source: TENCENT, total: 172,
-            team: [
-              { champion: "艾瑞莉娅", me: true, winRate: 0.5212, rank: 31, grade: "A" },
-              { champion: "塔姆", me: false, winRate: 0.5384, rank: 1, grade: "S" },
-              { champion: "拉克丝", me: false, winRate: 0.5101, rank: 48, grade: "A" },
-              { champion: "锤石", me: false, winRate: 0.4930, rank: 120, grade: "C" },
-              { champion: "阿狸", me: false, winRate: 0.5055, rank: 60, grade: "B" },
-            ],
-            // 按胜率从高到低；比艾瑞莉娅（52.1%）高的两个标出来，最高的圈出来
-            bench: [
-              { champion: "斯莫德", winRate: 0.5302, rank: 6, grade: "S", better: true, best: true },
-              { champion: "斯维因", winRate: 0.5266, rank: 12, grade: "S", better: true, best: false },
-              { champion: "卡莎", winRate: 0.5129, rank: 41, grade: "A", better: false, best: false },
-              { champion: "提莫", winRate: 0.4821, rank: 158, grade: "D", better: false, best: false },
-            ],
-          },
-        },
-      }],
+      mode: "rift", source: TENCENT, ended, bench: [],
+      team: [
+        { champion: champ(157, "亚索"), me: false, lane: "中路", tier: "T1", winRate: 0.5023 },
+        { champion: champ(39, me), me: true, lane: "上路", tier: "T0", winRate: 0.5231 },
+        { champion: champ(64, "李青"), me: false, lane: "打野", tier: "T2", winRate: 0.4911 },
+        { champion: champ(222, "金克丝"), me: false, lane: "下路", tier: null, winRate: null },
+        { champion: champ(412, "锤石"), me: false, lane: "辅助", tier: "T1", winRate: 0.5088 },
+      ],
     };
   }
-  type Card = {
-    verdict: "best" | "ok" | "reroll" | "noData"; grade: string | null; rarity: string; rarityRank: number | null; rarityTotal: number | null;
-    score: { games: number; winRate: number; smoothed: number; delta: number; lowSample: boolean } | null;
-    sampleWarning: boolean; thin: "few" | "tooFew" | null; rare: boolean;
-  };
-  // 三选一标签：高 0.085，底边在卡片名字上面 0.01（插件的 CARD_LABEL_H / CARD_LABEL_GAP）
-  const card = (k: number, augment: string, verdict: Card) => ({
-    plugin: "lol",
-    rect: [0.18 + k * 0.25, 0.24, 0.14, 0.085],
-    item: {
-      id: `augment-${k}`, uri: OVERLAY_AUGMENTS, target: { kind: "process", exe: "League of Legends.exe" },
-      anchor: { kind: "rect", x: 0.18 + k * 0.25, y: 0.24, w: 0.14, h: 0.085 },
-      data: { augment, augmentId: 1000 + k, champion: "艾瑞莉娅", attribution: "aramhex-data", ...verdict },
-    },
-  });
+  const mine = me === "艾瑞莉娅"
+    ? { champion: champ(39, "艾瑞莉娅"), me: true, winRate: 0.5212, rank: 31, grade: "A" }
+    : { champion: champ(901, me), me: true, winRate: 0.5302, rank: 6, grade: "S" };
   return {
-    items: [
-      card(0, "鼓声暴起 低音轰鸣", {
-        verdict: "ok", grade: "A", rarity: "prismatic", rarityRank: 5, rarityTotal: 38, sampleWarning: false, thin: null, rare: false,
-        score: { games: 32_573, winRate: 0.561, smoothed: 0.5609, delta: 6.5, lowSample: false },
-      }),
-      card(1, "终极九头蛇", {
-        verdict: "best", grade: "S", rarity: "prismatic", rarityRank: 2, rarityTotal: 38, sampleWarning: false, thin: null, rare: false,
-        score: { games: 10_891, winRate: 0.578, smoothed: 0.5779, delta: 7.9, lowSample: false },
-      }),
-      // 不到同屏最多那张（32,573）的十分之一：样本太少，建议刷新；不到 300 局，变淡
-      card(2, "泰坦的坚决", {
-        verdict: "reroll", grade: "A", rarity: "gold", rarityRank: 9, rarityTotal: 41, sampleWarning: true, thin: "tooFew", rare: false,
-        score: { games: 260, winRate: 0.62, smoothed: 0.552, delta: 2.1, lowSample: true },
-      }),
+    mode: "mayhem", source: TENCENT, total: 172, ended,
+    team: [
+      mine,
+      { champion: champ(223, "塔姆"), me: false, winRate: 0.5384, rank: 1, grade: "S" },
+      { champion: champ(99, "拉克丝"), me: false, winRate: 0.5101, rank: 48, grade: "A" },
+      { champion: champ(412, "锤石"), me: false, winRate: 0.4930, rank: 120, grade: "C" },
+      { champion: champ(103, "阿狸"), me: false, winRate: 0.5055, rank: 60, grade: "B" },
     ],
+    // 按胜率从高到低；比艾瑞莉娅（52.1%）高的两个标出来，最高的圈出来（重随成斯莫德以后谁都不比它高）
+    bench: me === "艾瑞莉娅"
+      ? [
+        { champion: champ(901, "斯莫德"), winRate: 0.5302, rank: 6, grade: "S", better: true, best: true },
+        { champion: champ(50, "斯维因"), winRate: 0.5266, rank: 12, grade: "S", better: true, best: false },
+        { champion: champ(145, "卡莎"), winRate: 0.5129, rank: 41, grade: "A", better: false, best: false },
+        { champion: champ(17, "提莫"), winRate: 0.4821, rank: 158, grade: "D", better: false, best: false },
+      ]
+      : [
+        { champion: champ(50, "斯维因"), winRate: 0.5266, rank: 12, grade: "S", better: false, best: false },
+        { champion: champ(39, "艾瑞莉娅"), winRate: 0.5212, rank: 31, grade: "A", better: false, best: false },
+        { champion: champ(145, "卡莎"), winRate: 0.5129, rank: 41, grade: "A", better: false, best: false },
+        { champion: champ(17, "提莫"), winRate: 0.4821, rank: 158, grade: "D", better: false, best: false },
+      ],
   };
   // i18n-ignore-end
 }

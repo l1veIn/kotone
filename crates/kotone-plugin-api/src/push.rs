@@ -59,6 +59,11 @@ pub struct PushSpec {
     pub what: String,
     /// 会用哪几种样子；推送里别的样子宿主丢掉。
     pub forms: Vec<PushForm>,
+    /// 一行在悬浮窗的气泡里显示多久（ADR 043 D6）：`true` = 一直显示到插件说这条结束（[`crate::Host::push_done`]；
+    /// 三选一：卡片在屏幕上时一直显示，卡片消失就收起）；缺省 `false` = 显示几秒就收起（一句提醒）。要有 `line` 这种样子。
+    /// 只管悬浮窗：聊天里的记录照旧留着。
+    #[serde(default)]
+    pub until_done: bool,
     #[serde(default)]
     pub priority: PushPriority,
     #[serde(default = "yes")]
@@ -269,6 +274,12 @@ impl Manifest {
                     self.id, push.id
                 ));
             }
+            if push.until_done && !push.forms.contains(&PushForm::Line) {
+                return Err(format!(
+                    "插件 {} 的推送 {} 写了 until_done，forms 里要有 line（它只管悬浮窗里的那一行）",
+                    self.id, push.id
+                ));
+            }
             self.check_needs(&format!("推送 {}", push.id), &push.needs)?;
         }
         Ok(())
@@ -281,7 +292,8 @@ impl Manifest {
 
     /// 这条推送的开关在哪个位置（只看这一条，不看插件和数据开关开没开；插件页上画的就是它）：
     /// 玩家动过（`plugins.<id>.pushes.<推送>`）按他的；没动过按清单的默认——但旧配置里“自动卡片”总开关
-    /// （`agent.autoCards.enabled`）是关的，带卡片的推送算关（读旧写新，ADR 043 D4）。清单里没有这条 = 关。
+    /// （`agent.autoCards.enabled`）是关的，**只有卡片**的推送算关（读旧写新，ADR 043 D4：rc.9 的自动卡片就是这样的；
+    /// 还有一行、语音的，例如海斗三选一，不受它管）。清单里没有这条 = 关。
     pub fn push_switch_in(&self, settings: &Settings, id: &str) -> bool {
         let Some(spec) = self.push_spec(id) else {
             return false;
@@ -289,7 +301,7 @@ impl Manifest {
         if let Some(on) = settings.plugin_push(&self.id, id) {
             return on;
         }
-        if !settings.agent.auto_cards.enabled && spec.forms.contains(&PushForm::Card) {
+        if !settings.agent.auto_cards.enabled && spec.forms.iter().all(|f| *f == PushForm::Card) {
             return false;
         }
         spec.enabled_by_default
@@ -342,6 +354,7 @@ what = "三张各一个判断"
 forms = ["line", "voice"]
 priority = "high"
 enabled_by_default = false
+until_done = true
 "#;
 
     fn demo() -> Manifest {
@@ -373,8 +386,10 @@ enabled_by_default = false
         assert_eq!(opening.forms, [PushForm::Card]);
         assert_eq!(opening.priority, PushPriority::Normal, "缺省 normal");
         assert!(opening.enabled_by_default, "缺省开");
+        assert!(!opening.until_done, "缺省显示几秒就收起");
         let pick = m.push_spec("augment-pick").unwrap();
         assert_eq!(pick.priority, PushPriority::High);
+        assert!(pick.until_done);
         assert!(
             PushPriority::High > PushPriority::Normal && PushPriority::Normal > PushPriority::Low
         );
@@ -410,12 +425,14 @@ enabled_by_default = false
             format!("{ok}\nneeds = [\"nope\"]"),
             // 不认得的字段
             format!("{ok}\nsound = true"),
+            // until_done 只管一行
+            format!("{ok}\nuntil_done = true"),
         ] {
             assert!(Manifest::parse(&push(&bad)).is_err(), "应该不收：{bad}");
         }
     }
 
-    /// 开关由宿主执行：插件关着、要的数据开关关着、这一条关着、清单里没有，都不推；读旧：总开关关着时带卡片的算关，
+    /// 开关由宿主执行：插件关着、要的数据开关关着、这一条关着、清单里没有，都不推；读旧：总开关关着时只有卡片的算关，
     /// 玩家在插件页上动了这一条就按他的。
     #[test]
     fn the_host_decides_whether_a_push_is_on() {
@@ -447,10 +464,26 @@ enabled_by_default = false
         // 关掉插件时开关的位置不变（插件页上灰着）
         assert!(m.push_switch_in(&plugin_off, "opening"));
 
-        // 读旧：“自动卡片”总开关关着 → 带卡片的推送算关，别的照默认
+        // 读旧：“自动卡片”总开关关着 → 只有卡片的推送算关，别的照默认
         let legacy = settings(r#"{"agent":{"autoCards":{"enabled":false,"popup":true}}}"#);
         assert!(!m.push_switch_in(&legacy, "opening"));
         assert!(m.push_off_in(&legacy, "opening").is_some());
+        // 卡片之外还有一行、语音的（三选一：问要不要下载模型的那张是卡片）不受总开关管
+        let mixed = Manifest::parse(
+            &DEMO
+                .replace(
+                    "forms = [\"line\", \"voice\"]",
+                    "forms = [\"line\", \"voice\", \"card\"]",
+                )
+                .replace("enabled_by_default = false\n", ""),
+        )
+        .unwrap();
+        assert_eq!(
+            mixed.push_spec("augment-pick").unwrap().forms,
+            [PushForm::Line, PushForm::Voice, PushForm::Card]
+        );
+        assert!(mixed.push_switch_in(&legacy, "augment-pick"));
+        assert!(!mixed.push_switch_in(&legacy, "opening"));
         let legacy_line = settings(
             r#"{"agent":{"autoCards":{"enabled":false}},"plugins":{"demo":{"pushes":{"augment-pick":true}}}}"#,
         );

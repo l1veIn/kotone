@@ -110,8 +110,10 @@ export function statusText(content: unknown): string {
 // ---------- 第 3 步：网上的统计（和后端 plugins/lol/src/stats_tools.rs 一一对应） ----------
 export const PAGE_CHAMPION = "ui://kotone/lol/champion";
 export const PAGE_TIER = "ui://kotone/lol/tier";
-export const OVERLAY_CHAMP_SELECT = "ui://kotone/lol/champ-select";
-export const OVERLAY_AUGMENTS = "ui://kotone/lol/augment-scores";
+/** 只在推送里出现的两张卡片（ADR 043 D7，和后端 plugins/lol/src/pushes.rs 一致）：选英雄（原来的选英雄覆盖层）、
+ * 问要不要下载海克斯三选一要的本地文字识别模型。 */
+export const PAGE_CHAMP_SELECT = "ui://kotone/lol/champ-select";
+export const PAGE_AUGMENT_OCR = "ui://kotone/lol/augment-ocr";
 
 /** 统计里的英雄（没有英文 id）。 */
 export interface StatChampion { id: number; label: string; short: string }
@@ -182,35 +184,6 @@ export interface TierMayhem {
 }
 
 export type TierData = TierRift | TierMayhem;
-
-/** 覆盖层的评级（照 AramHex：按国服胜率排名，前 10% S、30% A、60% B、85% C、其余 D；plugins/lol/src/overlays/rules.rs）。 */
-export type OverlayGrade = "S" | "A" | "B" | "C" | "D";
-
-/** 覆盖层：选英雄（客户端窗口右上角）。海斗：`rank` 是只按胜率排的名次（共 `total` 个），`grade` 由它换算；
- * 备选席按胜率从高到低，`better` 是胜率比我现在的英雄高，`best` 是其中最高的。峡谷：`lane` + `tier`（腾讯的强度）。 */
-export interface ChampSelectOverlayData {
-  mode: "mayhem" | "rift";
-  total?: number;
-  team: { champion: string; me: boolean; winRate: number | null; rank?: number | null; grade?: OverlayGrade | null; lane?: string | null; tier?: string | null }[];
-  bench: { champion: string; winRate: number | null; rank?: number | null; grade?: OverlayGrade | null; better?: boolean; best?: boolean }[];
-  source: string;
-}
-
-/** 覆盖层：海斗三选一，一张卡片一个（照 AramHex 的三选一标签）。`verdict`：首选 / 可选 / 可考虑刷新 / 无数据；
- * `grade` 由同稀有度里的名次（`rarityRank` / `rarityTotal`）换算；`sampleWarning` 是本英雄不到 1000 局，
- * `thin`：同屏有够 1000 局的时候这张不够（`few`，不当首选）或不到最多那张的十分之一（`tooFew`，建议刷新）；
- * `rare`：这个英雄几乎不拿（别的英雄拿过）。 */
-export interface AugmentOverlayData {
-  augment: string; augmentId: number; champion: string;
-  verdict: "best" | "ok" | "reroll" | "noData";
-  score: { games: number; winRate: number; smoothed: number; delta: number; lowSample: boolean } | null;
-  rare: boolean;
-  rarity: string; rarityRank: number | null; rarityTotal: number | null;
-  grade: OverlayGrade | null;
-  sampleWarning: boolean;
-  thin: "few" | "tooFew" | null;
-  attribution: string;
-}
 
 /** aramhex-data 的仓库（页面上署名链接）。 */
 export const ARAMHEX_URL = "https://github.com/czgreat/aramhex-data";

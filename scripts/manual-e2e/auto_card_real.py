@@ -5,8 +5,8 @@ The fake LoL client from game_events_real.py (same recording, HTTPS, random toke
 Setup as game_events_real.py (debug build with the web UI embedded, `--background`, isolated
 KOTONE_HOME=target/auto-card-real/home, the real DeepSeek key in memory only, input tools and real-window tools denied,
 speech volume 0) but no automations are switched on and the match recap is off, so the only thing the timeline can
-do on its own is post auto cards. KOTONE_POPUP_CAPTURABLE=1 lets this script screenshot the pop-up (in normal use it
-is excluded from screen capture). No OS input at all, no clicks: clicking the pop-up is covered by Playwright
+do on its own is post auto cards. KOTONE_FLOATING_CAPTURABLE=1 lets this script screenshot the floating window that
+pops up (ADR 043 D6: the message pop-up merged into it; in normal use it is excluded from screen capture). No OS input at all, no clicks: clicking the pop-up is covered by Playwright
 (e2e/push.spec.ts) and the Rust unit tests.
 
 Checks:
@@ -14,8 +14,8 @@ C0. typed “你好，一句话就行” (agent_send = typed in the chat page) �
 C1. champion select → no auto card;
 C2. loading → one “开局战绩” card (ui://kotone/lol/match, key opening:<gameId>) at the end of that conversation, followed by
     the note for her (source auto-card, untrusted data attachment); the messages before it are byte-identical (prefix);
-C3. the message pop-up window shows (visible, topmost, WS_EX_NOACTIVATE) and the foreground window did not change;
-    a screenshot of just the pop-up goes to target/plugin-shots/round7/message-popup-real.png. If Windows reports a
+C3. the floating window pops up (visible, topmost, WS_EX_NOACTIVATE) and the foreground window did not change;
+    a screenshot of just that window goes to target/plugin-shots/round7/message-popup-real.png. If Windows reports a
     fullscreen app in front (the pop-up is then skipped by design) this is reported, not failed;
 C4. EndOfGame → one “这局总结” card (ui://kotone/lol/game, justEnded) within 60 s;
 C5. back in the lobby: still exactly two cards (no repeats);
@@ -66,7 +66,7 @@ def ledger_count():
 
 def popup_window():
     """(hwnd, visible, rect, exstyle) of the pop-up window (title from tauri.conf.json), or None."""
-    hwnd = user32.FindWindowW(None, "Kotone 消息提示")
+    hwnd = user32.FindWindowW(None, "Kotone 悬浮窗")
     if not hwnd:
         return None
     rect = wt.RECT()
@@ -107,7 +107,7 @@ def main():
     bt.ENV = dict(os.environ, KOTONE_HOME=bt.HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(bt.WORK, "webview"),
                   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={bt.PORT}",
                   KOTONE_LOL_LCU=f"{port}:{lt.TOKEN}", KOTONE_LOL_LIVE=f"https://127.0.0.1:{port}",
-                  KOTONE_POPUP_CAPTURABLE="1")
+                  KOTONE_FLOATING_CAPTURABLE="1")
     bt.ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
     with open(os.path.join(bt.HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
@@ -173,9 +173,9 @@ def main():
                   json.dumps(msgs[:len(before)], ensure_ascii=False) == json.dumps(before, ensure_ascii=False)
                   and index == len(before), f"{index} vs {len(before)}")
 
-        # C3：消息提示
+        # C3：悬浮窗弹出来（原来的消息提示）
         shown = bt.wait_until(lambda: (lambda w: w if w and w[1] else None)(popup_window()), 10, 0.5)
-        skipped = next((line for line in log_text().splitlines() if "消息提示：没弹" in line), None)
+        skipped = next((line for line in log_text().splitlines() if "悬浮窗：没弹" in line), None)
         if shown:
             hwnd, _, rect, exstyle = shown
             time.sleep(0.6)  # 滑入动画 180 ms
@@ -223,7 +223,7 @@ def main():
         check("C7: her next turn answers from the cards (one more model call)",
               reply and ledger_count() > spent and any(w in reply for w in ("开局", "总结", "突破口", "赢", "输", "战绩")),
               reply[:200])
-        lines = [line for line in log_text().splitlines() if "push:" in line or "消息提示" in line or "推送" in line]
+        lines = [line for line in log_text().splitlines() if "push:" in line or "悬浮窗" in line or "推送" in line]
         print("   log:\n     " + "\n     ".join(lines[:12]))
     finally:
         real_deepseek.delete_connection(bt.EXE, bt.ENV)

@@ -9,8 +9,8 @@
 //!   （界面事件 [`PUSH_EVENT`]），空下来再把推送和给她的那句一起追加。原地更新：那段对话不在跑就马上改，在跑就排着、
 //!   这一轮结束再改；还排着的直接换掉。不插进正在跑的那一轮，也不叫她开口（ADR 039 D3）。
 //! - **界面事件** [`PUSH_EVENT`]（聊天页、悬浮窗都听；形状见 [`emit_push`]）：新的一条、更新了、结束了（`Host::push_done`）。
-//! - **消息提示**：卡片推送、开着“推送时弹出消息提示”（`agent.autoCards.popup`）就弹；带 `alert` 的更新再弹一次。
-//!   点它打开聊天、定位到这条（[`auto_card_open`]）。
+//! - **悬浮窗**（ADR 043 D6，`floating/mod.rs`）：一行显示在气泡里；卡片推送、开着“推送时弹出小窗”（`agent.autoCards.popup`）
+//!   就弹出小窗，带 `alert` 的更新再弹一次；`push_done` 收起那一行。点卡片上面那一行打开聊天、定位到这条（[`auto_card_open`]）。
 //! - **语音**：说法轮着用（每条推送一个计数），照 `kotone_agent::push_voice` 的规矩排（同一时刻只说最要紧的、20 秒冷却、
 //!   不打断、排了 5 秒过时），用她的声音说（`assistant::speak_push`）。更新时说法没变就不再说（结论没变不重复）。
 
@@ -103,25 +103,29 @@ pub fn post_push(
         },
     );
     let title = pushes::shown_title(push_record(&posted.notice)).to_string();
-    let popup = push.card.is_some()
-        && settings.agent.auto_cards.popup
-        && (posted.outcome == PushOutcome::Posted || push.alert);
-    if popup {
-        crate::message_popup::show(
-            app,
-            crate::message_popup::Popup {
-                plugin: plugin.to_string(),
-                plugin_name: plugin_name.to_string(),
-                name: companion_name(&settings),
-                text: title.clone(),
-                conversation_id: posted.conversation.clone(),
-                key: push.key.trim().to_string(),
-                revision: 0,
-            },
-        );
-    }
+    // 悬浮窗（ADR 043 D6）：一行显示在气泡里；新卡片、带 alert 的更新开着“推送时弹出小窗”时弹出小窗
+    crate::floating::pushed(
+        app,
+        crate::floating::Pushed {
+            plugin,
+            plugin_name,
+            conversation_id: &posted.conversation,
+            key: push.key.trim(),
+            line: push.line.as_ref(),
+            until_done: spec.until_done,
+            card: push.card.is_some(),
+            posted: posted.outcome == PushOutcome::Posted,
+            alert: push.alert,
+        },
+    );
     if speak && !said.is_empty() {
-        speak_in_order(app, spec.priority, said);
+        // 同一条推送的更新（说法变了）不受冷却：三选一刷新以后最好的那张变了，玩家在等新的判断
+        speak_in_order(
+            app,
+            spec.priority,
+            said,
+            posted.outcome == PushOutcome::Updated,
+        );
     }
     log::log(&format!(
         "push: {plugin} {}「{title}」（{}，对话 {}{}）",
@@ -245,8 +249,9 @@ fn update(
     })
 }
 
-/// 推送结束了（`Host::push_done`，例如三选一的卡片从屏幕上消失）：只告诉界面（悬浮窗收起那一行），聊天里的记录留着。
+/// 推送结束了（`Host::push_done`，例如三选一的卡片从屏幕上消失）：悬浮窗收起那一行，聊天里的记录留着。
 pub fn push_done(app: &AppHandle, plugin: &str, trigger: &str, key: &str) {
+    crate::floating::done(app, plugin, key);
     let _ = app.emit(
         PUSH_EVENT,
         json!({"kind": "done", "plugin": plugin, "trigger": trigger, "key": key.trim()}),
@@ -291,9 +296,17 @@ fn emit_push(
 
 /// 推送的语音照规矩排（`kotone_agent::push_voice`），轮到了用她的声音说；过时了、被更要紧的换掉了就不说（只记日志：
 /// 一行和聊天里的记录照旧）。
-fn speak_in_order(app: &AppHandle, priority: PushPriority, text: String) {
+fn speak_in_order(app: &AppHandle, priority: PushPriority, text: String, update: bool) {
     let arrived = Instant::now();
-    let ticket = match arbiter().lock().unwrap().offer(priority, arrived) {
+    let offered = {
+        let mut arbiter = arbiter().lock().unwrap();
+        if update {
+            arbiter.offer_update(priority, arrived)
+        } else {
+            arbiter.offer(priority, arrived)
+        }
+    };
+    let ticket = match offered {
         Ok(ticket) => ticket,
         Err(why) => {
             log::log(&format!("push: 这句不说（{why}）：{text}"));
@@ -330,16 +343,6 @@ fn speak_in_order(app: &AppHandle, priority: PushPriority, text: String) {
     });
 }
 
-/// 她现在叫什么（消息提示上那一行）。
-fn companion_name(settings: &kotone_core::settings::Settings) -> String {
-    let name = settings.agent.identity.name.trim();
-    if name.is_empty() {
-        kotone_agent::workspace::DEFAULT_NAME.to_string()
-    } else {
-        name.to_string()
-    }
-}
-
 /// 某段对话里排着、还没记进对话的推送（新的、排着的更新；界面重新读对话时照样显示：同一个标识的原地换掉，没有的放在
 /// 最后面）。命令名是只有自动卡片时起的，不改。
 #[tauri::command]
@@ -347,12 +350,12 @@ pub fn agent_held_cards(id: String) -> Vec<Message> {
     held_pushes(&id)
 }
 
-/// 玩家点了消息提示：打开 Kotone 的聊天页，定位到那条推送。这是玩家自己的动作，照“点托盘打开窗口”把主窗口
-/// 拿到前面；她不在回答时顺便把那段对话切成当前对话（在回答时不切，和对话列表的规矩一样）。命令名是只有自动卡片时
-/// 起的，不改（悬浮窗也用它）。
+/// 玩家在悬浮窗里点了卡片上面那一行（或“打开 Kotone”）：打开 Kotone 的聊天页，定位到那条推送。这是玩家自己的动作，
+/// 照“点托盘打开窗口”把主窗口拿到前面；她不在回答时顺便把那段对话切成当前对话（在回答时不切，和对话列表的规矩一样）。
+/// 悬浮窗的小窗和几行收起（推送都在聊天里了）。命令名是只有自动卡片时起的，不改。
 #[tauri::command]
 pub fn auto_card_open(app: AppHandle, conversation_id: String, key: String) -> Result<(), String> {
-    crate::message_popup::hide(&app);
+    crate::floating::opened(&app);
     if let Some(win) = app.get_webview_window("main") {
         crate::show_and_focus(&win);
     }

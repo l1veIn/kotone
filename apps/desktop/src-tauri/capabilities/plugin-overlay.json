@@ -1,6 +1,0 @@
-{
-  "identifier": "plugin-overlay",
-  "description": "游戏上方的覆盖层（ADR 038）：只接收插件要显示的条目，不获取输入焦点、不调任何命令",
-  "windows": ["plugin-overlay"],
-  "permissions": ["core:event:default"]
-}

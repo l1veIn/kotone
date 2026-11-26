@@ -141,9 +141,10 @@ fn crop_ratio(image: &RgbaImage, [x, y, w, h]: [f64; 4]) -> RgbaImage {
 }
 
 /// 插件用的“截一块、识别文字”（ADR 038 `Host::screen_text`，例如英雄联盟插件找海斗三选一的三张卡片）：
-/// 前台窗口（不是 Kotone 自己）客户区的一块（比例 `[x, y, w, h]`），用玩家选的文字识别模型。
-/// 返回的每行文字的位置是整个客户区的比例。`local_only`：在线识别（要十几秒、要花钱）时不识别，直接报错。
-/// 覆盖层窗口设了不进截图（`overlay_layer`），不会把自己画的东西认进去。
+/// 前台窗口（不是 Kotone 自己）客户区的一块（比例 `[x, y, w, h]`）。返回的每行文字的位置是整个客户区的比例。
+/// `local_only = false` 用玩家选的文字识别模型；`local_only = true` 固定用本地包、和全局的选择无关（ADR 043 D7，
+/// [`crate::ocr_engines::pick_local`]），一个都没装时报错、不截图。
+/// 盖在游戏上的 Kotone 窗口设了不进截图（`window::exclude_from_capture`），不会把自己画的东西认进去。
 pub fn screen_text(
     app: &AppHandle,
     process: &str,
@@ -151,15 +152,8 @@ pub fn screen_text(
     local_only: bool,
 ) -> Result<Vec<kotone_plugin_api::ScreenText>, String> {
     if local_only {
-        let settings = app
-            .state::<crate::SharedState>()
-            .settings
-            .read()
-            .unwrap()
-            .clone();
-        let (_, backend) = crate::companion::ocr_backend(app, &settings)?;
-        if backend.kind() != kotone_core::ocr::OcrBackendKind::Local {
-            return Err("选的是在线文字识别：要本地的文字识别模型才行".into());
+        if let kotone_plugin_api::LocalOcr::Missing { .. } = crate::ocr_engines::local_status(app) {
+            return Err("没有装好的本地文字识别模型".into());
         }
     }
     let window = foreground_game()?;
@@ -174,7 +168,11 @@ pub fn screen_text(
     let (capture, _view, _notes) = session.capture_view()?;
     let [rx, ry, rw, rh] = region;
     let crop = crop_ratio(&capture, region);
-    let lines = crate::ocr_engines::ocr_image(app, &crop)?;
+    let lines = if local_only {
+        crate::ocr_engines::ocr_image_local(app, &crop)?
+    } else {
+        crate::ocr_engines::ocr_image(app, &crop)?
+    };
     Ok(lines
         .into_iter()
         .filter_map(|(text, rect)| {

@@ -15,7 +15,7 @@
 | 界面文字（`plugin_lol_*`，中文要和 `plugin.toml` 一致，有测试） | `messages/` |
 | 页面的测试（桌面端的 Playwright 一起跑） | `e2e/` |
 | 网上的统计（腾讯 101、aramhex-data、外号和名字表、OP.GG）和它的工具 `lol.champion` / `lol.tier` | `src/stats/`、`src/stats_tools.rs` |
-| 覆盖层：选英雄时的胜率面板、海斗三选一的海克斯评分（照 aramhex） | `src/overlays.rs`、`ui/*Overlay.svelte` |
+| 推送：选英雄卡片、海斗三选一的一行三格 + 语音（照 aramhex 的判断规则，本地文字识别；原来的两个覆盖层，ADR 043 D7）；开局战绩、这局总结 | `src/pushes.rs`、`src/pushes/`、`app/src/pages/ChampSelect.svelte`、`app/src/pages/AugmentOcr.svelte`；`src/watcher/auto_cards.rs` |
 | 页面的数据（这局、战绩、单局详情；图只给 id 和客户端路径） | `src/pages.rs` |
 | 素材层：页面要的图（英雄、召唤师头像、段位、海克斯、装备、技能、符文），见下面“素材” | `src/client/assets.rs` |
 | 用录下来的真实数据离线跑三个工具的文字；真接口跑一遍统计 | `examples/render_probe.rs`、`examples/stats_probe.rs` |
@@ -132,7 +132,7 @@ args = ["mcp"]
 
 ## 照着谁做
 
-[LeagueAkari](https://github.com/LeagueAkari/LeagueAkari)（MIT 的 `dev` 分支，不拷 v1.3.x–v1.4.3 的 GPL 版本）：读命令行、接口路径、模式急速、开黑分组、腾讯 101 的解析。突破口的算法是自己写的。[aramhex](https://github.com/czgreat/aramhex)（代码 MIT）：覆盖层怎么显示、显示性能怎么排查（只在需要时显示、窗口小、识别线程低优先级、截图时不认自己画的）。
+[LeagueAkari](https://github.com/LeagueAkari/LeagueAkari)（MIT 的 `dev` 分支，不拷 v1.3.x–v1.4.3 的 GPL 版本）：读命令行、接口路径、模式急速、开黑分组、腾讯 101 的解析。突破口的算法是自己写的。[aramhex](https://github.com/czgreat/aramhex)（代码 MIT）：选英雄的评级、三选一的判断规则（`src/pushes/rules.rs`），截图识别怎么不拖慢游戏（只在需要时看、识别线程低优先级、截图时不认自己画的）。
 
 ## 测试
 

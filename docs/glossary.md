@@ -22,7 +22,7 @@
 | 游戏陪玩 | 侧栏分组名（ADR 028 D1，玩家定的），不当成名词指她 | | | Game companion |
 | 角色页 | 左侧栏「游戏陪玩」里她那一项（显示她的名字）点开的页面。分页：角色 · 记忆 · 技能 · 唤醒 · 交互 · 权限 · 用量；聊天也在这一页。设置说明里的位置写成“琴音 → 唤醒 → 呼叫键”（第一段是她，界面上换成 `{name}`） | | `AssistantPage`、`AssistantSection` | her page (tabs: Character · Memory · Skills · Wake-up · Interaction · Permissions · Usage) |
 | 唤醒 | 角色页的一个分页：呼叫键、通话、快捷指令、语音唤醒、聊天页的呼叫按钮。旧说法“怎么叫她”（2026-11-25 以前它是「设置」的一页） | `设置 → 怎么叫她` | 分页 ID `call` | Wake-up |
-| 交互 | 角色页的一个分页：气泡、声音与弹幕（回答方式）；“推送时弹出消息提示”的开关也在这里（ADR 039 D4）。原来的“自动卡片”总开关去掉了：每条推送的开关在插件页的「设置 → 推送」（ADR 043 D4）。旧说法“她怎么回答”（以前在「设置」里）。她用的模型不在这里，在聊天页输入框旁 | `设置 → 她怎么回答` | 分页 ID `reply` | Interaction |
+| 交互 | 角色页的一个分页：悬浮窗（显示悬浮窗、推送时弹出小窗、位置）、声音与弹幕（回答方式）（ADR 043 D6）。原来的“自动卡片”总开关去掉了：每条推送的开关在插件页的「设置 → 推送」（ADR 043 D4）。旧说法“她怎么回答”（以前在「设置」里）。她用的模型不在这里，在聊天页输入框旁 | `设置 → 她怎么回答` | 分页 ID `reply` | Interaction |
 | 她用的模型 | 聊天页输入框旁的小菜单：她用哪条 API 连接里的哪个模型（照 DeepSeek Harness 的输入框）。2026-11-21 挪进过设置，2026-11-25 玩家要放回聊天页 | （见“她”） | `assistant.connectionId`、连接的 `model` | Her model |
 | 插件 | 装在她身上的一块本事：有自己的页面、工具和开关（英雄联盟、语音输入、网易云音乐……，ADR 038）。照 MCP Apps：她只调用插件的工具或打开它的页面。“应用”在界面里指 Kotone 自己（“桌面应用”），所以插件不叫应用，也不叫 App；浏览器里装的叫“扩展”。每个插件有自己的 logo（原创，不用网易云、拳头这类别人的商标；第三方 MCP 服务器用它自己声明的图标，ADR 039） | | `plugins/<id>`、`kotone-plugin-api` | plugin |
 | 第三方插件 | 玩家自己加进来的别人的 MCP 服务器（插件页上粘贴配置，或者从 Claude Desktop、VS Code 导入）。一个服务器就是一个插件，开关、卡片和内置的一样；它的工具名是 `<名字>.<工具>`，结果只当数据（别人写的），只在 Kotone 里用、不转给外部 Agent（MCP 方案第 2 期）。代码里叫远程插件 | | `kotone-remote-plugin`、`KOTONE_HOME/mcp.json` | third-party plugin |
@@ -59,9 +59,8 @@
 | 音质 | 标准 / 极高 / 无损；默认极高（非 VIP 的上限），无损要 VIP | | `music.quality` | Quality: Standard / Very high / Lossless |
 | 全部页面 / 恢复默认 | 左侧栏“⋯”打开：页面在组内上移下移、显示隐藏（设置、关于固定）；恢复默认 = 默认顺序、全部显示 | | `ui.sidebar` | All pages / Restore defaults |
 | 游戏配置 | 一个游戏的聊天键、频道、词表等（游戏列表页里编辑） | `游戏设置`、`游戏档案` | `GameProfile` | game profile |
-| 气泡 / 悬浮窗 / 弹幕 | 气泡只属于她（在听、在想、在说）；悬浮窗只属于语音输入；弹幕是从右往左飘的字 | `对话气泡` | | bubble / overlay / floating text |
+| 悬浮窗 / 气泡 / 小窗 / 输入条 / 弹幕 | **悬浮窗**：游戏所在屏幕上的一个小窗（ADR 043 D6），两种状态——**气泡**（一行字：她在听、在想、在说，或插件推送的一行）和**小窗**（这段对话里插件推送的卡片，和聊天里同一种，新的在下面，往回翻看更早的；有新卡片时弹出）。不抢焦点，可以关（×）、可以拖，拖到哪里下次就从哪里出现，鼠标停在上面不收起；游戏独占全屏时不显示；开关和位置在“角色 → 交互 → 悬浮窗”。原来的说话气泡和右下角的消息提示都并进了它。**输入条**：语音输入说话时显示识别进度、频道的小条（以前叫悬浮窗）。**弹幕**：从右往左飘的字 | `对话气泡`、`消息提示`、`右下角弹窗`、`通知弹窗` | `floating/mod.rs`、`assistant.bubble`、`agent.autoCards.popup`；输入条是 `overlay.rs`、`overlay.*` | floating window (bubble / mini window) / input bar / floating text |
 | 推送 | 插件在游戏里的某个时机自己发给你的东西，三种样子：**卡片**（发进聊天）、**一行**（一行字，可以分几格，例如三选一的“首选 / 可选 / 可刷新”）、**语音**（她说一句固定的短话，几个说法轮着用）。不叫她、不花钱，全都记进聊天（一行和语音是一条小字记录）；带了给她的一句时留一条很短的说明，之后的对话里她看得到。同一条推送内容变了就在原地更新，不另发一条。每条推送在插件页的「设置 → 推送」里写明时机和做什么、单独一个开关，内容不能改——想改就自己建自动化。卡片上写明是哪个插件推送的。现在只有内置插件能推送（ADR 039 D3、ADR 043）。文档和代码也用这个词 | `自动卡片`、`事件卡片` | `Host::push`、`[[pushes]]`、`kotone_agent::push`、`plugins.<id>.pushes` | push (“{plugin} push”; card / line / voice) |
-| 消息提示 | 插件推送卡片时，屏幕右下角弹出的小窗：她的头像 + 一句话；点它打开聊天、定位到那张卡片；不抢焦点，几秒后自己消失，游戏独占全屏时不弹；开关在“游戏陪玩 → 角色 → 交互”（ADR 039 D4）。和气泡不同：气泡是她在听、在想、在说，点不了。不叫“通知”（和 Windows 的系统通知撞名），不叫“提醒”（那是过一会儿说一句的提醒） | `右下角弹窗`、`通知弹窗` | `message_popup.rs`、`agent.autoCards.popup` | message pop-up |
 | 技能 | 她会的本事包（一个文件夹一个） | `Skill` | `SKILL.md`、`workspace` | skills |
 | 本地 / 在线 | 在这台电脑上算 / 发给服务商算 | `离线`、`云端` | `asrLocal` | local / online |
 
@@ -84,15 +83,15 @@
 
 | 中文 / English | 代码名 | 含义与边界 |
 | --- | --- | --- |
-| 呼叫 / Call | `assistant_call`, `call_hotkey()`, `HK_ASSISTANT`, `call.rs` | 接通和角色的通话（ADR 033，见上面“界面用语”）。四种触发：呼叫键、唤醒词、聊天页的呼叫按钮、快捷指令。听和答都在**气泡**里。语音识别没准备好时，呼叫按钮先启动本地识别再听；呼叫键只在气泡里提示。 |
+| 呼叫 / Call | `assistant_call`, `call_hotkey()`, `HK_ASSISTANT`, `call.rs` | 接通和角色的通话（ADR 033，见上面“界面用语”）。四种触发：呼叫键、唤醒词、聊天页的呼叫按钮、快捷指令。听和答都在**悬浮窗的气泡**里。语音识别没准备好时，呼叫按钮先启动本地识别再听；呼叫键只在气泡里提示。 |
 | 呼叫键 / Call key | `assistant.hotkey`；0.1.x 升级用户为 `assistant.companionBindings.hotkey` | 按一下就呼叫，通话中再按 = 挂断。新用户默认 `Ctrl + ~`，升级用户默认空。不再叫“陪玩热键”“呼叫热键”。 |
-| 语音输入 / Voice input | `hotkey`, `Orchestrator`（`purpose = input`） | 说话，原话打进游戏聊天框。**不经过 Agent**。状态显示在**悬浮窗**里。是一个插件（`plugins/voice-input`，ADR 038）：从左侧栏「插件 → 语音输入」打开它的页面，分页 输入 / 文字处理 / 历史（分页 ID `general` / `processing` / `history`）；关掉插件时语音输入热键、悬浮窗一起停。语音识别和往游戏聊天里打字属于本体，语音输入借用它们；她替你在游戏聊天里发言（`game_chat.send`）在本体，关掉语音输入不影响；每个游戏的聊天键留在游戏配置（ADR 039）。 |
+| 语音输入 / Voice input | `hotkey`, `Orchestrator`（`purpose = input`） | 说话，原话打进游戏聊天框。**不经过 Agent**。状态显示在**输入条**里（以前叫悬浮窗）。是一个插件（`plugins/voice-input`，ADR 038）：从左侧栏「插件 → 语音输入」打开它的页面，分页 输入 / 文字处理 / 历史（分页 ID `general` / `processing` / `history`）；关掉插件时语音输入热键、输入条一起停。语音识别和往游戏聊天里打字属于本体，语音输入借用它们；她替你在游戏聊天里发言（`game_chat.send`）在本体，关掉语音输入不影响；每个游戏的聊天键留在游戏配置（ADR 039）。 |
 | 语音输入热键 / Voice input hotkey | `hotkey.key` | 按下说话的那个键（原“录制热键”）。 |
 | 停下 / Stop | `stop::stop_everything`, `automationStopHotkey` | 停止角色正在做的事和所有自动化。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘「停下」。不取消语音输入的录音（那是 Esc）。 |
 | 启动 / Start | `runtime::start`, `runtimeToggleHotkey`, `ui.autoStart` | **只和本地语音识别有关**：把本地识别模型加载进内存。本地识别有 未启动 / 准备中 / 已启动 / 出问题了 四种状态；在线识别打开 Kotone 就就绪，界面上看不到“启动”。 |
-| 气泡 / Bubble | `bubble.rs`, `assistant.bubble` | 只属于角色：她在听、在想、在说什么。关掉后只用声音和弹幕，不借用悬浮窗。 |
-| 悬浮窗 / Overlay | `overlay.rs`, `overlay.*` | 只属于语音输入：识别进度、频道、没准备好的提示。 |
-| 屏幕角落分配 / Screen corner | `screen_corner.rs` | 摆在屏幕角上的小窗从角往外排成一列：悬浮窗（选了角上的预设或拖到角上）贴着角、从不被挪，气泡在它外面，消息提示最外面；谁没显示就不占地方，后出来的里面的窗口叠上外面的，外面的让开（ADR 039 实施记录“右下角排成一列”）。弹幕、插件覆盖层不占角落。只在代码和文档里用，界面上不说。 |
+| 悬浮窗 / Floating window | `floating/mod.rs`（窗口 `floating`）、`bubble.rs`（她那一行的状态）、`assistant.bubble`、`agent.autoCards.popup` | ADR 043 D6：气泡（她在听、在想、在说；推送的一行）和小窗（推送的卡片）两种状态。不可聚焦、`SW_SHOWNA`、不进截图；拖动是 Kotone 自己跟着光标挪；记住的位置相对工作区（`assistant.bubble.position`）。关掉后只用声音和弹幕，不借用输入条。原来的气泡窗口 `companion`、消息提示窗口 `message-popup` 去掉了。 |
+| 输入条 / Input bar | `overlay.rs`, `overlay.*`（窗口 `overlay`） | 只属于语音输入：识别进度、频道、没准备好的提示（以前叫悬浮窗；代码名不改）。 |
+| 屏幕角落分配 / Screen corner | `screen_corner.rs` | 摆在屏幕角上的小窗从角往外排成一列：输入条（选了角上的预设或拖到角上）贴着角、从不被挪，悬浮窗在它外面；谁没显示就不占地方，后出来的里面的窗口叠上外面的，外面的让开（ADR 039 实施记录“右下角排成一列”）。悬浮窗被玩家拖到别处以后不再排队（ADR 043 D6）。弹幕不占角落。只在代码和文档里用，界面上不说。 |
 | 打开软件时显示 / Start page | `ui.startPage` | `voiceInput` = 语音输入；空或其它任何值 = 聊天（默认）。 |
 | 主会话 / Main conversation | `agent.rs` `drive`，`kotone_agent::catalog::main_offers`（`ToolEntry::main`） | 玩家唯一看得到的对话：语音和打字共用一段、共用一小套马上出结果的工具（ADR 029 第二期；每个工具登记时自己标给不给主会话，MCP 方案第 1.5 期）。工具超过 3 秒没回来就转到后台（`kotone_agent::background`）。界面上就叫“对话”。 |
 | 后台的事 / Background task | `agent.start`、`Subagent`、`kotone_agent::subagents`（代码与 ADR 里叫“子代理”） | 主会话交出去的复杂、慢、多步的事。玩家看到的是主会话里的一张卡片（“写喝药脚本 · 进行中”），做完由主会话说一句；不进对话列表，不能点进去聊。界面和文案不说“子代理”“子会话”。旧的“子会话”（ADR 022）已经并进来，这个词不再用。 |

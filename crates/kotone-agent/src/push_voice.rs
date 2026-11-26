@@ -5,6 +5,9 @@
 //! - **同一时刻只说最要紧的一句**：[`GATHER`] 之内来的几条算同时，只留级别最高的（同级留先来的），别的不说（一行和
 //!   聊天里的记录照旧）。
 //! - **说过一句以后 [`COOLDOWN`] 之内，同级和更低级的不再说**；更高级的可以说，但**不打断正在说的那句**，等它说完。
+//!   冷却管的是不同的推送一句接一句地说；**同一条推送的更新**（同一个插件、同一个 key，内容和说法变了，
+//!   [`VoiceArbiter::offer_update`]）不受冷却：海斗三选一刷新以后最好的那张变了，玩家在等新的判断（讨论记录第四节
+//!   “刷新后最好的那张变了才再说”）。它照样不打断正在说的那句、照样 5 秒过时，说出口以后照样重新开始冷却。
 //! - **过时了就不说**：她自己正在说话时排在她后面（桌面端的播报锁），从推来的时候算，排了 [`STALE`] 还没轮到就不说了；
 //!   排在另一条推送的语音后面也一样。没说出来的不算“说过”（不占冷却）。
 //!
@@ -63,9 +66,27 @@ pub struct VoiceArbiter {
 }
 
 impl VoiceArbiter {
-    /// 来了一条要说的：排上（票号），或者不说（原因）。排着的同时只有一条：更要紧的换掉等着的那条。
+    /// 来了一条要说的（新的推送）：排上（票号），或者不说（原因）。排着的同时只有一条：更要紧的换掉等着的那条。
     pub fn offer(&mut self, priority: PushPriority, now: Instant) -> Result<u64, &'static str> {
-        if let Some((said, at)) = self.last {
+        self.queue(priority, now, false)
+    }
+
+    /// 同一条推送的更新要说（同一个插件、同一个 key，说法变了）：和 [`VoiceArbiter::offer`] 一样排，只是不看冷却。
+    pub fn offer_update(
+        &mut self,
+        priority: PushPriority,
+        now: Instant,
+    ) -> Result<u64, &'static str> {
+        self.queue(priority, now, true)
+    }
+
+    fn queue(
+        &mut self,
+        priority: PushPriority,
+        now: Instant,
+        update: bool,
+    ) -> Result<u64, &'static str> {
+        if let Some((said, at)) = self.last.filter(|_| !update) {
             if now.saturating_duration_since(at) < COOLDOWN && priority <= said {
                 return Err(COOLED);
             }
@@ -183,6 +204,44 @@ mod tests {
         // 冷却按最近说的那句（高级）算：普通的、高级的都要等 20 秒
         assert_eq!(a.offer(Normal, t + 5_000 * MS), Err(COOLED));
         assert_eq!(a.offer(High, t + 5_000 * MS), Err(COOLED));
+    }
+
+    /// 同一条推送的更新（三选一刷新以后首选变了）冷却里也说；但不打断正在说的那句、照样 5 秒过时，说出口以后重新开始冷却
+    /// （别的推送照样要等）。
+    #[test]
+    fn an_update_of_the_same_push_speaks_inside_the_cooldown() {
+        let t = Instant::now();
+        let mut a = VoiceArbiter::default();
+        let first = a.offer(High, t).unwrap();
+        assert_eq!(a.poll(first, t + GATHER), Verdict::Speak);
+        a.finished(first, true);
+        // 3 秒后刷新了，首选变了：新的推送不说，同一条的更新说
+        assert_eq!(a.offer(High, t + 3_000 * MS), Err(COOLED));
+        let update = a.offer_update(High, t + 3_000 * MS).unwrap();
+        assert_eq!(a.poll(update, t + 3_000 * MS + GATHER), Verdict::Speak);
+        // 正在说这一句时又刷新了一次：不打断，等它说完
+        let again = a.offer_update(High, t + 3_500 * MS).unwrap();
+        assert_eq!(a.poll(again, t + 4_000 * MS), Verdict::Wait);
+        a.finished(update, true);
+        assert_eq!(a.poll(again, t + 4_100 * MS), Verdict::Speak);
+        a.finished(again, true);
+        // 冷却从刚才那句重新算：别的推送（同级、低级）20 秒内不说
+        assert_eq!(a.offer(High, t + 20_000 * MS), Err(COOLED));
+        assert_eq!(a.offer(Normal, t + 20_000 * MS), Err(COOLED));
+        assert!(a.offer(High, t + 4_100 * MS + COOLDOWN).is_ok());
+        // 更新照样 5 秒过时（另一条推送的语音一直在说）
+        let mut a = VoiceArbiter::default();
+        let long = a.offer(Normal, t).unwrap();
+        assert_eq!(a.poll(long, t + GATHER), Verdict::Speak);
+        let late = a.offer_update(Normal, t + 1_000 * MS).unwrap();
+        assert_eq!(a.poll(late, t + 5_900 * MS), Verdict::Wait);
+        assert_eq!(a.poll(late, t + 6_000 * MS), Verdict::Drop(TOO_LATE));
+        // 同一时刻已经有更要紧的在等：更新也不排（同一时刻只说最要紧的一句）
+        a.finished(long, true);
+        let mut a = VoiceArbiter::default();
+        let high = a.offer(High, t).unwrap();
+        assert_eq!(a.offer_update(Normal, t + 50 * MS), Err(OUTRANKED));
+        assert_eq!(a.poll(high, t + GATHER), Verdict::Speak);
     }
 
     /// 排了 5 秒还没轮到（另一条推送的语音一直在说）就不说了；没说出来的不占冷却。

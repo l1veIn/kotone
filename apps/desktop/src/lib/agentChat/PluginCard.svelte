@@ -3,6 +3,7 @@
   // 是她查的那一刻的样子（只读）；点一下在右侧栏打开完整页面，旁边接着和她聊。
   // 插件做成 MCP App 的页面（ADR 039 D5）：卡片里是同一个 App（inline，进入可视区才加载），点头上一行打开完整页面；
   // App 里能点，所以卡片本身不整块当按钮。
+  // 悬浮窗的小窗里（ADR 043 D6）没有右侧栏：给了 `onOpen` 就交给它（打开 Kotone、定位到这张卡片）。
   import { Maximize2 } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
   import type { ToolDisplay } from "../agent";
@@ -10,13 +11,14 @@
   import { viewOf } from "../pluginUi";
   import { openPluginPage } from "../stores/pluginPages";
 
-  let { display }: { display: ToolDisplay } = $props();
+  let { display, onOpen }: { display: ToolDisplay; onOpen?: () => void } = $props();
   const uri = $derived(display.ui.uri);
   const found = $derived(viewOf(uri));
   const params = $derived((display.ui.params ?? {}) as Record<string, unknown>);
 
   function open() {
-    openPluginPage(uri, params, display.structuredContent ?? null);
+    if (onOpen) onOpen();
+    else openPluginPage(uri, params, display.structuredContent ?? null);
   }
 </script>
 
@@ -30,7 +32,7 @@
     </button>
     <div data-testid="plugin-card-body">
       <PluginView {uri} {params} data={display.structuredContent ?? null} compact onFullscreen={open}
-        onOpen={(next, nextParams) => openPluginPage(next, nextParams ?? {}, null)} />
+        onOpen={(next, nextParams) => (onOpen ? onOpen() : openPluginPage(next, nextParams ?? {}, null))} />
     </div>
   </div>
 {:else if found?.view.card}

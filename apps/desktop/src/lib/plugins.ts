@@ -65,7 +65,6 @@ export interface PluginManifest {
   enabledByDefault: boolean;
   sources: PluginSourceSpec[];
   pages: PluginPageSpec[];
-  overlays: PluginPageSpec[];
   agent: { overview: string; rule: string };
   /** 带适配器的插件登记的游戏事件（没有 = 不登记）。 */
   events?: PluginEventSpec[];
@@ -172,7 +171,8 @@ export async function setPluginSource(id: string, source: string, enabled: boole
 export function pushSwitch(settings: Settings | null | undefined, manifest: PluginManifest, push: PluginPushSpec): boolean {
   const own = configOf(settings, manifest.id).pushes?.[push.id];
   if (own !== undefined) return own;
-  if (settings?.agent?.autoCards?.enabled === false && push.forms.includes("card")) return false;
+  // 旧的总开关只管只有卡片的推送（rc.9 的自动卡片）；还有一行、语音的（海斗三选一）不受它管
+  if (settings?.agent?.autoCards?.enabled === false && push.forms.every((form) => form === "card")) return false;
   return push.enabledByDefault;
 }
 

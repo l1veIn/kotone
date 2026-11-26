@@ -225,7 +225,7 @@ pub fn degrade<R: tauri::Runtime>(app: &AppHandle<R>, code: &'static str) {
     }
     manager.revision.fetch_add(1, Ordering::SeqCst);
     *manager.reason.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some("悬浮窗显示异常，已自动关闭。语音输入仍可使用。".into());
+        Some("输入条显示异常，已自动关闭。语音输入仍可使用。".into());
     // Always leave the COM callback before logging, saving or destroying.
     let app = app.clone();
     std::thread::spawn(move || {

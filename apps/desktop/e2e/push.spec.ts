@@ -3,10 +3,11 @@ import { fileURLToPath } from "node:url";
 import { openPlugin, openSettingsTab } from "./nav";
 import { screenshot } from "./screenshot.cjs";
 
-// 推送（ADR 043 D3–D5；以前叫自动卡片，ADR 039 D3）和消息提示（ADR 039 D4）：用 @tauri-apps/api/mocks 模拟 agent_* 命令和
+// 推送（ADR 043 D3–D5；以前叫自动卡片，ADR 039 D3）：用 @tauri-apps/api/mocks 模拟 agent_* 命令和
 // kotone://agent-event、kotone://push 事件，不接任何 AI。插件的命令（plugins_list、plugin_app……）交给浏览器预览的 pluginsMock，
 // 英雄联盟的卡片是真的 MCP App（vite.config.ts 的 mcpAppsDevServer 给，test:e2e 先打包）。
 // 后端怎么存、什么时候追加给她的那句、原地更新怎么等正在跑的那一轮，由 Rust 单元测试（kotone-agent push、桌面端 when_free / turn）管。
+// 悬浮窗（推送的一行、小窗；原来的消息提示）在 floating.spec.ts。
 
 interface Bridge {
   calls: { command: string; args?: Record<string, unknown> }[];
@@ -22,7 +23,6 @@ interface Bridge {
 declare global {
   interface Window {
     pushTest: Bridge;
-    messagePopupTest?: { popup: unknown; opened: number[]; closed: number[] };
   }
 }
 
@@ -273,7 +273,7 @@ test("a line push and a voice push are a small text row in the chat, updated in 
   await expect(page.getByTestId("push-item")).toHaveCount(2);
 });
 
-test("clicking the message pop-up opens the chat at the pushed card", async ({ page }) => {
+test("clicking a card in the floating window opens the chat at the pushed card", async ({ page }) => {
   await open(page);
   // 玩家在别的页面（交互设置）
   await openSettingsTab(page, "reply");
@@ -285,14 +285,14 @@ test("clicking the message pop-up opens the chat at the pushed card", async ({ p
   await expect(card).toHaveClass(/flashing/);
 });
 
-test("交互 has no master switch any more: only 推送时弹出消息提示, which still writes agent.autoCards.popup", async ({ page }) => {
+test("交互 has no master switch any more: only 推送时弹出小窗 (in 悬浮窗), which still writes agent.autoCards.popup", async ({ page }) => {
   await open(page);
   await openSettingsTab(page, "reply");
-  await expect(page.getByTestId("push-settings")).toBeVisible();
+  await expect(page.getByTestId("bubble-settings")).toBeVisible();
   await expect(page.getByTestId("auto-cards-enabled")).toHaveCount(0);
   await expect(page.getByTestId("auto-card-settings")).toHaveCount(0);
   await expect(page.getByTestId("push-popup")).toBeChecked();
-  await page.locator("#settings-reply-pushes").scrollIntoViewIfNeeded();
+  await page.locator("#settings-reply-bubble").scrollIntoViewIfNeeded();
   await screenshot(page, { path: shot("settings-push-popup") });
   await page.getByTestId("push-popup").click();
   await expect(page.getByTestId("push-popup")).not.toBeChecked();
@@ -345,26 +345,4 @@ test("the plugin page lists its pushes under 设置 → 推送, one switch each,
   await page.getByTestId("plugin-lol-enabled").click();
   await expect(page.getByTestId("plugin-lol-push-summary")).toBeDisabled();
   await expect(page.getByTestId("plugin-lol-push-opening")).not.toBeChecked();
-});
-
-test("the message pop-up window: avatar, name · plugin, one line; click opens, × only closes", async ({ page }) => {
-  await page.setViewportSize({ width: 344, height: 104 });
-  await page.goto("/#/message-popup");
-  const popup = page.getByTestId("message-popup");
-  await expect(popup).toBeVisible();
-  await expect(page.getByTestId("message-popup-who")).toHaveText("琴音 · 英雄联盟");
-  await expect(page.getByTestId("message-popup-text")).toHaveText("对面的战绩到了");
-  const box = await popup.boundingBox();
-  expect(Math.round(box?.width ?? 0)).toBe(320);
-  expect(Math.round(box?.height ?? 0)).toBe(72);
-  // 鼠标停在上面：× 出来；点 × 只关掉
-  await popup.hover();
-  await page.getByTestId("message-popup-close").click();
-  await expect.poll(() => page.evaluate(() => window.messagePopupTest?.closed)).toEqual([1]);
-  await expect.poll(() => page.evaluate(() => window.messagePopupTest?.opened)).toEqual([]);
-  await expect(popup).toHaveCount(0);
-  // 再来一条，点它：打开聊天
-  await page.reload();
-  await page.getByTestId("message-popup").click();
-  await expect.poll(() => page.evaluate(() => window.messagePopupTest?.opened)).toEqual([1]);
 });

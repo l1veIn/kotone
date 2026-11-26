@@ -3,9 +3,7 @@
   import Overlay from "./routes/overlay/Overlay.svelte";
   import Settings from "./routes/settings/Settings.svelte";
   import Danmaku from "./routes/danmaku/Danmaku.svelte";
-  import Companion from "./routes/companion/Companion.svelte";
-  import PluginOverlay from "./routes/pluginOverlay/PluginOverlay.svelte";
-  import MessagePopup from "./routes/messagePopup/MessagePopup.svelte";
+  import Floating from "./routes/floating/Floating.svelte";
   import { initStateListeners } from "./lib/stores/state";
 
   // 订阅 Rust 侧 kotone:// 事件（浏览器环境下为 no-op）
@@ -41,14 +39,9 @@
   <Overlay />
 {:else if view === "danmaku"}
   <Danmaku />
-{:else if view === "companion"}
-  <Companion />
-{:else if view === "plugin-overlay"}
-  <!-- 游戏上方的覆盖层（ADR 038）：插件的覆盖层页面 -->
-  <PluginOverlay />
-{:else if view === "message-popup"}
-  <!-- 消息提示（ADR 039 D4）：发自动卡片时右下角的小窗 -->
-  <MessagePopup />
+{:else if view === "floating"}
+  <!-- 悬浮窗（ADR 043 D6）：她的气泡、推送的一行和小窗（原来的说话气泡和消息提示并进了它） -->
+  <Floating />
 {:else}
   <!-- 默认渲染设置视图（含 #/settings 与空 hash，便于纯浏览器开发预览） -->
   <Settings />

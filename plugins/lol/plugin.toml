@@ -69,6 +69,17 @@ uri = "ui://kotone/lol/tier"
 title = "强度榜"
 needs = ["stats"]
 
+# 只在推送里出现的两张卡片（ADR 043 D7）：选英雄（原来的选英雄覆盖层，地址沿用）、问要不要下载海克斯三选一要的本地文字识别模型
+[[pages]]
+uri = "ui://kotone/lol/champ-select"
+title = "选英雄"
+needs = ["stats"]
+
+[[pages]]
+uri = "ui://kotone/lol/augment-ocr"
+title = "文字识别模型"
+needs = ["stats"]
+
 [[pages]]
 uri = "ui://kotone/lol/settings"
 title = "设置"
@@ -130,15 +141,24 @@ what = "发一张这局总结的卡片（单局详情），给她留一句很短
 forms = ["card"]
 needs = ["client"]
 
-# 覆盖层（照 aramhex）：选英雄时的胜率、海斗三选一时贴在卡片上的海克斯评分
-[[overlays]]
-uri = "ui://kotone/lol/champ-select"
+# 原来的两个覆盖层（ADR 043 D7）：选英雄时的胜率、海斗三选一的海克斯评分，改成推送
+[[pushes]]
+id = "champ-select"
 title = "选英雄"
+when = "选英雄时，开始和每次换英雄、重随"
+what = "发一张卡片：海斗是我方 5 人的评级和胜率、备选席里比你现在高的，峡谷是每个人这个位置的强度；同一次选英雄原地更新，结束时给她留一句很短的说明"
+forms = ["card"]
 needs = ["client", "stats"]
 
-[[overlays]]
-uri = "ui://kotone/lol/augment-scores"
-title = "海克斯评分"
+[[pushes]]
+id = "augment-pick"
+title = "海克斯三选一"
+when = "海斗对局里三选一出现、每次刷新"
+what = "一行三格，左 / 中 / 右各一个判断：首选 / 可选 / 可刷新（照 AramHex 的规则）；卡片刚出现、最好的那张变了时她说一句“中间那个”。要用本地文字识别：没装时问一句要不要下载"
+forms = ["line", "voice", "card"]
+# 那一行在悬浮窗里一直留到三张卡片没了（Host::push_done），不是几秒就收起
+until_done = true
+priority = "high"
 needs = ["stats"]
 
 # 游戏中心的事（ADR 036 D4）：lol 适配器报给游戏中心的局内事件，自动化按它们触发、保存时按这里校验，

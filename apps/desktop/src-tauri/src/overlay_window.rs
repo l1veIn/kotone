@@ -409,10 +409,10 @@ pub(crate) fn save_overlay_position(
 ) -> Result<Settings, String> {
     let win = app
         .get_webview_window("overlay")
-        .ok_or_else(|| "悬浮窗不存在".to_string())?;
+        .ok_or_else(|| "输入条不存在".to_string())?;
     let position = win
         .outer_position()
-        .map_err(|e| format!("读取悬浮窗位置失败: {e}"))?;
+        .map_err(|e| format!("读取输入条位置失败: {e}"))?;
     let updated = state.settings_repository.update(|next| {
         next.overlay.position = OverlayPosition::Custom;
         next.overlay.custom_x = Some(position.x);
@@ -464,7 +464,7 @@ pub(crate) fn drag_overlay(app: AppHandle) -> Result<(), String> {
         static DRAGGING: AtomicBool = AtomicBool::new(false);
         let win = app
             .get_webview_window("overlay")
-            .ok_or_else(|| "悬浮窗不存在".to_string())?;
+            .ok_or_else(|| "输入条不存在".to_string())?;
         let hwnd = win.hwnd().map_err(|e| e.to_string())?.0 as isize;
         if DRAGGING.swap(true, Ordering::SeqCst) {
             return Ok(());

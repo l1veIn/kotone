@@ -64,11 +64,11 @@ const ADVANCED_ANCHORS: Record<string, Record<string, string>> = {
 const COMPANION_ANCHORS: Record<string, Record<string, string>> = {
   call: { "呼叫键": "settings-call-hotkey", "语音唤醒": "settings-call-wake", "快捷指令": "companion-title", "通话": "settings-call-hotkey" },
   reply: {
-    "气泡": "settings-reply-bubble", "声音与弹幕": "settings-reply-output", "回答方式": "settings-reply-output",
-    "推送": "settings-reply-pushes", "消息提示": "settings-reply-pushes",
+    "悬浮窗": "settings-reply-bubble", "声音与弹幕": "settings-reply-output", "回答方式": "settings-reply-output",
     "她用的模型": CHAT_MODEL_ANCHOR,
-    // 旧写法（术语表 v2 之前的小节名；以前的对话里还引用着）
-    "AI 连接": CHAT_MODEL_ANCHOR, "对话气泡": "settings-reply-bubble", "自动卡片": "settings-reply-pushes",
+    // 旧写法（以前的小节名；以前的对话里还引用着）：气泡、推送、消息提示都并进了悬浮窗（ADR 043 D6）
+    "气泡": "settings-reply-bubble", "推送": "settings-reply-bubble", "消息提示": "settings-reply-bubble",
+    "AI 连接": CHAT_MODEL_ANCHOR, "对话气泡": "settings-reply-bubble", "自动卡片": "settings-reply-bubble",
   },
 };
 /** 原来「设置 → 她怎么回答」里“她用的模型”那一组的锚点（旧的跳转请求里还有）。 */
@@ -92,7 +92,9 @@ export function normalizeTarget(target: PageTarget): PageTarget {
 /** 「语音输入」（插件的 App）的分页与分组。 */
 const VOICE_TABS: Record<string, VoiceInputPage> = { "输入": "general", "文字处理": "processing", "历史": "history", "历史记录": "history" };
 const VOICE_ANCHORS: Record<string, string> = {
-  "其他热键": "voice-hotkeys", "悬浮窗": "voice-overlay", "交互模式": "voice-mode", "热键": "voice-hotkey",
+  "其他热键": "voice-hotkeys", "输入条": "voice-overlay", "交互模式": "voice-mode", "热键": "voice-hotkey",
+  // 输入条以前叫悬浮窗（ADR 043 D6 起悬浮窗指她的那个窗口）：以前的对话里还引用着
+  "悬浮窗": "voice-overlay",
 };
 /** 语音识别归本体（交接第十一节第 6 条）：换模型、启动 / 停止、启动热键、自动启动都在「设置 → 模型 → 语音识别」。
  * 旧位置「语音输入 → 输入 → 语音识别」（以前的对话里引用着）也跳到这里，不落在语音输入页那张只读的卡片上。 */
@@ -167,7 +169,7 @@ function parseOne(where: string): PageTarget | null {
       return companionTarget(group?.tab ?? "call", group?.anchor);
     }
     if (second === "交流") return companionTarget("call", "settings-call-hotkey");
-    // 「琴音 → 唤醒 → 呼叫键」「琴音 → 交互 → 气泡」「琴音 → 记忆」
+    // 「琴音 → 唤醒 → 呼叫键」「琴音 → 交互 → 悬浮窗」「琴音 → 记忆」
     const section = ROLE_TABS[second ?? "角色"] ?? "identity";
     if (isCompanionSection(section)) return companionTarget(section, third ? COMPANION_ANCHORS[section]?.[third] : undefined);
     return { page: "assistant", section };
@@ -182,7 +184,7 @@ function parseOne(where: string): PageTarget | null {
   if (first === "插件") {
     // 「插件 → 英雄联盟 / 游戏语音」：取第一个认得出的
     const id = second?.split("/").map((name) => PLUGIN_NAMES[name.trim()]).find(Boolean);
-    // 「插件 → 语音输入 → 文字处理 / 悬浮窗」：App 里的分页和分组
+    // 「插件 → 语音输入 → 文字处理 / 输入条」：App 里的分页和分组
     if (id === "voice-input" && third) return voiceTarget(third, parts[3]);
     return id ? { page: "plugin", id } : { page: "plugins" };
   }

@@ -379,13 +379,25 @@ export interface AgentConfig {
 /** 语音唤醒设置（config.json `assistant.wake`）。 */
 export type BubbleCorner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
 
+/** 悬浮窗（ADR 043 D6；字段名是只有对话气泡时起的，`assistant.bubble`）。 */
 export interface BubbleConfig {
+  /** 显示悬浮窗 */
   enabled: boolean;
+  /** 没拖过时贴着哪个角 */
   corner: BubbleCorner;
-  /** 离屏幕上下边缘再挪开多少逻辑像素（0–800） */
+  /** 没拖过时离屏幕上下边缘再挪开多少逻辑像素（0–800） */
   offsetY: number;
   /** 回答同时用弹幕 */
   alsoDanmaku: boolean;
+  /** 玩家拖到的位置（后端拖完写；没拖过没有这一项，null = 位置还原） */
+  position?: FloatingPosition | null;
+}
+
+/** 悬浮窗拖到的位置：窗口的 `corner` 那个角贴在工作区里的 (x, y)，单位是工作区宽 / 高的万分之一。 */
+export interface FloatingPosition {
+  corner: BubbleCorner;
+  x: number;
+  y: number;
 }
 
 export interface WakeConfig {

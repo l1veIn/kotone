@@ -1,4 +1,4 @@
-//! 覆盖层的两条判断规则，照 [AramHex](https://github.com/czgreat/aramhex)（MIT，Copyright (c) 2026 czgreat；
+//! 选英雄卡片和海克斯三选一的两条判断规则，照 [AramHex](https://github.com/czgreat/aramhex)（MIT，Copyright (c) 2026 czgreat；
 //! 读的是 `main` 分支 `17ef65cd`，2026-11-20）移植，许可证全文在 `licenses/aramhex-MIT.txt`：
 //!
 //! - **评级 S–D**（`lolhex/engine.py` 的 `GRADES`、`rank_grade`、`hero_brief`）：按国服胜率排名，前 10% S、30% A、
@@ -91,7 +91,7 @@ pub enum Thin {
     TooFew,
 }
 
-/// 三选一里一张卡片的结果（给覆盖层页面）。
+/// 三选一里一张卡片的结果。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardVerdict {
@@ -111,6 +111,25 @@ pub struct CardVerdict {
     /// 本英雄不到 1000 局。
     pub sample_warning: bool,
     pub thin: Option<Thin>,
+}
+
+impl CardVerdict {
+    /// 判断用的分（比英雄平均高几个百分点；这个英雄几乎不拿的按 −3 算）；无数据时 None。
+    pub fn value(&self) -> Option<f64> {
+        self.score
+            .map(|s| s.delta)
+            .or(self.rare.then_some(RARE_SCORE))
+    }
+}
+
+/// 这几张都不好（“都可以刷新”）：首选的分也比英雄平均低 0.5 个点以上（别的照规则都是可考虑刷新）。AramHex 这时还是
+/// 标一个首选（非要选就拿它），这里只多认出这种情况，好让她说“都一般，可以刷新”。都没有数据时不算。
+pub fn all_weak(cards: &[CardVerdict]) -> bool {
+    cards
+        .iter()
+        .find(|c| c.verdict == Verdict::Best)
+        .and_then(CardVerdict::value)
+        .is_some_and(|v| v < REROLL_BELOW)
 }
 
 /// 这个英雄同稀有度里按平滑后的胜率排名（一样高的名次相同）：海克斯 → (名次, 一共几个)。
@@ -359,10 +378,15 @@ mod tests {
         let d = dataset(json!({"39": {
             "1": {"games": 20000, "wins": 9000}, "2": {"games": 20000, "wins": 9400}, "3": {"games": 20000, "wins": 9200}
         }}));
+        let weak = evaluate(&d, 39, &[1, 2, 3]);
         assert_eq!(
-            verdicts(&evaluate(&d, 39, &[1, 2, 3])),
+            verdicts(&weak),
             [Verdict::Reroll, Verdict::Best, Verdict::Reroll]
         );
+        // 首选也比平均低 0.5 个点以上：都不好（她说“都一般，可以刷新”）；上面那几组有好的，不算
+        assert!(all_weak(&weak));
+        assert!(!all_weak(&cards));
+        assert!(!all_weak(&evaluate(&d, 999, &[1, 2])), "都没数据不算");
     }
 
     #[test]

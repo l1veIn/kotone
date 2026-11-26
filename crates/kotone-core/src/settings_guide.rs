@@ -121,12 +121,12 @@ pub const FIELDS: &[Field] = &[
     f("postProcessing.enabled", "文字处理开关", "插件 → 语音输入 → 文字处理", "语音输入的识别结果发送前是否经过文字处理（屏蔽词、润色、翻译等）。", NONE, NOW),
     f("postProcessing.activePipelineId", "当前文字处理方案", "插件 → 语音输入 → 文字处理", "方案 ID（见 postProcessing.pipelines）。", NONE, NOW),
     f("postProcessing.pipelines", "文字处理方案列表", "插件 → 语音输入 → 文字处理", "整组替换；处理器用 postprocess.processors 查，可用 postprocess.test 试。", NONE, NOW),
-    // ---- 悬浮窗与声音 ----
-    f("overlay.visibility", "悬浮窗显示", "插件 → 语音输入 → 悬浮窗", "说话时显示识别中的文字。", &[("always", "一直显示"), ("on_demand", "说话时显示"), ("never", "不显示")], NOW),
-    f("overlay.style", "悬浮窗样式", "插件 → 语音输入 → 悬浮窗", "", &[("capsule", "胶囊"), ("card", "卡片")], NOW),
-    f("overlay.position", "悬浮窗位置", "插件 → 语音输入 → 悬浮窗", "custom 时用 overlay.customX / customY（像素）。", &[("auto", "智能"), ("top_left", "左上"), ("top_center", "上方居中"), ("top_right", "右上"), ("center", "正中"), ("bottom_left", "左下"), ("bottom_center", "下方居中"), ("bottom_right", "右下"), ("custom", "自定义")], NOW),
-    f("overlay.draggable", "悬浮窗可拖动", "插件 → 语音输入 → 悬浮窗", "", NONE, NOW),
-    f("overlay.clickThrough", "悬浮窗点击穿透", "插件 → 语音输入 → 悬浮窗", "true 时鼠标点击穿过悬浮窗，不影响游戏。", NONE, NOW),
+    // ---- 语音输入的输入条（以前叫悬浮窗；悬浮窗现在是 assistant.bubble 那个，ADR 043 D6）与声音 ----
+    f("overlay.visibility", "输入条显示", "插件 → 语音输入 → 输入条", "语音输入说话时显示识别中的文字。", &[("always", "一直显示"), ("on_demand", "说话时显示"), ("never", "不显示")], NOW),
+    f("overlay.style", "输入条样式", "插件 → 语音输入 → 输入条", "", &[("capsule", "胶囊"), ("card", "卡片")], NOW),
+    f("overlay.position", "输入条位置", "插件 → 语音输入 → 输入条", "custom 时用 overlay.customX / customY（像素）。", &[("auto", "智能"), ("top_left", "左上"), ("top_center", "上方居中"), ("top_right", "右上"), ("center", "正中"), ("bottom_left", "左下"), ("bottom_center", "下方居中"), ("bottom_right", "右下"), ("custom", "自定义")], NOW),
+    f("overlay.draggable", "输入条可拖动", "插件 → 语音输入 → 输入条", "", NONE, NOW),
+    f("overlay.clickThrough", "输入条点击穿透", "插件 → 语音输入 → 输入条", "true 时鼠标点击穿过输入条，不影响游戏。", NONE, NOW),
     f("soundFeedback.record.enabled", "开始录音提示音", "设置 → 声音", "", NONE, NOW),
     f("soundFeedback.record.volume", "开始录音提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.record.soundId", "开始录音提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
@@ -134,8 +134,8 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
     // ---- 游戏陪玩（角色 / Agent）：呼叫 = 呼叫键、唤醒词、聊天页的呼叫按钮 ----
-    f("assistant.hotkey", "呼叫键", "设置 → 热键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在气泡里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
-    f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "设置 → 热键", "仅 0.1.x 升级用户启用琴音后使用；按一下在气泡里听，说完自动交给她。", NONE, NOW),
+    f("assistant.hotkey", "呼叫键", "设置 → 热键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在悬浮窗里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
+    f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "设置 → 热键", "仅 0.1.x 升级用户启用琴音后使用；按一下在悬浮窗里听，说完自动交给她。", NONE, NOW),
     f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手；呼叫键固定为说完自动提交）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
     f("assistant.connectionId", "API 连接", "聊天页 → 她用的模型，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
     f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "聊天页 → 她用的模型", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
@@ -168,41 +168,49 @@ pub const FIELDS: &[Field] = &[
     ),
     f(
         "assistant.bubble.enabled",
-        "气泡",
-        "琴音 → 交互 → 气泡",
-        "呼叫她时，在屏幕角落用气泡显示她在听、在想、在说什么（鼠标会直接穿过去，不挡游戏）。气泡只属于她，悬浮窗只属于语音输入：关掉气泡后只用语音和弹幕回答，不会借用语音输入的悬浮窗。",
+        "显示悬浮窗",
+        "琴音 → 交互 → 悬浮窗",
+        "游戏所在屏幕上的悬浮窗（ADR 043 D6）：气泡一行字显示她在听、在想、在说什么，或插件推送的一行；插件推送卡片时弹出小窗。不抢游戏的焦点，能关（×）、能拖，拖到哪里下次就在哪里；游戏独占全屏时不显示。关掉后只用语音和弹幕回答，推送照样记进聊天；不会借用语音输入的输入条。",
         NONE,
         NOW,
     ),
     f(
         "assistant.bubble.corner",
-        "气泡位置",
-        "琴音 → 交互 → 气泡",
-        "放在游戏所在屏幕的哪个角。",
+        "悬浮窗在哪个角",
+        "琴音 → 交互 → 悬浮窗",
+        "没拖过时放在游戏所在屏幕的哪个角（拖过就用 assistant.bubble.position）。",
         &[("bottom-right", "右下角"), ("bottom-left", "左下角"), ("top-right", "右上角"), ("top-left", "左上角")],
         NOW,
     ),
     f(
         "assistant.bubble.offsetY",
-        "气泡离边缘的距离",
-        "琴音 → 交互 → 气泡",
-        "逻辑像素，0–800；往屏幕中间挪开一点，避开小地图等。",
+        "悬浮窗离边缘的距离",
+        "琴音 → 交互 → 悬浮窗",
+        "逻辑像素，0–800；没拖过时往屏幕中间挪开一点，避开小地图等。",
+        NONE,
+        NOW,
+    ),
+    f(
+        "assistant.bubble.position",
+        "悬浮窗拖到的位置",
+        "琴音 → 交互 → 悬浮窗",
+        "玩家拖动悬浮窗后记下的位置：{corner, x, y}，窗口的 corner 那个角贴在工作区的 (x, y)，x / y 是工作区宽 / 高的万分之一（0–10000），换一块屏幕照样用。null（缺省）= 没拖过，摆在 corner 上；“位置还原”就是改回 null。",
         NONE,
         NOW,
     ),
     f(
         "assistant.bubble.alsoDanmaku",
         "回答同时用弹幕",
-        "琴音 → 交互 → 气泡",
-        "默认只在气泡里显示回答；打开后同时滚动弹幕。",
+        "琴音 → 交互 → 悬浮窗",
+        "默认只在悬浮窗的气泡里显示回答；打开后同时滚动弹幕。",
         NONE,
         NOW,
     ),
     f(
         "agent.autoCards.popup",
-        "推送时弹出消息提示",
-        "琴音 → 交互 → 推送",
-        "true（默认）：插件推送卡片时屏幕右下角弹一个小窗（她的头像 + 一句话，点它打开聊天、定位到那张卡片），不抢焦点，6 秒后自己消失；游戏独占全屏、Kotone 窗口在前台时不弹。关了推送照发。每条推送自己的开关在 plugins.<插件 id>.pushes 里。",
+        "推送时弹出小窗",
+        "琴音 → 交互 → 悬浮窗",
+        "true（默认）：插件推送卡片时（或插件提醒再看一次时），悬浮窗弹出小窗，里面是这段对话里的推送（和聊天里同一种卡片，新的在下面，滚轮往回翻），点卡片上面那一行打开 Kotone、定位到它；不抢焦点，鼠标移开 8 秒后收起；游戏独占全屏、Kotone 窗口在前台时不弹。要先开着 assistant.bubble.enabled（显示悬浮窗）。关了推送照发、照样记进聊天。每条推送自己的开关在 plugins.<插件 id>.pushes 里。",
         NONE,
         NOW,
     ),
@@ -265,7 +273,7 @@ pub const FIELDS: &[Field] = &[
     f("agent.safetyCheck", "DeepSeek 内容审核", "琴音 → 权限", "true（默认）：用 DeepSeek 时请求带 safety_check，审核没通过的回答会撤回并说明；审核不另收费。只对 DeepSeek 生效。", NONE, NOW),
     f("agent.gameEffort", "通话里的思考强度", "琴音 → 权限", "只对 DeepSeek 生效。通话里空 = 不思考（ADR 029：开着思考实测一句回答要多等十几秒）；玩家明确选了 low / high / max 才思考。", GAME_EFFORTS, NOW),
     f("agent.chatEffort", "聊天窗口里的思考强度", "琴音 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
-    f("plugins.*", "插件", "插件", "插件在左侧栏的“插件”里：每个插件一张卡片（一个独立的 App），卡片上有开关，点开是它自己的界面。按插件 id 一份：enabled（插件开关，true / false；没写按插件的默认）、sources.<开关 id>（插件里的数据开关，没写按默认）、settings（插件自己的设置）。pushes.<推送 id>（插件的内置推送，插件页「设置 → 推送」里每条一个开关：插件在游戏里的这些时候自己发来卡片、一行字或一句话，不叫你、不花钱，全都记进聊天；没写按插件的默认；内容不能改，想换说法或时机就建一个自动化）。现有插件：lol（英雄联盟，默认开；推送 pushes.opening 开局战绩：进加载时发一张双方战绩的卡片，pushes.summary 这局总结：结算时发一张这局总结的卡片，都默认开、要 sources.client；sources.client 读客户端数据：读英雄联盟客户端和局内的本地接口（只读），查这局玩家的战绩和突破口、记对面交的召唤师技能，默认开；国服用这类功能可能违反腾讯的用户协议，风险由玩家自己决定）；game-voice（游戏语音，默认关：开着就把玩家的麦克风和你“说给队友”的话一起转进虚拟麦克风 VB-CABLE，游戏里的麦克风选 CABLE Output 队友就能听到；Kotone 没运行时队友听不到玩家。settings.includeMic 混入玩家自己的麦克风，默认 true；settings.micDeviceId 玩家的麦克风，设备名，用 audio.devices 查，default = 系统默认录音设备，不能选 CABLE Output；settings.micGain 音量百分比 0–400，默认 100；previousDefaultMic / previousCommunicationsMic 由 voice_chat.default_mic 自动记，不要改）；music（网易云音乐，默认开：网易云的歌由 Kotone 自己放；settings.quality 音质：exhigh（默认，极高 320k，没有网易云 VIP 时最高就是这个）、standard（标准，省流量）、lossless（无损，要网易云 VIP）；settings.volume 音乐音量 0–100，默认 70，她说话时音乐会自动压低、说完恢复，不用为这个改音量）。关掉插件或它的数据开关，它的页面、给你的工具、它的游戏事件都跟着没了；你的工具清单从下一段对话起变。", NONE, NOW),
+    f("plugins.*", "插件", "插件", "插件在左侧栏的“插件”里：每个插件一张卡片（一个独立的 App），卡片上有开关，点开是它自己的界面。按插件 id 一份：enabled（插件开关，true / false；没写按插件的默认）、sources.<开关 id>（插件里的数据开关，没写按默认）、settings（插件自己的设置）。pushes.<推送 id>（插件的内置推送，插件页「设置 → 推送」里每条一个开关：插件在游戏里的这些时候自己发来卡片、一行字或一句话，不叫你、不花钱，全都记进聊天；没写按插件的默认；内容不能改，想换说法或时机就建一个自动化）。现有插件：lol（英雄联盟，默认开；推送 pushes.opening 开局战绩：进加载时发一张双方战绩的卡片，pushes.summary 这局总结：结算时发一张这局总结的卡片，都默认开、要 sources.client；pushes.champ-select 选英雄：选英雄时发一张卡片（海斗是我方的评级和胜率、备选席里比玩家现在高的，峡谷是每个人这个位置的强度），换英雄时原地更新，要 sources.client 和 sources.stats；pushes.augment-pick 海克斯三选一：海斗三选一时一行三格（左 / 中 / 右：首选 / 可选 / 可刷新）、你说一句“中间那个”，固定用本地文字识别（没装时问玩家要不要下载），要 sources.stats，都默认开；sources.client 读客户端数据：读英雄联盟客户端和局内的本地接口（只读），查这局玩家的战绩和突破口、记对面交的召唤师技能，默认开；国服用这类功能可能违反腾讯的用户协议，风险由玩家自己决定）；game-voice（游戏语音，默认关：开着就把玩家的麦克风和你“说给队友”的话一起转进虚拟麦克风 VB-CABLE，游戏里的麦克风选 CABLE Output 队友就能听到；Kotone 没运行时队友听不到玩家。settings.includeMic 混入玩家自己的麦克风，默认 true；settings.micDeviceId 玩家的麦克风，设备名，用 audio.devices 查，default = 系统默认录音设备，不能选 CABLE Output；settings.micGain 音量百分比 0–400，默认 100；previousDefaultMic / previousCommunicationsMic 由 voice_chat.default_mic 自动记，不要改）；music（网易云音乐，默认开：网易云的歌由 Kotone 自己放；settings.quality 音质：exhigh（默认，极高 320k，没有网易云 VIP 时最高就是这个）、standard（标准，省流量）、lossless（无损，要网易云 VIP）；settings.volume 音乐音量 0–100，默认 70，她说话时音乐会自动压低、说完恢复，不用为这个改音量）。关掉插件或它的数据开关，它的页面、给你的工具、它的游戏事件都跟着没了；你的工具清单从下一段对话起变。", NONE, NOW),
     f("ui.sidebar.order", "左侧栏页面的顺序", "左侧栏 → ⋯", "页面 id 的顺序，各自在自己的分组里排：游戏陪玩组 assistant（琴音）、game（游戏）、automation（自动化）、plugins（插件：每个插件一张卡片），语音输入组 general（语音输入）。单个插件不在左侧栏，从“插件”的卡片点开（音乐在放的时候左侧栏底部有小播放条）。空 = 默认；没写到的页面按默认位置。玩家说“把自动化放到最上面”就改这里。", NONE, NOW),
     f("ui.sidebar.hidden", "左侧栏隐藏的页面", "左侧栏 → ⋯", "不在左侧栏显示的页面 id（同上）；隐藏了的还能从“⋯ → 全部页面”打开。advanced（设置）不能隐藏。玩家说“别显示语音输入”就把 general 加进来。", NONE, NOW),
     f("agent.compactAtTokens", "对话多长时整理成摘要", "琴音 → 用量", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
@@ -314,7 +322,7 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("adminPromptRevision", "界面提示状态：管理员身份的说明问过没有（ADR 044）"),
     (
         "agent.autoCards.enabled",
-        "旧的总开关（ADR 039 D3），界面上没有了，只读旧值：是 false 时带卡片的推送算关，直到玩家在插件页上动了那一条（ADR 043 D4）；推送的开关在 plugins.<插件 id>.pushes",
+        "旧的总开关（ADR 039 D3），界面上没有了，只读旧值：是 false 时只有卡片的推送算关（一行、语音的不受它管），直到玩家在插件页上动了那一条（ADR 043 D4）；推送的开关在 plugins.<插件 id>.pushes",
     ),
     ("evalRecording", "开发评测用"),
     (
@@ -640,7 +648,7 @@ mod tests {
 
     #[test]
     fn describe_matches_labels_values_and_paths() {
-        let hits = describe(Some("悬浮窗"));
+        let hits = describe(Some("输入条"));
         assert!(hits.iter().any(|f| f.path == "overlay.style"));
         assert!(describe(Some("bottom_right"))
             .iter()
@@ -694,7 +702,7 @@ mod tests {
         const SECOND: &[(&str, &[&str])] = &[
             (
                 "语音输入",
-                &["输入", "文字处理", "历史", "悬浮窗", "交互模式"],
+                &["输入", "文字处理", "历史", "输入条", "交互模式"],
             ),
             (
                 "琴音",

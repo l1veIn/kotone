@@ -177,8 +177,9 @@ impl LolPlugin {
         self.state.lock().unwrap()
     }
 
-    /// 启动时：开始盯客户端（不阻塞启动）。
+    /// 启动时：开始盯客户端（不阻塞启动）。海克斯三选一自己一个循环（卡片在屏幕上时每秒看一次画面，ADR 043 D7）。
     pub(crate) fn watch(self: Arc<Self>, host: Arc<dyn Host>) {
+        self.clone().watch_augment_picks(host.clone());
         let task_host = host.clone();
         host.spawn(Box::pin(async move {
             loop {
@@ -189,7 +190,7 @@ impl LolPlugin {
     }
 
     fn reset_all(&self, host: &dyn Host) {
-        self.send_overlay(host, Vec::new());
+        self.reset_pushes(host);
         let claimed = {
             let mut s = self.state();
             if s.client.is_some() {
@@ -294,8 +295,8 @@ impl LolPlugin {
         let live_ready = live.as_ref().is_some_and(|(_, game)| game.time > 0.0);
         self.update_stage(&phase, live_ready);
         self.auto_cards(host, &previous, &phase, live_ready);
-        // 覆盖层：选英雄时的胜率、海斗三选一时的海克斯评分（ADR 038 第 3 步）
-        self.update_overlays(host, &lcu, &phase, live.as_ref().map(|(_, game)| game))
+        // 推送：选英雄卡片、海斗三选一（ADR 043 D7，原来的两个覆盖层）
+        self.update_pushes(host, &lcu, &phase, live.as_ref().map(|(_, game)| game))
             .await;
         true
     }
@@ -787,6 +788,10 @@ impl LolPlugin {
             TOOL_CHAMPIONS => return Ok(self.champions_tool(host.as_ref()).await),
             TOOL_CHAMPION => return Ok(self.champion_tool(host.as_ref(), arguments).await),
             TOOL_TIER => return Ok(self.tier_tool(host.as_ref(), arguments).await),
+            // 海克斯三选一要的本地文字识别模型（下载 / 不用）：不要客户端
+            crate::tools::TOOL_AUGMENT_OCR => {
+                return Ok(self.augment_ocr_tool(host, arguments).await)
+            }
             _ => {}
         }
         if !enabled(host.as_ref()) {
@@ -1143,6 +1148,11 @@ impl LolPlugin {
     /// 这局的队列（不在对局里时 None）。
     pub(crate) fn current_queue(&self) -> Option<i64> {
         self.state().current.as_ref().map(|m| m.queue_id)
+    }
+
+    /// 这局的对局 id（不在对局里时 None）。
+    pub(crate) fn current_game_id(&self) -> Option<i64> {
+        self.state().current.as_ref().map(|m| m.game_id)
     }
 
     /// 已经读好的客户端游戏资料（没读时 None，不去读）。
