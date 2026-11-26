@@ -21,7 +21,8 @@ at zero gain, the pre-made phrases are skipped; use it when someone is asleep); 
 (a copy outside target/debug, so other builds are not blocked while it runs).
 Call mode (ADR 033, 2026-11-25 update of this script): a click starts a call that keeps listening; clicking again
 hangs up. So a “call →” turn first hangs up a call that is still open, and “she keeps listening” means the call is
-still connected (there is no “follow-up: listening” log line any more).
+still connected (there is no “follow-up: listening” log line any more). Since the 2026-11-26 revision of ADR 033 the
+default after a call is 说一句就走 (one sentence, quiet after answering), so this script sets assistant.callMode = call.
 usage: python -X utf8 -I scripts/manual-e2e/voice_turn_real.py
 """
 import ctypes
@@ -306,8 +307,9 @@ def main():
     with open(os.path.join(HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
+                   # 呼叫以后选通话（ADR 033 2026-11-26 修订起缺省是说一句就走）：第 2 轮不点按钮直接说
                    "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": VOLUME,
-                                 "wake": {"enabled": False}},
+                                 "wake": {"enabled": False}, "callMode": "call"},
                    "agent": {"permissions": {"mode": "allow-all", "rules": NO_INPUT}}}, f)
     app = start_app()
     rows = []

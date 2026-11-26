@@ -1,6 +1,9 @@
 //! 通话（ADR 033）：按呼叫键或喊唤醒词 = 接通；通话里一直在听，玩家开口就是下一句，
 //! 不用再按键、不用再喊唤醒词。
 //!
+//! 2026-11-26 修订：呼叫以后有三种用法（`assistant.callMode`，[`mode`]）：说一句就走（缺省）、录音笔、
+//! 通话。只有选了通话，[`start`] 才接通；另外两种不接通，答完怎么办见 [`crate::follow_up`]。
+//!
 //! - 收音：唤醒那一路麦克风（[`crate::wake`]）在通话里改成“本机 silero 检测到开口，就把这句交给收音会话”，
 //!   没开唤醒就为通话单独开这一路；识别、交给她的流程和呼叫键一样。
 //! - 挂断：说“退下 / 安静 / 挂了 / 没事了 / 拜拜 / 再见”（[`crate::follow_up::is_exit_phrase`]，
@@ -13,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use kotone_core::assistant::CallMode;
 use kotone_core::log;
 use kotone_core::orchestrator::OrchestratorState;
 use tauri::{AppHandle, Emitter, Manager};
@@ -44,6 +48,16 @@ pub fn call_active() -> bool {
     active()
 }
 
+/// 呼叫以后怎么听（ADR 033 2026-11-26 修订）。0.1.x 旧提醒助手没有通话、也没有录音笔：按说一句就走。
+pub fn mode(app: &AppHandle) -> CallMode {
+    let state = app.state::<SharedState>();
+    let settings = state.settings.read().unwrap();
+    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+        return CallMode::OneShot;
+    }
+    settings.assistant.effective_call_mode()
+}
+
 /// 设置里的空闲挂断秒数；0 = 不通话（一问一答）。0.1.x 旧提醒助手没有通话。
 pub fn idle_seconds(app: &AppHandle) -> u32 {
     let settings = app.state::<SharedState>().settings.read().unwrap().clone();
@@ -66,9 +80,10 @@ fn quiet_for() -> Duration {
         .unwrap_or_default()
 }
 
-/// 接通（设置里关着通话时什么也不做）。已经在通话就只记一次动静。返回是否新接通。
+/// 接通（设置里选的不是通话时什么也不做：说一句就走、录音笔不接通）。已经在通话就只记一次动静。
+/// 返回是否新接通。
 pub fn start(app: &AppHandle) -> bool {
-    if idle_seconds(app) == 0 {
+    if mode(app) != CallMode::Call {
         return false;
     }
     // 语音识别没在运行（本地识别没启动）：听不了，不接通（呼叫键那一下会提示怎么启动）
@@ -229,11 +244,12 @@ async fn watch_idle(app: AppHandle, generation: u64) {
         if GENERATION.load(Ordering::SeqCst) != generation || !active() {
             return;
         }
-        let idle = idle_seconds(&app);
-        if idle == 0 {
-            end(&app, "设置里关了通话");
+        // 设置里改成了说一句就走 / 录音笔（或旧写法的“不通话”）：挂断
+        if mode(&app) != CallMode::Call {
+            end(&app, "设置里不再是通话");
             return;
         }
+        let idle = idle_seconds(&app);
         // 玩家在她说话时开口、她压低着：那句话没识别出字（收音会话结束了却没交给她）或太久没结果，
         // 就恢复音量（识别出来的那条路在 agent::send 里已经收尾了）。
         if let Some(ducked) = crate::voice_reply::ducked_for() {

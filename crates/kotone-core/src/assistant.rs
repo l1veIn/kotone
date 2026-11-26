@@ -63,7 +63,7 @@ pub struct AssistantConfig {
     /// 默认呼叫键改过几次（[`CALL_HOTKEY_REVISION`]）。配置里没有这一项 = 更早的版本：读取时把还是旧默认
     /// `Backquote` 的呼叫键改成新默认，再记上（之后玩家自己设回 `~` 不会再被改）。
     pub call_hotkey_revision: u32,
-    /// 旧版提醒助手热键的交互方式。启用琴音后，呼叫热键固定为“说完自动提交”。
+    /// 旧版提醒助手热键的交互方式。呼叫她不看这一项（呼叫以后怎么听是 [`Self::call_mode`]）。
     pub interaction_mode: AssistantInteractionMode,
     pub connection_id: String,
     /// 仅旧版升级后使用，保留 0.1.x 可直接读取的提醒热键和连接。
@@ -95,14 +95,35 @@ pub struct AssistantConfig {
     pub wake: WakeConfig,
     /// 琴音的对话气泡（屏幕角落）。新字段，缺省 = 开启、右下角。
     pub bubble: BubbleConfig,
-    /// 回答完接着听几秒（ADR 029 §五）。ADR 033 起不再使用（通话取代，见 `call_idle_seconds`），
-    /// 只为旧版本读得懂而保留；读入时 0 迁移成“不通话”。
+    /// 她问了一句（这次最后一句以问号结尾）时，答完再听几秒（ADR 029 §五“接着听”，ADR 033 2026-11-26
+    /// 修订：只在说一句就走 / 录音笔里、只在问句之后）。0 = 问了也不再听。读入时 0 也迁移成“不通话”
+    /// （ADR 033 一期，见 `settings::migrate_call_idle_json`）。
     pub follow_up_seconds: u32,
-    /// 通话（ADR 033）：呼叫键 / 唤醒 = 接通，一直在听；这么多秒没人说话就挂断
-    /// （她在说、在想、在做、在等确认时不计时）。0 = 不通话：一问一答，答完不再听。新字段，缺省 30 秒。
+    /// 通话（ADR 033）：选了“通话”时呼叫 = 接通，一直在听；这么多秒没人说话就挂断
+    /// （她在说、在想、在做、在等确认时不计时）。0 = 不通话（旧配置的“一问一答”，读成说一句就走，
+    /// 见 [`Self::effective_call_mode`]）。新字段，缺省 30 秒。
     pub call_idle_seconds: u32,
     /// 通话里做回声消除（ADR 033 第三节）：开着音箱也能直接开口打断她。新字段，缺省开。
     pub echo_cancellation: bool,
+    /// 呼叫（呼叫键、唤醒词、聊天页的呼叫按钮、快捷指令）以后怎么听（ADR 033 2026-11-26 修订）。
+    /// 新字段，缺省（旧配置没有）= 说一句就走。
+    pub call_mode: CallMode,
+}
+
+/// 呼叫以后怎么听（ADR 033 2026-11-26 修订；说法和语音输入的交互方式一致）。不认识的值按说一句就走。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CallMode {
+    /// 录音笔：按一下呼叫键开始听，再按一下结束、交给她（不判停、没有预览）。唤醒词、呼叫按钮、
+    /// 快捷指令没有“再按一下”，照说一句就走。答完照说一句就走。
+    Dictation,
+    /// 通话（ADR 033 二–四）：一直在听，说“退下”、再按呼叫键或 `call_idle_seconds` 秒没人说话才挂断。
+    Call,
+    /// 说一句就走（缺省）：听你说一句，说完（静音判停）交给她；呼叫键可以提前结束。她答完不再听，
+    /// 除非她这次最后一句是问句（`follow_up_seconds`）。
+    #[default]
+    #[serde(other)]
+    OneShot,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -412,11 +433,21 @@ impl Default for AssistantConfig {
             follow_up_seconds: DEFAULT_FOLLOW_UP_SECONDS,
             call_idle_seconds: DEFAULT_CALL_IDLE_SECONDS,
             echo_cancellation: true,
+            call_mode: CallMode::default(),
         }
     }
 }
 
 impl AssistantConfig {
+    /// 实际的呼叫方式：选了通话、可是 `callIdleSeconds` 是 0（旧配置的“不通话，一问一答”）读成说一句就走
+    /// （ADR 033 2026-11-26 修订）。0.1.x 旧提醒助手没有通话，由调用方另判。
+    pub fn effective_call_mode(&self) -> CallMode {
+        match self.call_mode {
+            CallMode::Call if self.call_idle_seconds == 0 => CallMode::OneShot,
+            mode => mode,
+        }
+    }
+
     /// 设置里选定的语音合成引擎（不含“自动”的判断，见 [`Self::tts_engine_auto`]）。
     pub fn tts_engine(&self) -> TtsEngine {
         match self.tts_model_id.trim() {
@@ -528,7 +559,7 @@ impl AssistantConfig {
             return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());
         }
         if !FOLLOW_UP_RANGE_SECONDS.contains(&self.follow_up_seconds) {
-            return Err("assistant.followUpSeconds（已不再使用）必须在 0 到 30 秒之间".into());
+            return Err("她问了一句以后再听几秒，必须在 0 到 30 秒之间".into());
         }
         if !CALL_IDLE_RANGE_SECONDS.contains(&self.call_idle_seconds) {
             return Err("通话多久没人说话挂断，必须在 0 到 600 秒之间".into());
@@ -669,6 +700,41 @@ mod tests {
             };
             assert_eq!(config.validate().is_ok(), ok, "{seconds}");
         }
+    }
+
+    #[test]
+    fn call_mode_is_a_new_field_defaulting_to_one_shot() {
+        // 旧配置没有 callMode：都是说一句就走（玩家 2026-11-26 要的缺省），包括以前开着通话的
+        let old: AssistantConfig =
+            serde_json::from_str(r##"{"voiceId":"v","callIdleSeconds":30}"##).unwrap();
+        assert_eq!(old.call_mode, CallMode::OneShot);
+        assert_eq!(old.effective_call_mode(), CallMode::OneShot);
+        // 写出来的值和语音输入的交互方式同名（one-shot / dictation）再加 call
+        for (mode, value) in [
+            (CallMode::OneShot, "one-shot"),
+            (CallMode::Dictation, "dictation"),
+            (CallMode::Call, "call"),
+        ] {
+            let config = AssistantConfig {
+                call_mode: mode,
+                ..AssistantConfig::default()
+            };
+            let json = serde_json::to_value(&config).unwrap();
+            assert_eq!(json["callMode"], value);
+            let back: AssistantConfig = serde_json::from_value(json).unwrap();
+            assert_eq!(back.call_mode, mode);
+            assert_eq!(back.effective_call_mode(), mode);
+        }
+        // 不认识的值（更新的版本写的）按说一句就走，不把整份配置当坏的
+        let future: AssistantConfig = serde_json::from_str(r#"{"callMode":"walkie"}"#).unwrap();
+        assert_eq!(future.call_mode, CallMode::OneShot);
+        // 旧配置的“不通话，一问一答”（callIdleSeconds 0）：就算选了通话也读成说一句就走
+        let no_call: AssistantConfig =
+            serde_json::from_str(r#"{"callMode":"call","callIdleSeconds":0}"#).unwrap();
+        assert_eq!(no_call.effective_call_mode(), CallMode::OneShot);
+        let pen: AssistantConfig =
+            serde_json::from_str(r#"{"callMode":"dictation","callIdleSeconds":0}"#).unwrap();
+        assert_eq!(pen.effective_call_mode(), CallMode::Dictation);
     }
 
     #[test]

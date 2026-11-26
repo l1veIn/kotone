@@ -61,8 +61,45 @@ fn interrupted(appended: &[Message]) -> bool {
     })
 }
 
+/// 这一轮她最后念出来的那句（纯函数）：最后一次 `speak` 的 text；之后又交给了后台、那一步没 speak 的，
+/// 是 Kotone 替她说的“交给我”。用来判断她是不是问了一句（ADR 033 2026-11-26 修订）。
+fn last_spoken(appended: &[Message]) -> Option<String> {
+    let mut last = None;
+    for message in appended {
+        match message {
+            Message::Assistant { tool_calls, .. } => {
+                let said = tool_calls
+                    .iter()
+                    .filter(|c| c.name == kotone_agent::catalog::TOOL_SPEAK)
+                    .filter_map(|c| {
+                        serde_json::from_str::<Value>(&c.arguments)
+                            .ok()?
+                            .get("text")?
+                            .as_str()
+                            .map(str::to_string)
+                    })
+                    .next_back();
+                if let Some(text) = said {
+                    last = Some(text);
+                } else if tool_calls
+                    .iter()
+                    .any(|c| kotone_agent::subagents::is_handoff_tool(&c.name))
+                {
+                    last = Some(crate::fillers::HANDOFF.to_string());
+                }
+            }
+            Message::Tool {
+                background: true, ..
+            } => last = Some(crate::fillers::HANDOFF.to_string()),
+            _ => {}
+        }
+    }
+    last
+}
+
 /// 游戏内一轮结束：她的话已经用 speak 说过了（说完才结束这一轮）；需要时补一句固定的话，
-/// 等播完再接着听（`follow`：语音入口正常答完，ADR 029 §五）。
+/// 等播完再看还听不听（`follow`：语音入口正常答完；通话里接着听，说一句就走 / 录音笔里只在她问了一句之后，
+/// 见 [`crate::follow_up`]）。
 pub(super) fn finish_voice_turn(
     app: &AppHandle,
     appended: &[Message],
@@ -76,6 +113,11 @@ pub(super) fn finish_voice_turn(
     // 玩家按键打断了她：不再接着听（他已经在说了）。
     let follow = follow && !interrupted(appended);
     let handed_off = handed_off(appended);
+    // 她最后说的那句：补了固定的话就是那句
+    let spoken = match line {
+        Some(line) => line.to_string(),
+        None => last_spoken(appended).unwrap_or_default(),
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let epoch = crate::follow_up::epoch();
@@ -107,7 +149,7 @@ pub(super) fn finish_voice_turn(
             }
         };
         if follow {
-            crate::follow_up::after_reply(&app, epoch, shown).await;
+            crate::follow_up::after_reply(&app, epoch, shown, &spoken).await;
         }
         // 每个语音回合之后把填充话过一遍：命中缓存不花钱，也让它们不被挤出缓存。
         crate::fillers::refresh(&app);
@@ -252,6 +294,7 @@ pub(super) fn progress_filler(
 mod tests {
     use super::*;
     use crate::agent::test_util::*;
+    use kotone_ai::agent::ToolCall;
 
     #[test]
     fn only_speak_is_spoken_and_a_closing_line_covers_the_rest() {
@@ -329,6 +372,51 @@ mod tests {
             assistant("好", &[]),
         ];
         assert_eq!(closing_line(&asked, &done), None);
+    }
+
+    #[test]
+    fn the_last_thing_she_said_decides_whether_she_asked() {
+        let speak = |text: &str| Message::Assistant {
+            text: String::new(),
+            tool_calls: vec![ToolCall {
+                id: "c".into(),
+                name: "speak".into(),
+                arguments: serde_json::json!({"text": text, "written": "细节"}).to_string(),
+            }],
+            reasoning: String::new(),
+            usage: None,
+            at_ms: 0,
+        };
+        assert_eq!(last_spoken(&[user("voice")]), None);
+        // 最后一次 speak 的 text（written 不念）
+        let asked = [
+            user("voice"),
+            speak("我查一下"),
+            assistant("", &["web.search"]),
+            speak("今天有新版本，要我念一下改动吗？"),
+        ];
+        assert_eq!(
+            last_spoken(&asked).as_deref(),
+            Some("今天有新版本，要我念一下改动吗？")
+        );
+        // 问完又交给了后台（那一步没 speak）：最后说的是 Kotone 替她说的“交给我”
+        let handed = [
+            user("voice"),
+            speak("要我帮你查吗？"),
+            assistant("", &["agent.start"]),
+        ];
+        assert_eq!(
+            last_spoken(&handed).as_deref(),
+            Some(crate::fillers::HANDOFF)
+        );
+        assert!(!crate::follow_up::ends_with_question(
+            crate::fillers::HANDOFF
+        ));
+        // 参数坏了：当作没说
+        assert_eq!(
+            last_spoken(&[user("voice"), assistant("", &["speak"])]),
+            None
+        );
     }
 
     #[test]

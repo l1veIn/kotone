@@ -192,21 +192,37 @@ test("settings modal traps Tab and restores focus after Escape", async ({ page }
   await expect(trigger).toBeFocused();
 });
 
-test("calling her opens a call; how long it stays open and echo cancellation are set in 琴音 → 唤醒", async ({ page }, testInfo) => {
+test("after the call key: 说一句就走 by default, 录音笔 or 通话 chosen in 琴音 → 唤醒; only 通话 has hang-up time and echo cancellation", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never");
   await openSettingsTab(page, "call");
   const talk = page.getByTestId("settings-call");
-  // ADR 033：缺省 30 秒没人说话挂断（旧配置没有这个字段）
+  const oneShot = talk.getByTestId("call-mode-one-shot");
+  const dictation = talk.getByTestId("call-mode-dictation");
+  const call = talk.getByTestId("call-mode-call");
+  // ADR 033 2026-11-26 修订：三种用法，缺省说一句就走；说一句就走和录音笔没有挂断时间、回声消除
+  await expect(oneShot).toHaveAttribute("aria-pressed", "true");
+  await expect(oneShot).toContainText("说一句就走");
+  await expect(oneShot).toContainText("问了你一句才再听一会儿");
+  await expect(dictation).toContainText("再按一下结束");
+  await expect(call).toContainText("一直在听");
+  await expect(talk.getByTestId("call-idle")).toHaveCount(0);
+  await expect(talk.getByTestId("call-echo-cancellation")).toHaveCount(0);
+  await screenshot(talk, { path: testInfo.outputPath("call-settings-one-shot.png"), animations: "disabled" });
+  // 录音笔
+  await dictation.click();
+  await expect(dictation).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("按下以后：录音笔")).toBeVisible();
+  let saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  expect(saved.assistant.callMode).toBe("dictation");
+  await expect(talk.getByTestId("call-idle")).toHaveCount(0);
+  // 通话：缺省 30 秒没人说话挂断、开回声消除（ADR 033）
+  await call.click();
+  await expect(call).toHaveAttribute("aria-pressed", "true");
+  saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  expect(saved.assistant.callMode).toBe("call");
   const idle = talk.getByTestId("call-idle");
   await expect(idle).toHaveAttribute("data-value", "30");
   await expect(idle).toContainText("30 秒（推荐）");
-  await expect(talk.getByText("通话", { exact: true })).toBeVisible();
-  await idle.click();
-  await page.getByRole("option", { name: "不通话（一问一答）" }).click();
-  await expect(idle).toHaveAttribute("data-value", "0");
-  await expect(page.getByText("不通话：一问一答")).toBeVisible();
-  let saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  expect(saved.assistant.callIdleSeconds).toBe(0);
   await idle.click();
   await page.getByRole("option", { name: "1 分钟" }).click();
   await expect(idle).toHaveAttribute("data-value", "60");

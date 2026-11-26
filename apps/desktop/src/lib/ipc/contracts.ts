@@ -14,6 +14,8 @@ export interface HotkeyConfig {
 /** 交互模式预设（ADR-006；缺省 null = 由 hotkey.mode + autoSend 旧字段推导） */
 export type InteractionMode = "push-to-talk" | "dictation" | "one-shot" | "solo";
 export type AssistantInteractionMode = Exclude<InteractionMode, "solo">;
+/** 呼叫（呼叫键、唤醒词、呼叫按钮、快捷指令）以后怎么听：说一句就走 / 录音笔 / 通话（ADR 033 2026-11-26 修订）。 */
+export type CallMode = "one-shot" | "dictation" | "call";
 
 /** 桌面壳 UI 状态（core settings `ui` 段） */
 export interface UiConfig {
@@ -278,12 +280,14 @@ export interface AssistantConfig extends AssistantBindings {
   wake?: WakeConfig;
   /** 琴音的对话气泡（0.2.0 新字段，旧配置没有）。 */
   bubble?: BubbleConfig;
-  /** 回答完接着听几秒（ADR 029）。ADR 033 起不再使用，只为旧版本保留。 */
+  /** 说一句就走 / 录音笔里她问了一句（以问号结尾）以后再听几秒，0 = 不再听（ADR 029 §五、ADR 033 2026-11-26 修订；缺省 8）。 */
   followUpSeconds?: number;
-  /** 通话多久没人说话挂断，0 = 不通话（ADR 033 新字段，旧配置没有 = 30）。 */
+  /** 通话多久没人说话挂断，0 = 不通话（旧写法，按说一句就走）（ADR 033 新字段，旧配置没有 = 30）。 */
   callIdleSeconds?: number;
   /** 通话里做回声消除：开着音箱也能开口打断她（ADR 033 新字段，旧配置没有 = true）。 */
   echoCancellation?: boolean;
+  /** 呼叫以后怎么听（ADR 033 2026-11-26 修订；新字段，旧配置没有 = one-shot 说一句就走）。 */
+  callMode?: CallMode;
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;

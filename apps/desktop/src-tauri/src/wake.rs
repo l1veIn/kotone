@@ -537,7 +537,7 @@ fn listen(
                     log::log(&format!("wake: detected {keyword} (#{n})"));
                     let _ = app.emit("kotone://wake", json!({"keyword": keyword}));
                     crate::bubble::woke(app);
-                    // 喊唤醒词也是接通（ADR 033）
+                    // 喊唤醒词：选了通话就接通（ADR 033）；说一句就走、录音笔照说一句就走听这一句
                     crate::call::start(app);
                     Phase::Probing {
                         until: Instant::now() + CONTINUE_PROBE,

@@ -762,7 +762,8 @@ pub fn say(app: &AppHandle, text: String) {
             tell(app, format!("快捷指令没能交出去：{error}"));
             return;
         }
-        // 快捷指令 = 替你在通话里说一句：按了也接通，她答完你可以直接接着说（ADR 033、术语表“通话”）
+        // 快捷指令 = 替你说一句：选了通话就接通，她答完你可以直接接着说（ADR 033、术语表“通话”）；
+        // 说一句就走、录音笔不接通，她答完照常安静（问了一句才再听）
         crate::call::start(app);
         return;
     }

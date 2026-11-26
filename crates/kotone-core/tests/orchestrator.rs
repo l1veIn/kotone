@@ -4231,6 +4231,49 @@ async fn wake_session_submits_when_speech_ends_regardless_of_hotkey_mode() {
 }
 
 #[tokio::test]
+async fn call_key_dictation_listens_until_pressed_again_and_goes_straight_to_her() {
+    // 呼叫键的录音笔（ADR 033 2026-11-26 修订）：说完停顿也不结束，再按一下才交给她，没有预览
+    let (orch, requests, emitter, _dir) = wake_builder(|| ScriptVad::speech_then_silence(30));
+    orch.call_assistant_dictation(None).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(requests.lock().unwrap().is_empty());
+    orch.call_assistant_dictation(None).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(3)).await;
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].session_id.starts_with("assistant-wake-"),
+        "{}",
+        requests[0].session_id
+    );
+    let events = emitter.events.lock().unwrap();
+    // 在听的时候告诉界面要再按一下才结束；没进预览
+    assert!(events.iter().any(|(name, event)| {
+        name == "kotone://state"
+            && event["state"] == "listening"
+            && event["payload"]["manualStop"] == true
+    }));
+    assert!(!events
+        .iter()
+        .any(|(name, event)| name == "kotone://state" && event["state"] == "preview"));
+}
+
+#[tokio::test]
+async fn call_key_one_shot_ends_on_silence_and_says_nothing_about_pressing_again() {
+    let (orch, requests, emitter, _dir) = wake_builder(|| ScriptVad::speech_then_silence(30));
+    orch.call_assistant(None, 5_000).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(3)).await;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert!(!emitter.events.lock().unwrap().iter().any(|(name, event)| {
+        name == "kotone://state"
+            && event["state"] == "listening"
+            && event["payload"]["manualStop"] == true
+    }));
+}
+
+#[tokio::test]
 async fn migrated_reminder_hotkey_and_companion_call_keep_their_routes_after_opt_in() {
     let (orch, requests, emitter, _dir) = wake_builder(|| ScriptVad::speech_then_silence(30));
     orch.settings().write().unwrap().ui.legacy_upgrade =

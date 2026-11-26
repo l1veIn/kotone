@@ -117,12 +117,21 @@ impl Model {
     }
 
     pub fn listening(&mut self) -> &Snapshot {
+        self.listening_labeled("在听…")
+    }
+
+    /// 在听，要再按呼叫键才结束（呼叫键的录音笔，ADR 033 2026-11-26 修订）。
+    pub fn listening_until_pressed(&mut self) -> &Snapshot {
+        self.listening_labeled(PRESS_TO_END_LABEL)
+    }
+
+    fn listening_labeled(&mut self, label: &str) -> &Snapshot {
         if self.snap.phase == Phase::Asking {
             return &self.snap;
         }
         self.holding = false;
         self.snap.heard.clear();
-        self.set(Phase::Listening, "在听…", "")
+        self.set(Phase::Listening, label, "")
     }
 
     pub fn heard(&mut self, text: &str) -> Option<&Snapshot> {
@@ -232,6 +241,13 @@ impl Model {
         &self.snap
     }
 
+    /// 说一句就走 / 录音笔里她问了一句（ADR 033 2026-11-26 修订）：气泡留着这句问话，显示还听几秒。
+    pub fn question_follow_up(&mut self, seconds: u64, now_ms: u64, question: &str) -> &Snapshot {
+        self.follow_up(seconds, now_ms, question);
+        self.snap.label = QUESTION_LABEL.to_string();
+        &self.snap
+    }
+
     /// 接着听结束了（没开口、开不了麦）：还在等就收起。
     pub fn follow_up_done(&mut self) -> Option<&Snapshot> {
         (self.snap.phase == Phase::Asking && self.follow_up).then(|| self.hide())
@@ -294,6 +310,12 @@ impl Model {
 
 /// 通话里她说完、在等玩家开口时的标签（ADR 033；以前是“接着听”的“接着说吧”）。
 pub const FOLLOW_UP_LABEL: &str = "通话中";
+
+/// 说一句就走 / 录音笔里她问了一句、再听一会儿时的标签（和她用语音提问时一样）。
+pub const QUESTION_LABEL: &str = "等你回答";
+
+/// 呼叫键的录音笔在听时的标签：告诉玩家怎么结束（ADR 033 2026-11-26 修订）。
+pub const PRESS_TO_END_LABEL: &str = "在听… 再按呼叫键结束";
 
 /// 有子会话在听队友时的状态行（ADR 021）。
 pub const LISTEN_LABEL: &str = "正在听队友";
@@ -401,6 +423,15 @@ pub fn on_state(app: &AppHandle, payload: &Value) {
         return;
     }
     match state {
+        // 要再按一下才结束（呼叫键的录音笔；判停用不了时也是）：标签上写怎么结束
+        "listening"
+            if payload
+                .pointer("/payload/manualStop")
+                .and_then(Value::as_bool)
+                == Some(true) =>
+        {
+            update(app, |m| Some(m.listening_until_pressed().clone()));
+        }
         "listening" => {
             update(app, |m| Some(m.listening().clone()));
         }
@@ -506,6 +537,15 @@ pub fn ask_done(app: &AppHandle) {
 pub fn follow_up(app: &AppHandle, seconds: u64, shown: &str) {
     if enabled(app) {
         update(app, |m| Some(m.follow_up(seconds, now_ms(), shown).clone()));
+    }
+}
+
+/// 说一句就走 / 录音笔里她问了一句、答完再听（气泡关着时只听不显示）。
+pub fn question_follow_up(app: &AppHandle, seconds: u64, question: &str) {
+    if enabled(app) {
+        update(app, |m| {
+            Some(m.question_follow_up(seconds, now_ms(), question).clone())
+        });
     }
 }
 
@@ -684,6 +724,42 @@ mod tests {
         m.asking("要我帮你下载吗？");
         assert!(m.recognizing().is_none());
         assert!(m.follow_up_done().is_none());
+    }
+
+    #[test]
+    fn after_her_question_the_bubble_keeps_it_and_waits_for_the_answer() {
+        // 说一句就走 / 录音笔（ADR 033 2026-11-26 修订）：她问了一句，答完再听一会儿
+        let mut m = Model::default();
+        let rev = m.speaking("要我顺便帮你看看对面打野吗？").revision;
+        m.spoken(rev);
+        let snap = m
+            .question_follow_up(8, 1_000, "要我顺便帮你看看对面打野吗？")
+            .clone();
+        assert_eq!(
+            (snap.phase, snap.label.as_str(), snap.text.as_str()),
+            (
+                Phase::Asking,
+                QUESTION_LABEL,
+                "要我顺便帮你看看对面打野吗？"
+            )
+        );
+        assert_eq!(snap.ask_seconds, Some(8));
+        // 收音开始不顶掉；开口就“听清了”；没开口就收起（同接着听）
+        assert_eq!(m.listening().phase, Phase::Asking);
+        assert_eq!(m.recognizing().unwrap().phase, Phase::Recognizing);
+        m.question_follow_up(8, 2_000, "还要别的吗？");
+        assert_eq!(m.follow_up_done().unwrap().phase, Phase::Hidden);
+    }
+
+    #[test]
+    fn dictation_listening_says_how_to_end_it() {
+        let mut m = Model::default();
+        let snap = m.listening_until_pressed().clone();
+        assert_eq!(
+            (snap.phase, snap.label.as_str()),
+            (Phase::Listening, PRESS_TO_END_LABEL)
+        );
+        assert_eq!(m.listening().label, "在听…");
     }
 
     #[test]

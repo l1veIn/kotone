@@ -134,12 +134,14 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
     // ---- 游戏陪玩（角色 / Agent）：呼叫 = 呼叫键、唤醒词、聊天页的呼叫按钮 ----
-    f("assistant.hotkey", "呼叫键", "设置 → 热键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在悬浮窗里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
+    f("assistant.hotkey", "呼叫键", "设置 → 热键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在悬浮窗里听你说（怎么听看 assistant.callMode，缺省说完自动交给她）。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
     f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "设置 → 热键", "仅 0.1.x 升级用户启用琴音后使用；按一下在悬浮窗里听，说完自动交给她。", NONE, NOW),
-    f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手；呼叫键固定为说完自动提交）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
+    f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项（呼叫以后怎么听是 assistant.callMode）。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
     f("assistant.connectionId", "API 连接", "聊天页 → 她用的模型，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
     f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "聊天页 → 她用的模型", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
-    f("assistant.callIdleSeconds", "通话", "琴音 → 唤醒", "秒，0–600，缺省 30。按呼叫键或喊唤醒词就是和她通话：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话：一问一答，答完不再听。", NONE, NOW),
+    f("assistant.callMode", "呼叫以后怎么听", "琴音 → 唤醒", "按呼叫键、喊唤醒词、点聊天页的呼叫按钮、按快捷指令以后怎么听。缺省 one-shot。说一句就走和录音笔里她答完就安静，只有她这次最后一句是问句（以“？”结尾）才再听一会儿（assistant.followUpSeconds）。", &[("one-shot", "说一句就走（缺省）：听你说一句，说完自动交给她；再按呼叫键可以提前结束"), ("dictation", "录音笔：按一下呼叫键开始听，再按一下结束、交给她；唤醒词、呼叫按钮、快捷指令照说一句就走"), ("call", "通话：一直在听，开口就是下一句；说“退下”、再按呼叫键或 assistant.callIdleSeconds 秒没人说话就挂断")], NOW),
+    f("assistant.followUpSeconds", "她问了一句以后再听几秒", "琴音 → 唤醒", "秒，0–30，缺省 8。说一句就走和录音笔里，她这次最后一句以问号结尾时，答完再听这么久，你直接回答就行；0 = 问了也不再听。通话里一直在听，不看这一项。", NONE, NOW),
+    f("assistant.callIdleSeconds", "通话多久没人说话挂断", "琴音 → 唤醒", "秒，0–600，缺省 30。只在 assistant.callMode 是 call（通话）时有用：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话（旧的写法），按说一句就走。", NONE, NOW),
     f("assistant.echoCancellation", "开着音箱也能打断她（回声消除）", "琴音 → 唤醒", "true（缺省）时通话里消掉音箱放出来的声音（她的声音、游戏声），玩家直接开口就能打断她；false 时她说话时不听，要打断就按呼叫键。戴耳机开着也没坏处。", NONE, NOW),
     f("assistant.route", "呼叫交给谁", "琴音 → 唤醒", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "琴音 → 交互 → 声音与弹幕", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
@@ -291,10 +293,6 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("models.dir", "用 models.dir.set（会迁移已有模型）"),
     ("modelConfigs", "用 models.activate"),
     ("agent.permissions", "琴音的权限只能由用户在设置页修改"),
-    (
-        "assistant.followUpSeconds",
-        "ADR 033 起不再使用（通话取代，用 assistant.callIdleSeconds），只为旧版本保留",
-    ),
     ("agent.identity.avatar", "头像要在设置页上传图片"),
     (
         "agent.roleId",

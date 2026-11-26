@@ -24,10 +24,13 @@ pub(super) enum SessionOrigin {
     Hotkey,
     /// 设置窗口的语音按钮（只有它能操作自己的会话）。
     WindowVoice,
-    /// 语音唤醒（ADR 017）。
+    /// 语音唤醒（ADR 017），也是呼叫键 / 呼叫按钮的说一句就走：说完即提交。
     Wake {
         no_speech_timeout_ms: u32,
     },
+    /// 呼叫键的录音笔（ADR 033 2026-11-26 修订）：按一下开始听，再按一下结束、直接交给她
+    /// （不判停、没有预览）。会话 ID 和唤醒一样以 `assistant-wake-` 开头，宿主据此认作呼叫来的。
+    CallDictation,
 }
 
 /// 录音的旁听者（评测录档、识别记录）：都要 PCM、识别中的字（第一个字的时间）、
@@ -150,8 +153,18 @@ impl Orchestrator {
                 policy = InteractionPolicy::from_preset(kotone_core_assistant_one_shot());
                 Some(no_speech_timeout_ms)
             }
+            SessionOrigin::CallDictation => {
+                // 录音笔：再按一下才结束；结束后直接交给她，不像语音输入的录音笔那样先预览。
+                policy = InteractionPolicy {
+                    post: PostFinalize::SendDirect,
+                    ..InteractionPolicy::from_preset(crate::interaction::InteractionMode::Dictation)
+                };
+                None
+            }
             _ => None,
         };
+        // 要玩家再按一下才结束（录音笔）：告诉界面（气泡上写“再按呼叫键结束”）。
+        let manual_stop = origin == SessionOrigin::CallDictation;
         {
             let mut inner = self.inner.lock().unwrap();
             if expected_gen.is_some_and(|gen| inner.gen != gen) {
@@ -174,11 +187,14 @@ impl Orchestrator {
             inner.purpose = purpose;
             // 在入场时确定请求去向，保留至预览、重试以及提醒到期。
             let legacy_reminder = purpose == SessionPurpose::Assistant
-                && !matches!(origin, SessionOrigin::Wake { .. })
+                && !matches!(
+                    origin,
+                    SessionOrigin::Wake { .. } | SessionOrigin::CallDictation
+                )
                 && settings.ui.legacy_upgrade.has_legacy_reminders();
             let source = match origin {
                 SessionOrigin::WindowVoice => "assistant-ui-voice-",
-                SessionOrigin::Wake { .. } => "assistant-wake-",
+                SessionOrigin::Wake { .. } | SessionOrigin::CallDictation => "assistant-wake-",
                 SessionOrigin::Hotkey => "session-",
             };
             inner.process_case_id = Some(format!(
@@ -193,7 +209,14 @@ impl Orchestrator {
             ));
             inner.assistant_voice_owner = assistant_voice_owner;
         }
-        match self.begin_locked(resumed, purpose, settings, policy, no_speech_timeout_ms) {
+        match self.begin_locked(
+            resumed,
+            purpose,
+            settings,
+            policy,
+            no_speech_timeout_ms,
+            manual_stop,
+        ) {
             Ok(()) => Ok(()),
             Err(e) => {
                 // 开始失败（如引擎/麦克风未就绪）：Error 保持到用户关闭或重试
@@ -215,6 +238,7 @@ impl Orchestrator {
         settings: Settings,
         policy: InteractionPolicy,
         no_speech_timeout_ms: Option<u32>,
+        manual_stop: bool,
     ) -> Result<(), SessionBeginError> {
         if purpose == SessionPurpose::Assistant && self.assistant.is_none() {
             return Err(SessionBeginError::new(
@@ -297,6 +321,7 @@ impl Orchestrator {
                 continuous_session,
                 vad_degrade,
                 vad_warning_code,
+                manual_stop,
             },
         );
         Ok(())
@@ -467,6 +492,7 @@ impl Orchestrator {
             continuous_session,
             vad_degrade,
             vad_warning_code,
+            manual_stop,
         } = capture;
         let mut inner = self.inner.lock().unwrap();
         inner.gen += 1;
@@ -482,12 +508,13 @@ impl Orchestrator {
             continuous_session && vad_degrade.inference_status.load(Ordering::SeqCst) == 0;
         inner.active = Some(active);
         drop(inner);
-        let listening_payload = vad_warning_code.map(|_| {
-            json!({
+        let listening_payload = match vad_warning_code {
+            Some(_) => Some(json!({
                 "warning": self.vad_fallback_warning(),
                 "manualStop": true
-            })
-        });
+            })),
+            None => manual_stop.then(|| json!({ "manualStop": true })),
+        };
         self.emit_state(OrchestratorState::Listening, listening_payload);
         vad_degrade
             .listening_state_emitted
@@ -560,6 +587,8 @@ struct PreparedCapture {
     continuous_session: bool,
     vad_degrade: Arc<VadDegradeSignal>,
     vad_warning_code: Option<&'static str>,
+    /// 要玩家再按一下才结束（呼叫键的录音笔）：Listening 事件带 `manualStop`。
+    manual_stop: bool,
 }
 
 /// 会话配置组装（纯函数，可单测）：profile 热词 → SessionConfig.hotwords，

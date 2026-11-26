@@ -1486,7 +1486,8 @@ pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
     ensure_voice_ready(&app).await?;
     interrupt_before_call(&app).await;
     state.orchestrator.call_assistant(None, timeout).await;
-    // 接通（ADR 033）：这句说完以后一直在听，直到挂断
+    // 选了通话就接通（ADR 033）：这句说完以后一直在听，直到挂断。说一句就走、录音笔不接通
+    // （按钮没有“再按一下”，录音笔也照说一句就走，ADR 033 2026-11-26 修订）
     crate::call::start(&app);
     Ok(())
 }

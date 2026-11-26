@@ -12,6 +12,14 @@ impl Orchestrator {
     /// 交互模式；一直没开口超过 `no_speech_timeout_ms` 就安静取消。会话 ID 以
     /// `assistant-wake-` 开头，宿主据此把它记为唤醒来源。只在空闲时开始。
     pub async fn begin_assistant_wake(&self, no_speech_timeout_ms: u32) -> Result<(), String> {
+        self.begin_assistant_call(SessionOrigin::Wake {
+            no_speech_timeout_ms,
+        })
+        .await
+    }
+
+    /// 呼叫来的助手会话（唤醒 / 说一句就走 / 呼叫键的录音笔）。只在空闲时开始。
+    async fn begin_assistant_call(&self, origin: SessionOrigin) -> Result<(), String> {
         let _op = self.op.lock().await;
         // 上一次会话停在“成功 / 出错”的提示上：与热键一样，新会话先清掉它。
         if matches!(
@@ -20,14 +28,7 @@ impl Orchestrator {
         ) {
             self.cancel_locked();
         }
-        self.begin_admitted_with(
-            false,
-            SessionPurpose::Assistant,
-            None,
-            SessionOrigin::Wake {
-                no_speech_timeout_ms,
-            },
-        )
+        self.begin_admitted_with(false, SessionPurpose::Assistant, None, origin)
     }
 
     /// 呼叫琴音（热键、首页 / 聊天窗口的按钮）：按键版的语音唤醒，按一次就听。
@@ -37,13 +38,30 @@ impl Orchestrator {
     ///
     /// `ticket`：热键的输入票（过期的按键不生效）；按钮传 None。
     pub async fn call_assistant(&self, ticket: Option<u64>, no_speech_timeout_ms: u32) {
+        self.call_assistant_with(
+            ticket,
+            SessionOrigin::Wake {
+                no_speech_timeout_ms,
+            },
+        )
+        .await
+    }
+
+    /// 呼叫键的录音笔（ADR 033 2026-11-26 修订）：空闲时开始听，不判停；正在听就结束这句、直接交给她
+    /// （没有预览）。其余和 [`Self::call_assistant`] 一样。
+    pub async fn call_assistant_dictation(&self, ticket: Option<u64>) {
+        self.call_assistant_with(ticket, SessionOrigin::CallDictation)
+            .await
+    }
+
+    async fn call_assistant_with(&self, ticket: Option<u64>, origin: SessionOrigin) {
         if !self.input_ticket_is_current(ticket) {
             return;
         }
         let (state, purpose, gen, legacy_reminder) = self.hotkey_session_snapshot();
         match state {
             OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error => {
-                if let Err(e) = self.begin_assistant_wake(no_speech_timeout_ms).await {
+                if let Err(e) = self.begin_assistant_call(origin).await {
                     crate::log::log(&format!("呼叫琴音没有开始：{e}"));
                 }
             }

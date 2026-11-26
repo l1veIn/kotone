@@ -426,8 +426,14 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                         };
                         // 她正在说时按呼叫键：先停下她，再开始听（ADR 029 §五）。
                         crate::assistant::interrupt_before_call(&app).await;
-                        orch.call_assistant(Some(ticket.core), timeout).await;
-                        // 接通（ADR 033）：这句说完以后一直在听，直到挂断。
+                        // 呼叫以后怎么听（ADR 033 2026-11-26 修订）：录音笔再按一下才结束；说一句就走、
+                        // 通话说完自动结束（正在听时按 = 说完了）。
+                        if crate::call::mode(&app) == kotone_core::assistant::CallMode::Dictation {
+                            orch.call_assistant_dictation(Some(ticket.core)).await;
+                        } else {
+                            orch.call_assistant(Some(ticket.core), timeout).await;
+                        }
+                        // 选了通话就接通（ADR 033）：这句说完以后一直在听，直到挂断；另外两种不接通。
                         crate::call::start(&app);
                     }
                 }
