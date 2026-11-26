@@ -255,4 +255,28 @@ needs = ["stats"]              # 要哪些数据源开着
 
 ## 实施记录
 
-（做完以后写在这里。）
+### 测试卫生：测试永远不写玩家真实的 ~/.kotone
+
+**玩家看到的**：语音输入的历史里不会再冒出没说过的“提醒”。以后哪个 crate 的测试忘了关历史、日志、诊断记录、用量账本、配置，写的也只是 `target/tmp/kotone-test-home/<进程号>`，碰不到玩家的 `~/.kotone`，也碰不到玩家存在 Windows 凭据库里的 Key。`pnpm dev`、真机脚本跑的 `target/debug/kotone.exe` 和安装版照旧用 `~/.kotone`。
+
+**怎么做的**：
+- 夹具：`crates/kotone-core/tests/orchestrator.rs` 的 `capture_lifecycle_orchestrator` 像 `make_orchestrator_tuned` 一样把 `history.mode` 设成 `Off`。用它的两个测试都不看历史，所以不用给临时目录。原来的断言一个没改。
+- 防线（只改一处）：`crates/kotone-core/src/settings.rs` 的 `kotone_dir()` 先看新加的 `isolated_home()`：设了 `KOTONE_HOME` 就用它；没设、但当前进程是 cargo 的测试程序，就用这个进程自己的 `<target>/tmp/kotone-test-home/<进程号>`（doctest 用系统临时目录）；两样都不是，才用 `~/.kotone`。第一次用到时在 stderr 说一句。进程号会被复用，所以第一次用到时先把这个目录清空，每次都从空目录开始（和 CI 上一样）。
+- 怎么认出测试程序：看 exe 放在哪、叫什么。cargo 的测试程序名字总带 16 位哈希。旧布局在 `<target>/<profile>/deps/<名字>-<哈希>.exe`；Cargo 1.100 起（build-dir 新布局，cargo#17354）在 `<target>/<profile>/build/<包>/<哈希>/out/<名字>-<哈希>.exe`，本机的 cargo 1.100.0 就是这样。nextest 跑的是同一批程序。doctest 放在 `rustdoctest*` 临时目录里。别的办法都不行：`cfg!(test)` 只在被测的 crate 里成立，管不到集成测试和别的 crate（这次出事的正是集成测试）；加 cargo feature 会被合进 `cargo test` 顺手编出来的 `target/debug/kotone.exe`；`.cargo/config.toml` 的 `[env]` 连 `cargo run`（`pnpm dev`）也会改到。
+- 凭据库：`crates/kotone-ai/src/secrets.rs` 的服务名改成按 `isolated_home()` 区分。测试程序没设 `KOTONE_HOME` 时，服务名也是 `kotone@<临时目录>`，碰不到玩家那个叫 `kotone` 的 Key。
+- 手动跑的真模型测试 `crates/kotone-stt/tests/eval_e2e.rs`（`#[ignore]`）以前直接用 `settings::load()` 读玩家真实的配置（配置坏了还会被改名成 `.corrupt`）。现在照 `interpreter_sensevoice` 的做法用临时的 `KOTONE_HOME`，模型目录从 `KOTONE_MODELS_DIR` 读（只读）。
+- 查过整个仓库：Kotone 的路径都经过 `kotone_dir()`。直接调 `dirs::home_dir()` 的只剩诊断包脱敏（`apps/desktop/src-tauri/src/diagnostics.rs`），它只是把路径里的用户目录换成 `%USERPROFILE%`，用的不是 Kotone 的目录。
+- 顺带发现的第二处泄漏：玩家的 `~/.kotone/diagnostics/events.jsonl` 里有 375 条 `inject_wait_modifiers`，`context` 都是空的，其中 200 条和测试写出来的一模一样（`waitedMs=20` / `timeoutMs=1000`，2026-09-07 起就有）。这是 orchestrator 测试经 `send_to_game` 写的。现在这些都写到测试自己的目录里了（这次跑完的临时目录里正好有这两条）。玩家文件里已有的这些没动，要不要清掉得问玩家。
+
+**测试**：
+- 新增 3 个测试：`settings::tests::test_binary_never_resolves_the_real_kotone_home`（在测试程序里，`kotone_dir()` / `config_path()` 是这个进程自己的临时目录，不是 `dirs::home_dir()/.kotone`）；`settings::tests::test_binary_tmp_only_matches_cargo_test_binaries`（新旧两种布局、带 target 三元组、doctest 都认得出；`target/debug/kotone.exe`、`kotone-cli.exe`、release 版、example、`deps` 里没哈希的、哈希对不上的、装好的 Kotone 都不算）；`capture_lifecycle_orchestrator_records_no_history`（这个夹具不记历史，而且这个集成测试程序的 `kotone_dir()` 和 `history_dir()` 都不在真实的 `~/.kotone` 下）。
+- `cargo test -p kotone-core --locked`：413 + 87 通过（1 个本来就忽略）；`cargo test -p kotone-stt -p kotone-ai --locked`：93 + 99 通过（忽略的照旧）。`cargo clippy -p kotone-core -p kotone-ai -p kotone-stt --all-targets --locked -- -D warnings` 没有警告；改过的文件 `rustfmt --check` 通过。
+- 真机核对（只读）：跑测试前后各记一次 `C:\Users\A\.kotone`。`history.jsonl` 前后都是 105 行，修改时间都是 2026-11-26 15:45:54.969；整个目录里（不算 `browser/`、`logs/`）最新的文件前后都是 `kotone.log` 16:31:32（玩家的 Kotone 那时退出了，测试时没开着）。也就是说一个字节都没变。测试写的东西都在 `target/tmp/kotone-test-home/<进程号>/` 下：kotone-core 的集成测试写了 `config.json` 和 `diagnostics/events.jsonl`，kotone-stt 的单元测试写了 `config.json`。以前这些都会落到玩家的目录里。
+
+**还没测 / 没管的**：
+- 测试里起的子进程（`kotone-cli.exe`、`kotone.exe`）本身不算测试程序，没设 `KOTONE_HOME` 的话照旧用真实目录。现有的都设了（`agent_cli.rs` 给了 `KOTONE_HOME`；`tools_cli*.rs` 只给了 `KOTONE_TOOL_SERVICE_DIR`，跑的 `tools` 子命令也只用那个目录）。
+- `kotone-stt` 的 `sherpa_runtime::tests::local_model_accepts_lol_hotwords`（`#[ignore]`，手动跑的真模型冒烟）现在找不到玩家的模型，会打印“X-ASR 模型未下载，跳过”。要跑得给一个配置里 `models.dir` 指向模型目录的 `KOTONE_HOME`。
+- `eval_e2e` 改完只编译过，没有真跑（要 `engine-sherpa` 和真模型）。
+- 别的 crate（桌面端、插件）的测试没有单独跑，它们经过的是同一个 `kotone_dir()`。
+- 如果测试里存了 Key，会在 Windows 凭据管理器里留一条 `kotone@…\kotone-test-home\<进程号>`。现在没有测试这么做。
+- `target/tmp/kotone-test-home/` 下按进程号留着小目录，不自动删，`cargo clean` 会一起清掉。

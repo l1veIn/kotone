@@ -1,10 +1,13 @@
 //! eval 回放 E2E：SAPI fixture 造假录档 → 全部已安装本地模型回放 → 对比表。
 //!
-//! `#[ignore]`：依赖真机模型安装情况（X-ASR 模型），手动跑：
+//! `#[ignore]`：依赖真机模型安装情况（X-ASR 模型），手动跑（`KOTONE_MODELS_DIR` = 装好模型的目录，
+//! 一般是 `%USERPROFILE%\.kotone\models`；只读）：
 //! ```text
+//! set KOTONE_MODELS_DIR=%USERPROFILE%\.kotone\models
 //! cargo test -p kotone-stt --features engine-sherpa --test eval_e2e -- --ignored
 //! ```
 //! sherpa 系引擎需 engine-sherpa feature（ADR-004）。
+//! 配置用临时的 KOTONE_HOME：测试程序拿不到玩家真实的 `~/.kotone`（`settings::kotone_dir`），也不该读写它。
 
 use std::path::PathBuf;
 
@@ -15,9 +18,21 @@ fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zh-game-3s.wav")
 }
 
+/// 隔离的 KOTONE_HOME：只写一个模型目录指向 `KOTONE_MODELS_DIR` 的配置（照 interpreter_sensevoice）。
+fn isolated_home() -> tempfile::TempDir {
+    let models = std::env::var("KOTONE_MODELS_DIR")
+        .expect(r"KOTONE_MODELS_DIR：装好模型的目录（例如 %USERPROFILE%\.kotone\models）");
+    let home = tempfile::tempdir().unwrap();
+    let config = serde_json::json!({ "models": { "dir": models } });
+    std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
+    std::env::set_var("KOTONE_HOME", home.path());
+    home
+}
+
 #[test]
 #[ignore = "E2E：依赖真机 X-ASR 模型，手动跑"]
 fn replay_fixture_across_ready_engines() {
+    let _home = isolated_home();
     let dir = tempfile::tempdir().unwrap();
     let pcm = eval::read_wav(&fixture_path()).expect("fixture wav 应可解码");
     let session = EvalSession {

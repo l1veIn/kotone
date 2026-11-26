@@ -11,9 +11,10 @@ const SERVICE: &str = "kotone";
 
 /// 凭据库服务名。设置了 `KOTONE_HOME`（隔离的数据目录：自动化测试、Agent 沙箱）时按该目录
 /// 区分（`kotone@<目录>`），隔离实例既读不到也写不进用户主实例的 API key；未设置时为
-/// `kotone`（与旧版本一致，已保存的 key 不受影响）。
+/// `kotone`（与旧版本一致，已保存的 key 不受影响）。测试程序没设 `KOTONE_HOME` 时也按它自己的
+/// 临时目录区分（[`kotone_core::settings::isolated_home`]），碰不到玩家存的 Key。
 fn service_name() -> String {
-    service_for(std::env::var_os(kotone_core::settings::HOME_ENV))
+    service_for(kotone_core::settings::isolated_home().map(std::path::PathBuf::into_os_string))
 }
 
 fn service_for(home: Option<std::ffi::OsString>) -> String {

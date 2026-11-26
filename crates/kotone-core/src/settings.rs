@@ -867,13 +867,84 @@ fn default_channel_cycle_hotkey() -> String {
 /// 桌面端、CLI 与工具服务的描述文件目录都随之切换。
 pub const HOME_ENV: &str = "KOTONE_HOME";
 
+/// Kotone 数据目录：`KOTONE_HOME`，没设时是 `~/.kotone`。
+///
+/// 测试程序永远拿不到玩家真实的 `~/.kotone`：没设 `KOTONE_HOME` 的测试进程用自己的临时目录
+/// （[`isolated_home`]）。以前一个夹具忘了关历史，每跑一次 `cargo test` 就往玩家的语音输入历史里
+/// 追加一条“提醒”（2026-11-26 试玩讨论第九节）；这里兜底，哪个 crate 的测试都写不进去。
 pub fn kotone_dir() -> PathBuf {
-    match std::env::var_os(HOME_ENV) {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => dirs::home_dir()
+    isolated_home().unwrap_or_else(|| {
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".kotone"),
+            .join(".kotone")
+    })
+}
+
+/// 隔离的数据目录：设了 `KOTONE_HOME`（非空）就是它；没设但当前进程是测试程序，就是这个测试进程
+/// 自己的临时目录；都不是时为 `None`（玩家真实的 `~/.kotone`）。凭据库的服务名也按它区分
+/// （kotone-ai `secrets`），测试同样碰不到玩家存的 Key。
+pub fn isolated_home() -> Option<PathBuf> {
+    match std::env::var_os(HOME_ENV) {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => test_process_home().cloned(),
     }
+}
+
+/// 测试进程的数据目录：`<target>/tmp/kotone-test-home/<进程号>`（doctest 在系统临时目录下）。
+/// 不是测试程序时为 `None`。整个进程只算一次，第一次用到时在 stderr 说一句。
+///
+/// 为什么看 exe 的位置：`cfg!(test)` 只在被测的那个 crate 里成立，管不到集成测试和别的 crate 的测试；
+/// cargo feature 会合进 `cargo test` 顺手编出来的 `target/debug/kotone.exe`；`.cargo/config.toml` 的
+/// `[env]` 连 `cargo run`（`pnpm dev`）也会改。cargo 的测试程序名字总带 16 位哈希，放在固定的地方
+/// （nextest 跑的是同一批程序），`pnpm dev`、真机脚本跑的 `target/debug/kotone.exe` 和安装版都不在这些地方。
+fn test_process_home() -> Option<&'static PathBuf> {
+    static HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
+    HOME.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        let tmp = test_binary_tmp(&exe, &std::env::temp_dir())?;
+        let home = tmp
+            .join("kotone-test-home")
+            .join(std::process::id().to_string());
+        // 进程号会被复用：先清掉上一个同号测试进程留下的，每次都从空目录开始（和 CI 上一样）。
+        let _ = std::fs::remove_dir_all(&home);
+        eprintln!(
+            "kotone: 测试程序没设 {HOME_ENV}，数据目录用 {}（不碰真实的 ~/.kotone）",
+            home.display()
+        );
+        Some(home)
+    })
+    .as_ref()
+}
+
+/// 认出 cargo 的测试程序，返回放测试数据的目录；不是测试程序返回 `None`。
+/// - 旧布局：`<target>/<profile>/deps/<名字>-<16 位哈希>.exe` → `<target>/tmp`
+/// - Cargo 1.100 起（build-dir 新布局，cargo#17354）：
+///   `<target>/<profile>/build/<包>/<哈希>/out/<名字>-<哈希>.exe` → `<target>/tmp`
+/// - doctest：rustdoc 编到 `<系统临时目录>/rustdoctest<随机>/` 里 → 系统临时目录
+fn test_binary_tmp(exe: &Path, temp_dir: &Path) -> Option<PathBuf> {
+    let parent = exe.parent()?;
+    let parent_name = parent.file_name()?.to_str()?;
+    if parent_name.starts_with("rustdoctest") {
+        return Some(temp_dir.to_path_buf());
+    }
+    let stem = exe.file_stem()?.to_str()?;
+    let (_, hash) = stem.rsplit_once('-')?;
+    if hash.len() != 16 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let profile = match parent_name {
+        "deps" => parent.parent()?,
+        "out" => {
+            let hash_dir = parent.parent()?;
+            let build = hash_dir.parent()?.parent()?;
+            if hash_dir.file_name()? != hash || build.file_name()? != "build" {
+                return None;
+            }
+            build.parent()?
+        }
+        _ => return None,
+    };
+    Some(profile.parent()?.join("tmp"))
 }
 
 fn config_path() -> PathBuf {
@@ -1496,6 +1567,63 @@ pub fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试程序拿不到玩家真实的 `~/.kotone`：没设 `KOTONE_HOME` 时是这个测试进程自己的临时目录。
+    #[test]
+    fn test_binary_never_resolves_the_real_kotone_home() {
+        let home = test_process_home().expect("cargo 的测试程序应被认出来");
+        assert!(
+            home.ends_with(Path::new("kotone-test-home").join(std::process::id().to_string())),
+            "{}",
+            home.display()
+        );
+        let real = dirs::home_dir().unwrap().join(".kotone");
+        assert_ne!(home, &real);
+        if !matches!(std::env::var_os(HOME_ENV), Some(v) if !v.is_empty()) {
+            assert_eq!(kotone_dir(), *home);
+            assert_eq!(isolated_home().as_ref(), Some(home));
+            assert_eq!(config_path(), home.join("config.json"));
+        }
+    }
+
+    /// 只认 cargo 的测试程序（新旧两种布局、doctest）；`pnpm dev` 和真机脚本跑的
+    /// `target/debug/kotone.exe`、安装版、example 都照旧用 `~/.kotone`。
+    #[test]
+    fn test_binary_tmp_only_matches_cargo_test_binaries() {
+        let temp = Path::new("/tmp-root");
+        let tmp = |exe: &str| test_binary_tmp(Path::new(exe), temp);
+        let target_tmp = Some(PathBuf::from("/r/target/tmp"));
+        assert_eq!(
+            tmp("/r/target/debug/deps/orchestrator-0123456789abcdef.exe"),
+            target_tmp
+        );
+        assert_eq!(
+            tmp("/r/target/debug/build/kotone-core/0123456789abcdef/out/kotone_core-0123456789abcdef.exe"),
+            target_tmp
+        );
+        assert_eq!(
+            tmp("/r/target/x86_64-pc-windows-msvc/release/deps/history-fedcba9876543210"),
+            Some(PathBuf::from("/r/target/x86_64-pc-windows-msvc/tmp"))
+        );
+        assert_eq!(
+            tmp("/tmp-root/rustdoctestAbC123/rust_out.exe"),
+            Some(temp.to_path_buf())
+        );
+        for not_test in [
+            "/r/target/debug/kotone.exe",
+            "/r/target/debug/kotone-cli.exe",
+            "/r/target/release/kotone.exe",
+            "/r/target/debug/examples/stdio_server.exe",
+            "/r/target/debug/deps/kotone-cli.exe",
+            "/r/target/debug/deps/kotone-0123456789abcdeg.exe",
+            "/r/target/debug/build/kotone-core/0123456789abcdef/out/kotone_core-fedcba9876543210.exe",
+            "/r/target/debug/other/kotone-core/0123456789abcdef/out/kotone_core-0123456789abcdef.exe",
+            "/Program Files/Kotone/kotone.exe",
+            "/Users/A/AppData/Local/Kotone/kotone-0123456789abcdef.exe",
+        ] {
+            assert_eq!(tmp(not_test), None, "{not_test}");
+        }
+    }
 
     /// 放歌和左侧栏是新字段（ADR 034）：旧配置没有它们时用默认；旧的 `agent.musicSite` 读到就丢掉；
     /// 不认识的音质按默认；“设置”不能隐藏、重复的去掉。

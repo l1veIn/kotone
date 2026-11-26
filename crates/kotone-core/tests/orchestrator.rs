@@ -3292,6 +3292,9 @@ fn capture_lifecycle_orchestrator(
     settings.stt_engine = "stub-final".into();
     settings.active_profile_id = None;
     settings.auto_send = false;
+    // 不记历史：以前这里没关，每跑一次就往玩家真实的 ~/.kotone/history 追加一条“提醒”
+    // （2026-11-26 试玩讨论第九节）。调用方都不看历史，所以关掉即可，不用给临时目录。
+    settings.history.mode = kotone_core::history::HistoryMode::Off;
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubFinalEngine {
         final_text: "提醒"
@@ -3377,6 +3380,26 @@ async fn audio_start_failure_releases_capture_admission() {
     assert_eq!(captures.load(Ordering::SeqCst), 0);
     orch.cancel().await;
     assert_eq!(captures.load(Ordering::SeqCst), 0);
+}
+
+/// 上面两个测试的夹具不记历史：它听到的固定是“提醒”，以前没关历史，每跑一次 `cargo test`
+/// 就往玩家真实的 `~/.kotone/history` 里追加一条（2026-11-26 试玩讨论第九节）。
+#[tokio::test]
+async fn capture_lifecycle_orchestrator_records_no_history() {
+    let orch = capture_lifecycle_orchestrator(
+        Arc::new(MockAudioBackend),
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    );
+    assert_eq!(
+        orch.settings().read().unwrap().history.mode,
+        kotone_core::history::HistoryMode::Off
+    );
+    // 兜底：就算哪个夹具又忘了关，这个测试程序的默认目录也不是玩家真实的 ~/.kotone。
+    if !matches!(std::env::var_os(kotone_core::settings::HOME_ENV), Some(v) if !v.is_empty()) {
+        let real = dirs::home_dir().unwrap().join(".kotone");
+        assert_ne!(kotone_core::settings::kotone_dir(), real);
+        assert!(!kotone_core::history::history_dir().starts_with(&real));
+    }
 }
 
 /// 非 Idle 状态（Listening）按下 resend：静默忽略，不打断当前输入
