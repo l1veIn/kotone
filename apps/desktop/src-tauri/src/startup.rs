@@ -64,7 +64,22 @@ pub(crate) fn get_startup_options(options: tauri::State<StartupOptions>) -> Star
     options.inner().clone()
 }
 
-/// 自启动提权（§10 R-1）：设置开启且当前未提权时，runas 重启自身并立即退出。
+/// 单实例插件（tauri-plugin-single-instance 2.4 的 Windows 实现，`platform_impl/windows.rs`）用的名字和转交格式：
+/// 互斥锁 `{identifier}-sim`、消息窗口类名 `-sic` / 标题 `-siw`、`WM_COPYDATA` 的 dwData 1542、
+/// 内容 `工作目录|参数1|参数2…\0`。插件升级时 `single_instance_protocol_is_pinned` 会提醒回来核对。
+const SINGLE_INSTANCE_ID: &str = "com.l1vein.kotone";
+const SINGLE_INSTANCE_COPYDATA: usize = 1542;
+
+#[cfg(windows)]
+fn single_instance_window() -> (String, String) {
+    (
+        format!("{SINGLE_INSTANCE_ID}-sic"),
+        format!("{SINGLE_INSTANCE_ID}-siw"),
+    )
+}
+
+/// 自启动提权（§10 R-1、ADR 044 D1）：已经用现在的说法问过、设置开启且当前未提权时，runas 重启自身并立即退出。
+/// 还没问过（`adminPromptRevision` 旧）时不重开：窗口里先说明一句（`AdminExplainDialog`），玩家点「好」再弹 UAC。
 ///
 /// 必须在 Tauri Builder 初始化之前执行：单实例插件在插件初始化阶段创建
 /// 命名互斥锁，若在 setup() 里才 runas，未提权父进程已持有该锁——提权子进程
@@ -72,14 +87,40 @@ pub(crate) fn get_startup_options(options: tauri::State<StartupOptions>) -> Star
 /// 也退出，表现为「双击后没有任何窗口」（0.1.4 用户反馈）。在这里提前判定并
 /// std::process::exit，父进程从不触碰单实例锁 / WebView2，子进程是唯一实例。
 ///
+/// 已经有一个 Kotone 在跑时不弹 UAC（只是要把它的窗口唤出来）：打得开它的互斥锁就交给单实例插件转交；
+/// 打不开（它是管理员身份、这次是普通权限，ADR 044 默认管理员以后最常见：玩家再双击图标）时插件会以为
+/// 自己是第一个、再起一份，所以这里照插件的格式自己转交（管理员那份在 [`create_startup_windows`] 里放开了
+/// `WM_COPYDATA`），然后退出。
+///
 /// 防循环：子进程带 ELEVATED_RETRY_ARG 标记；用户取消 UAC 时 ShellExecuteExW
 /// 直接返回错误，本进程按普通权限继续启动（不退出）。
 #[cfg(windows)]
 pub(crate) fn auto_elevate_before_tauri_init() {
+    // 隔离实例（设了 KOTONE_HOME：开发、测试、外部 Agent 的独立实例）不参与默认管理员，和不参与单实例一样：
+    // 不弹 UAC、窗口里也不说明（`compatibility::elevation_status` 报的版本是 0）
+    if std::env::var_os("KOTONE_HOME").is_some() {
+        return;
+    }
     let settings = settings::load();
+    let elevated = elevation::is_elevated();
+    match elevation::running_instance(&format!("{SINGLE_INSTANCE_ID}-sim")) {
+        elevation::RunningInstance::None => {}
+        elevation::RunningInstance::Reachable => return,
+        elevation::RunningInstance::Elevated => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let args = std::env::args().collect::<Vec<_>>().join("|");
+            let (class, title) = single_instance_window();
+            let payload = format!("{}|{args}", cwd.to_string_lossy());
+            if !elevation::forward_to_instance(&class, &title, SINGLE_INSTANCE_COPYDATA, &payload) {
+                eprintln!("[kotone] 管理员身份的 Kotone 在运行，没能把窗口唤出来");
+            }
+            std::process::exit(0);
+        }
+    }
     if !elevation::should_auto_elevate(
         settings.run_as_admin_on_start,
-        elevation::is_elevated(),
+        settings.admin_prompt_revision,
+        elevated,
         elevation::retry_marker_present(),
     ) {
         return;
@@ -99,6 +140,16 @@ pub(crate) fn auto_elevate_before_tauri_init() {
 /// 窗口（wry 的 `MoveFocus`），把它激活成前台，`--background` 启动就抢走了游戏或终端的焦点。要显示设置窗口的
 /// 地方（正常启动、托盘、第二个实例、点消息提示）都用 [`show_and_focus`]。
 pub(crate) fn create_startup_windows(app: &tauri::AppHandle, companion_enabled: bool) {
+    // 管理员身份运行时（ADR 044）：让普通权限再打开的那一次也能把窗口唤出来（见 auto_elevate_before_tauri_init）
+    #[cfg(windows)]
+    if elevation::is_elevated() && std::env::var_os("KOTONE_HOME").is_none() {
+        let (class, title) = single_instance_window();
+        if let Err(e) = elevation::allow_unelevated_messages(&class, &title) {
+            log::log(&format!(
+                "startup: allow second-instance messages failed: {e}"
+            ));
+        }
+    }
     for label in ["danmaku", "companion", "main"] {
         if (label == "companion" && !companion_enabled) || app.get_webview_window(label).is_some() {
             continue;
@@ -130,6 +181,27 @@ pub(crate) fn create_startup_windows(app: &tauri::AppHandle, companion_enabled: 
 #[cfg(test)]
 mod startup_options_tests {
     use super::{parse_onboarding_launch_mode, OnboardingLaunchMode};
+
+    /// 自己转交给管理员身份的实例时照抄了单实例插件的名字和格式：identifier 改了、插件升级了都要回来核对。
+    #[test]
+    fn single_instance_protocol_is_pinned() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], super::SINGLE_INSTANCE_ID);
+        let lock: Vec<&str> = include_str!("../../../../Cargo.lock")
+            .lines()
+            .map(str::trim)
+            .collect();
+        let at = lock
+            .iter()
+            .position(|l| *l == r#"name = "tauri-plugin-single-instance""#)
+            .expect("Cargo.lock 里有 tauri-plugin-single-instance");
+        assert_eq!(
+            lock[at + 1],
+            r#"version = "2.4.3""#,
+            "tauri-plugin-single-instance 升级了：核对它的互斥锁名、消息窗口名和 WM_COPYDATA 格式（startup.rs）"
+        );
+    }
 
     #[test]
     fn onboarding_mode_defaults_to_auto() {

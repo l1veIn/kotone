@@ -93,10 +93,21 @@ pub(crate) fn preview_sfx(kind: String, sound_id: Option<String>) {
 /// 在系统默认浏览器中打开外部链接（关于页 GitHub 等）。
 /// webview 内 target=_blank 不会调起系统浏览器；rundll32 方案零新增依赖，
 /// 白名单只允许 http/https，避免被当成任意协议执行入口。
+/// Kotone 以管理员身份运行时让桌面替我们打开（ADR 044 D2）：浏览器跟桌面一样是普通权限。
 #[tauri::command]
 pub(crate) fn open_external(url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("仅支持打开 http/https 链接".into());
+    }
+    #[cfg(windows)]
+    if kotone_platform_windows::unelevated::needed() {
+        return kotone_platform_windows::unelevated::open_via_desktop(
+            &url,
+            None,
+            None,
+            kotone_platform_windows::unelevated::SHOW_NORMAL,
+        )
+        .map_err(|e| format!("打开浏览器失败：{e}"));
     }
     std::process::Command::new("rundll32")
         .args(["url.dll,FileProtocolHandler", &url])
@@ -105,8 +116,22 @@ pub(crate) fn open_external(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 在资源管理器里打开文件夹。Kotone 以管理员身份运行时让桌面替我们打开（ADR 044 D2）。
 #[cfg(windows)]
 pub(crate) fn open_in_file_manager(dir: &std::path::Path) -> Result<(), String> {
+    if kotone_platform_windows::unelevated::needed() {
+        // 交给桌面以后拿不到“打不开”的结果，先看文件夹在不在
+        if !dir.is_dir() {
+            return Err(format!("打开目录失败：{} 不存在", dir.display()));
+        }
+        return kotone_platform_windows::unelevated::open_via_desktop(
+            &dir.to_string_lossy(),
+            None,
+            None,
+            kotone_platform_windows::unelevated::SHOW_NORMAL,
+        )
+        .map_err(|e| format!("打开目录失败：{e}"));
+    }
     std::process::Command::new("explorer.exe")
         .arg(dir)
         .spawn()

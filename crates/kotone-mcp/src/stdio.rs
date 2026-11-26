@@ -7,18 +7,26 @@
 //!   `npx` → `…\npx.cmd`。`.cmd` / `.bat` 由标准库经 `cmd.exe` 跑：参数转义、遇到转义不了的参数直接拒绝，
 //!   都是 Rust 1.77.2 起标准库做的（CVE-2024-24576），这里不自己拼 `cmd /c`。
 //! - 不弹控制台窗口（Goose 也这样）；stderr 留最后 4 KB，启动失败时拿来说明原因。
+//! - 以普通权限运行（ADR 044 D2）：Kotone 以管理员身份运行时，服务器以桌面为父进程创建、继承桌面的普通权限
+//!   （`kotone_platform_windows::unelevated`，`.cmd` 的转义照标准库同一套规则）；降不下来就不启动，
+//!   返回“没法用普通权限启动：……”。
 //! - 关闭（MCP 规范的 stdio 关闭顺序）：先关它的标准输入（rmcp 关传输时做），等它自己退出（最多 2 秒），
 //!   然后结束整个 Job（它没退出、或者它启动的进程还在）。
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(windows)]
+use kotone_platform_windows::unelevated::{self, PipedChild as Child, PipedCommand};
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, ChildStdin, ChildStdout};
+#[cfg(not(windows))]
+use tokio::process::Child;
+use tokio::process::{ChildStdin, ChildStdout};
 
 use crate::McpError;
 
@@ -218,23 +226,32 @@ pub(crate) fn spawn(
         None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
     let program = resolve_program(command, &env, &dir);
-    let mut cmd = tokio::process::Command::new(&program);
-    cmd.args(args)
-        .env_clear()
-        .envs(env)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if cwd.is_some() {
-        cmd.current_dir(&dir);
-    }
 
     #[cfg(windows)]
-    let (mut child, job) = kotone_platform_windows::job::spawn_in_job(&mut cmd)
-        .map_err(|e| spawn_error(command, &program, e))?;
+    let (mut child, job) = {
+        let mut cmd = PipedCommand::new(PathBuf::from(&program))
+            .args(args.iter().cloned())
+            .env_clear_and_set(env);
+        if cwd.is_some() {
+            cmd = cmd.current_dir(&dir);
+        }
+        unelevated::spawn_piped_in_job(&cmd).map_err(|e| spawn_error(command, &program, e))?
+    };
     #[cfg(not(windows))]
-    let mut child = cmd.spawn().map_err(|e| spawn_error(command, &program, e))?;
+    let mut child = {
+        let mut cmd = tokio::process::Command::new(&program);
+        cmd.args(args)
+            .env_clear()
+            .envs(env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        if cwd.is_some() {
+            cmd.current_dir(&dir);
+        }
+        cmd.spawn().map_err(|e| spawn_error(command, &program, e))?
+    };
 
     let stdout = child.stdout.take();
     let stdin = child.stdin.take();

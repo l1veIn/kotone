@@ -54,6 +54,11 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
+    # 以普通权限启动（unelevated.rs，ADR 044 D2）：管道（CreatePipe）、让桌面替我们打开（IShellWindows::FindWindowSW 要 Ole）、
+    # 转交给管理员身份的那个实例（WM_COPYDATA 的 COPYDATASTRUCT）
+    "Win32_System_Pipes",
+    "Win32_System_Ole",
+    "Win32_System_DataExchange",
 ] }
 # 只录某一个程序的声音（ADR 021）：进程回环录音（MIT）
 wasapi = "0.27"

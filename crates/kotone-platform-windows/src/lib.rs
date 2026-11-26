@@ -10,6 +10,7 @@
 //! - `fullscreen`：独占全屏 Direct3D 状态探测（悬浮窗兼容性提醒）
 //! - `fs_publish`：原子不覆盖的文件发布（CLI 导出产物用）
 //! - `job`：Job Object（子进程连同它启动的进程一起管，Kotone 退出时一起结束；`kotone-exec`、`kotone-mcp` 共用）
+//! - `unelevated`：Kotone 打开的东西一律用普通权限运行（ADR 044 D2）：本体唯一的启动入口
 //! - `game_window`：游戏场景的窗口操作（切前台、请求关闭、打开程序）
 //! - `window_tools`：工具服务的窗口观察与 GDI 前台可见客户区捕获（实现 core 的 tools 端口）
 //! - `tool_host`：工具服务实例发现的会话/进程身份与私有文件 DACL
@@ -46,6 +47,8 @@ pub mod process_cmdline;
 mod registry;
 pub mod speech;
 pub mod tool_host;
+#[cfg(windows)]
+pub mod unelevated;
 pub mod virtual_cable;
 pub mod wav_audio;
 pub mod window_tools;

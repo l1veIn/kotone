@@ -143,12 +143,14 @@ export interface Settings {
   activeProfileId: string | null;
   language: string;
   evalRecording: boolean;
-  /** 启动时自动以管理员重启自身（UIPI 方案，默认关） */
+  /** 启动时以管理员身份运行（ADR 044 D1：默认开；还没问过时启动先不重开，窗口里先说明再弹 UAC） */
   runAsAdminOnStart: boolean;
-  /** 「建议以管理员运行」提示已被用户关闭（不再重复提示） */
+  /** 旧的「以管理员权限重启」提示的“不再提示”（ADR 044 起只读不写，留着兼容旧配置） */
   adminPromptDismissed: boolean;
-  /** 提权重启成功后的「启动时自动请求管理员权限」询问已被用户关闭（不再提醒） */
+  /** 旧的「启动时自动请求管理员权限」询问的“不再提醒”（同上） */
   autoAdminPromptDismissed: boolean;
+  /** 管理员身份的说明用第几版说法问过（0 = 没问过）；比 ElevationStatus.adminPromptRevision 小就弹说明 */
+  adminPromptRevision: number;
   /** 频道切换热键（默认 Shift+CapsLock；按声明顺序循环当前 profile 的聊天频道） */
   channelCycleHotkey: string;
   /** 重发最近一条热键（默认空 = 关闭；Idle 时重发历史最新一条发送文本） */
@@ -863,7 +865,14 @@ export interface ElevationStatus {
   activeGameFullscreen: boolean | null;
   /** 当前平台是否支持提权方案（非 Windows 为 false） */
   supported: boolean;
+  /** 管理员身份的说明现在是第几版（ADR 044）：设置里的 adminPromptRevision 比它小就在窗口里说明一次 */
+  adminPromptRevision: number;
+  /** 这次启动里已经发现的“用不了”：foreground = 管理员身份的游戏在前面、blocked = 打字真的被拦了；没有为 null */
+  notice: ElevationNoticeReason | null;
 }
+
+/** kotone://elevation-needed 的原因（ADR 044 D1：UAC 点了“否”时说清楚哪些用不了，每次启动最多一次） */
+export type ElevationNoticeReason = "foreground" | "blocked";
 
 /** 单个具名辅助热键的注册状态（未配置 / 未生效字段为 null） */
 export interface NamedHotkeyStatus {

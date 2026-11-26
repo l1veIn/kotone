@@ -8,6 +8,8 @@
 //!   启动路径以引号开头时，引号里是程序、后面是参数（Riot 客户端要 `--launch-product=…`）；
 //!   工作目录设为程序所在文件夹（腾讯的启动器要求）；要管理员权限的程序由 Windows 弹授权。
 //!   路径来自用户在游戏配置里填写的“启动路径”，或检测到的已安装游戏（`games.rs`）。
+//!   Kotone 以管理员身份运行时（ADR 044 D2）让桌面替我们打开（`unelevated::open_via_desktop`），
+//!   游戏和启动器跟桌面一样是普通权限起的（它们自己要管理员时照样由 Windows 弹授权）。
 //!
 //! 非 Windows 平台编译为明确报错的兜底实现。
 
@@ -122,10 +124,24 @@ mod imp {
             return Err("启动路径为空".into());
         }
         let (program, args) = crate::games::split_command(path);
-        let directory = std::path::Path::new(&program)
+        let folder = std::path::Path::new(&program)
             .parent()
-            .filter(|dir| dir.is_dir())
-            .map(|dir| HSTRING::from(dir.as_os_str()));
+            .filter(|dir| dir.is_dir());
+        if crate::unelevated::needed() {
+            // 交给桌面以后拿不到“打不开”的结果，先看路径在不在（`steam://` 这类地址不看）
+            let is_address = program.find(':').is_some_and(|i| i > 1);
+            if !is_address && !std::path::Path::new(&program).exists() {
+                return Err("打开失败（找不到这个程序）：请检查游戏配置里的启动路径".into());
+            }
+            return crate::unelevated::open_via_desktop(
+                &program,
+                args.as_deref(),
+                folder,
+                crate::unelevated::SHOW_NORMAL,
+            )
+            .map_err(|e| format!("打开失败：{e}"));
+        }
+        let directory = folder.map(|dir| HSTRING::from(dir.as_os_str()));
         let file = HSTRING::from(program.as_str());
         let params = args.as_deref().map(HSTRING::from);
         let verb = HSTRING::from("open");

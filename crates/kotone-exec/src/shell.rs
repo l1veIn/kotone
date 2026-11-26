@@ -9,6 +9,8 @@
 //!   共用），先挂起创建、放进去再恢复，免得它在放进去之前就启动了子进程。超时 / 取消：结束整个 Job（连同它启动的所有进程）。正常结束：先去掉
 //!   `KILL_ON_JOB_CLOSE` 再关掉 Job——命令里 `Start-Process` 启动、要一直开着的程序（例如
 //!   BetterGI）不会被连带结束；Kotone 自己崩溃时句柄被系统关掉，Job 里还在跑的命令一并结束。
+//! - 以普通权限运行（ADR 044 D2）：Kotone 以管理员身份运行时，PowerShell 以桌面为父进程创建、继承桌面的普通权限
+//!   （`kotone_platform_windows::unelevated`）；降不下来就不运行，返回“没法用普通权限启动：……”。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -18,7 +20,7 @@ use kotone_core::cancel::CancellationToken;
 
 use crate::text;
 #[cfg(windows)]
-use kotone_platform_windows::job;
+use kotone_platform_windows::unelevated::{self, PipedCommand};
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 pub const MAX_TIMEOUT_MS: u64 = 600_000;
@@ -109,6 +111,16 @@ enum Ended {
     Cancelled,
 }
 
+const POWERSHELL_ARGS: [&str; 7] = [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    BOOTSTRAP,
+];
+
 /// 执行一段 PowerShell。`cwd` 必须是已存在的目录。
 pub async fn run(
     script: &str,
@@ -116,29 +128,38 @@ pub async fn run(
     timeout: Duration,
     cancel: &CancellationToken,
 ) -> Result<ShellRun, String> {
+    run_with(script, cwd, timeout, cancel, None).await
+}
+
+/// `via_desktop`：测试用，Some(true) = 不管 Kotone 是不是管理员都以桌面为父进程（看降权那条路）。
+async fn run_with(
+    script: &str,
+    cwd: &Path,
+    timeout: Duration,
+    cancel: &CancellationToken,
+    #[cfg_attr(not(windows), allow(unused_variables))] via_desktop: Option<bool>,
+) -> Result<ShellRun, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let started = Instant::now();
-    let mut cmd = tokio::process::Command::new(powershell_path());
-    cmd.args([
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        BOOTSTRAP,
-    ])
-    .current_dir(cwd)
-    .stdin(std::process::Stdio::piped())
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .kill_on_drop(true);
     #[cfg(windows)]
-    let (mut child, job) =
-        job::spawn_in_job(&mut cmd).map_err(|e| format!("启动 PowerShell 失败：{e}"))?;
+    let (mut child, job) = {
+        let mut cmd = PipedCommand::new(powershell_path())
+            .args(POWERSHELL_ARGS)
+            .current_dir(cwd);
+        if let Some(on) = via_desktop {
+            cmd = cmd.via_desktop(on);
+        }
+        unelevated::spawn_piped_in_job(&cmd).map_err(|e| format!("启动 PowerShell 失败：{e}"))?
+    };
     #[cfg(not(windows))]
-    let mut child = cmd
+    let mut child = tokio::process::Command::new(powershell_path())
+        .args(POWERSHELL_ARGS)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("启动 PowerShell 失败：{e}"))?;
 
@@ -360,6 +381,31 @@ mod tests {
         assert!(r.output.contains("line 20000"));
         assert!(r.output.contains("中间省略"));
         assert!(r.output.chars().count() < text::OUTPUT_LIMIT_CHARS + 100);
+    }
+
+    /// 以桌面为父进程（Kotone 是管理员时走的路，这里强制走）：标准输入进去的命令、UTF-8 输出、退出码照旧，
+    /// `whoami /groups` 里是普通权限（Medium Mandatory Level = S-1-16-8192）。没有桌面（CI）就跳过。
+    #[tokio::test]
+    async fn runs_unelevated_through_the_desktop() {
+        if let Err(e) = unelevated::desktop_pid() {
+            eprintln!("[shell test] 跳过：{e}");
+            return;
+        }
+        let dir = cwd();
+        let r = run_with(
+            r#"Write-Output '中文输出'; & "$env:SystemRoot\System32\whoami.exe" /groups /fo csv; exit 4"#,
+            dir.path(),
+            Duration::from_secs(30),
+            &CancellationToken::default(),
+            Some(true),
+        )
+        .await
+        .unwrap();
+        assert!(r.in_job, "{r:?}");
+        assert_eq!(r.exit_code, Some(4), "{r:?}");
+        assert!(r.output.contains("中文输出"), "{r:?}");
+        assert!(r.output.contains("S-1-16-8192"), "{r:?}");
+        assert!(!r.output.contains("S-1-16-12288"), "{r:?}");
     }
 
     #[tokio::test]

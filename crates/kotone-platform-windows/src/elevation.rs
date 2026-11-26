@@ -11,6 +11,12 @@
 //! - `restart_as_admin()`：ShellExecuteExW "runas" 重启自身 exe（带当前参数，GUI 用）
 //! - `run_elevated(args)`：sudo 式——runas 重启自身但参数完全由调用方给定
 //!   （替换语义，CLI elevate <command> 用）
+//! - `process_integrity(pid)`：进程的完整性级别（普通 = Medium，管理员 = High），测试看降权用
+//! - `running_instance` / `forward_to_instance` / `allow_unelevated_messages`：管理员身份的 Kotone 在跑时，
+//!   普通权限再打开一次也只是把窗口唤出来（ADR 044，见 `startup.rs`）
+//!
+//! ADR 044：默认以管理员身份运行（`runAsAdminOnStart` 默认开）；第一次先在窗口里说明原因再弹 UAC
+//! （[`ADMIN_PROMPT_REVISION`]）。Kotone 打开的东西一律降回普通权限，见 `unelevated`。
 
 /// 自动提权重启时追加的命令行标记：子进程见到它即不再重复 runas（防循环）
 pub const ELEVATED_RETRY_ARG: &str = "--kotone-elevated-spawn";
@@ -40,16 +46,41 @@ pub fn decide_needs_elevation(target_elevated: Option<bool>, self_elevated: bool
     matches!(target_elevated, Some(true)) && !self_elevated
 }
 
-/// 自启动提权防循环判定（纯逻辑，可单测）：
-/// 仅当「设置开启 + 当前未提权 + 本次不是 runas 重启出来的子进程」时才发起 runas。
-/// 用户在 UAC 弹窗点「否」后子进程仍未提权，但 retry_marker_present = true，
-/// 本次会话放弃重试，避免无限重启循环。
+/// 管理员身份的说明现在是第几版（设置里的 `adminPromptRevision` 比它小 = 还没用这一版的说法问过）。
+/// 1 = ADR 044 的说法（呼叫键、说话键、往游戏里打字）。以后说法再变就加一，所有人再问一次。
+pub const ADMIN_PROMPT_REVISION: u32 = 1;
+
+/// 启动最早（Tauri 初始化之前）要不要以管理员身份重开自己（纯逻辑，可单测）：
+/// 仅当「已经用现在的说法问过 + 设置开启 + 当前未提权 + 本次不是 runas 重启出来的子进程」时才发起 runas。
+/// - 没问过（`prompt_revision` 比 [`ADMIN_PROMPT_REVISION`] 小：新装的、以前点过“不再提示”的、以前就开着的）：
+///   先不重开，窗口里先说明原因，玩家点「好」再弹 UAC（ADR 044 D1）。
+/// - 防循环：用户在 UAC 弹窗点「否」后子进程仍未提权，但 retry_marker_present = true，本次放弃重试。
 pub fn should_auto_elevate(
     run_as_admin_on_start: bool,
+    prompt_revision: u32,
     elevated: bool,
     retry_marker_present: bool,
 ) -> bool {
-    run_as_admin_on_start && !elevated && !retry_marker_present
+    prompt_revision >= ADMIN_PROMPT_REVISION
+        && run_as_admin_on_start
+        && !elevated
+        && !retry_marker_present
+}
+
+/// 完整性级别：普通权限（Medium）。
+pub const INTEGRITY_MEDIUM: u32 = 0x2000;
+/// 完整性级别：管理员（High）。
+pub const INTEGRITY_HIGH: u32 = 0x3000;
+
+/// 已经在跑的 Kotone（单实例插件的互斥锁）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningInstance {
+    /// 没有。
+    None,
+    /// 有，打得开它的互斥锁：单实例插件照常把这次打开转交给它。
+    Reachable,
+    /// 有，但打不开它的互斥锁（它是管理员身份、我们不是）：单实例插件会以为自己是第一个，再起一份。
+    Elevated,
 }
 
 /// 单个命令行参数 → lpParameters 片段（MSVC / CommandLineToArgvW 解析规则，
@@ -202,6 +233,114 @@ mod win {
         }
     }
 
+    /// 进程的完整性级别（`TokenIntegrityLevel` 的最后一个子权限：0x2000 普通、0x3000 管理员）；读不到为 None。
+    pub fn process_integrity(pid: u32) -> Option<u32> {
+        use windows::Win32::Security::{
+            GetSidSubAuthority, GetSidSubAuthorityCount, TokenIntegrityLevel, TOKEN_MANDATORY_LABEL,
+        };
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let level = (|| {
+                let mut token = HANDLE::default();
+                OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()?;
+                let level = (|| {
+                    let mut len = 0u32;
+                    let _ = GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut len);
+                    if len == 0 {
+                        return None;
+                    }
+                    let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+                    GetTokenInformation(
+                        token,
+                        TokenIntegrityLevel,
+                        Some(buf.as_mut_ptr() as *mut _),
+                        len,
+                        &mut len,
+                    )
+                    .ok()?;
+                    let label = &*(buf.as_ptr() as *const TOKEN_MANDATORY_LABEL);
+                    let sid = label.Label.Sid;
+                    let count = *GetSidSubAuthorityCount(sid);
+                    if count == 0 {
+                        return None;
+                    }
+                    Some(*GetSidSubAuthority(sid, count as u32 - 1))
+                })();
+                let _ = CloseHandle(token);
+                level
+            })();
+            let _ = CloseHandle(process);
+            level
+        }
+    }
+
+    /// 单实例插件的互斥锁在不在、打不打得开。
+    pub fn running_instance(mutex_name: &str) -> super::RunningInstance {
+        use windows::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+        let name: Vec<u16> = mutex_name.encode_utf16().chain([0]).collect();
+        unsafe {
+            match OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(name.as_ptr())) {
+                Ok(handle) => {
+                    let _ = CloseHandle(handle);
+                    super::RunningInstance::Reachable
+                }
+                Err(_) if GetLastError() == ERROR_ACCESS_DENIED => super::RunningInstance::Elevated,
+                Err(_) => super::RunningInstance::None,
+            }
+        }
+    }
+
+    /// 照单实例插件的做法把这次打开转交给在跑的实例（它的消息窗口收 `WM_COPYDATA`）。
+    /// 对方是管理员身份时，要它先调过 [`allow_unelevated_messages`]，不然 Windows 会挡掉（UIPI）。
+    pub fn forward_to_instance(class: &str, title: &str, tag: usize, payload: &str) -> bool {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::System::DataExchange::COPYDATASTRUCT;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_COPYDATA,
+        };
+        let class: Vec<u16> = class.encode_utf16().chain([0]).collect();
+        let title: Vec<u16> = title.encode_utf16().chain([0]).collect();
+        let mut bytes = payload.as_bytes().to_vec();
+        bytes.push(0);
+        unsafe {
+            let Ok(hwnd) = FindWindowW(PCWSTR(class.as_ptr()), PCWSTR(title.as_ptr())) else {
+                return false;
+            };
+            let data = COPYDATASTRUCT {
+                dwData: tag,
+                cbData: bytes.len() as u32,
+                lpData: bytes.as_mut_ptr() as *mut _,
+            };
+            let mut result = 0usize;
+            let sent = SendMessageTimeoutW(
+                hwnd,
+                WM_COPYDATA,
+                WPARAM(0),
+                LPARAM(&data as *const COPYDATASTRUCT as isize),
+                SMTO_ABORTIFHUNG,
+                5_000,
+                Some(&mut result),
+            );
+            sent.0 != 0
+        }
+    }
+
+    /// 让普通权限的进程也能给这个窗口发 `WM_COPYDATA`（`ChangeWindowMessageFilterEx`）：
+    /// 管理员身份的 Kotone 在跑时，玩家再双击图标（普通权限）也能把窗口唤出来。
+    pub fn allow_unelevated_messages(class: &str, title: &str) -> Result<(), String> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            ChangeWindowMessageFilterEx, FindWindowW, MSGFLT_ALLOW, WM_COPYDATA,
+        };
+        let class: Vec<u16> = class.encode_utf16().chain([0]).collect();
+        let title: Vec<u16> = title.encode_utf16().chain([0]).collect();
+        unsafe {
+            let hwnd = FindWindowW(PCWSTR(class.as_ptr()), PCWSTR(title.as_ptr()))
+                .map_err(|e| format!("找不到单实例的窗口：{e}"))?;
+            ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, None)
+                .map_err(|e| format!("ChangeWindowMessageFilterEx：{e}"))
+        }
+    }
+
     /// ShellExecuteExW "runas" 重启自身 exe。
     /// extra_args 追加在现有参数之后（自动提权路径用来传防循环标记）。
     /// 成功仅表示新进程已拉起；当前进程是否退出由调用方决定。
@@ -290,9 +429,43 @@ pub fn run_elevated(args: &[String]) -> Result<(), String> {
     win::restart_with_args(args)
 }
 
+/// 进程的完整性级别（[`INTEGRITY_MEDIUM`]、[`INTEGRITY_HIGH`]……）；读不到为 None。
+#[cfg(windows)]
+pub fn process_integrity(pid: u32) -> Option<u32> {
+    win::process_integrity(pid)
+}
+
+/// 单实例插件的互斥锁（`mutex_name`）在不在、打不打得开。
+#[cfg(windows)]
+pub fn running_instance(mutex_name: &str) -> RunningInstance {
+    win::running_instance(mutex_name)
+}
+
+/// 把这次打开转交给在跑的实例（单实例插件的消息窗口 `class` / `title`，`WM_COPYDATA` 的 `tag` 和内容照插件）。
+#[cfg(windows)]
+pub fn forward_to_instance(class: &str, title: &str, tag: usize, payload: &str) -> bool {
+    win::forward_to_instance(class, title, tag, payload)
+}
+
+/// 让普通权限的进程也能给单实例插件的消息窗口发 `WM_COPYDATA`。
+#[cfg(windows)]
+pub fn allow_unelevated_messages(class: &str, title: &str) -> Result<(), String> {
+    win::allow_unelevated_messages(class, title)
+}
+
 #[cfg(not(windows))]
 pub fn is_elevated() -> bool {
     false
+}
+
+#[cfg(not(windows))]
+pub fn process_integrity(_pid: u32) -> Option<u32> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn running_instance(_mutex_name: &str) -> RunningInstance {
+    RunningInstance::None
 }
 
 #[cfg(not(windows))]
@@ -390,15 +563,143 @@ mod tests {
 
     #[test]
     fn should_auto_elevate_truth_table() {
-        // 开启 + 未提权 + 无标记 → 发起 runas
-        assert!(should_auto_elevate(true, false, false));
-        // 未开启 → 不动
-        assert!(!should_auto_elevate(false, false, false));
+        let asked = ADMIN_PROMPT_REVISION;
+        // 问过 + 开启 + 未提权 + 无标记 → 发起 runas（包括开机自启）
+        assert!(should_auto_elevate(true, asked, false, false));
+        // 以后的版本也算问过
+        assert!(should_auto_elevate(true, asked + 1, false, false));
+        // 未开启（玩家点了「先不用」或在设置里关了）→ 不动
+        assert!(!should_auto_elevate(false, asked, false, false));
         // 已提权 → 不再 runas（正常 runas 成功后的子进程路径）
-        assert!(!should_auto_elevate(true, true, false));
-        assert!(!should_auto_elevate(true, true, true));
+        assert!(!should_auto_elevate(true, asked, true, false));
+        assert!(!should_auto_elevate(true, asked, true, true));
         // 防循环：runas 子进程仍未提权（用户取消 UAC）→ 本次会话放弃
-        assert!(!should_auto_elevate(true, false, true));
+        assert!(!should_auto_elevate(true, asked, false, true));
+        // 没用现在的说法问过（新装的 0、以前点过“不再提示”的、以前就开着的）→ 先不重开，窗口里先说明
+        for setting in [true, false] {
+            for elevated in [true, false] {
+                for marker in [true, false] {
+                    assert!(!should_auto_elevate(setting, 0, elevated, marker));
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn own_integrity_matches_elevation() {
+        let level = process_integrity(std::process::id()).expect("读得到自己的完整性级别");
+        if is_elevated() {
+            assert!(level >= INTEGRITY_HIGH, "{level:#x}");
+        } else {
+            assert!(level <= INTEGRITY_MEDIUM, "{level:#x}");
+        }
+        assert_eq!(process_integrity(0), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn running_instance_sees_a_mutex() {
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::CreateMutexW;
+        let name = format!("kotone-test-instance-{}", std::process::id());
+        assert_eq!(running_instance(&name), RunningInstance::None);
+        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        let handle = unsafe { CreateMutexW(None, true, PCWSTR(wide.as_ptr())) }.unwrap();
+        assert_eq!(running_instance(&name), RunningInstance::Reachable);
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        assert_eq!(running_instance(&name), RunningInstance::None);
+    }
+
+    /// 转交照单实例插件的格式：一个不显示的窗口（不抢焦点）收 WM_COPYDATA，内容 = `tag` 和以 0 结尾的文字。
+    #[cfg(windows)]
+    #[test]
+    fn forward_reaches_the_instance_window() {
+        use std::sync::mpsc;
+        use std::sync::Mutex;
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+        use windows::Win32::System::DataExchange::COPYDATASTRUCT;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+            PostQuitMessage, RegisterClassW, TranslateMessage, MSG, WINDOW_EX_STYLE, WM_COPYDATA,
+            WNDCLASSW, WS_POPUP,
+        };
+
+        static GOT: Mutex<Option<(usize, String)>> = Mutex::new(None);
+        unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+            if msg == WM_COPYDATA {
+                let data = unsafe { &*(l.0 as *const COPYDATASTRUCT) };
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(data.lpData as *const u8, data.cbData as usize)
+                };
+                *GOT.lock().unwrap() = Some((data.dwData, String::from_utf8_lossy(bytes).into()));
+                unsafe { PostQuitMessage(0) };
+                return LRESULT(1);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, w, l) }
+        }
+
+        let class = format!("kotone-test-sic-{}", std::process::id());
+        let title = format!("kotone-test-siw-{}", std::process::id());
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (c, t) = (class.clone(), title.clone());
+        let pump = std::thread::spawn(move || unsafe {
+            let class_w: Vec<u16> = c.encode_utf16().chain([0]).collect();
+            let title_w: Vec<u16> = t.encode_utf16().chain([0]).collect();
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                lpszClassName: PCWSTR(class_w.as_ptr()),
+                ..Default::default()
+            };
+            RegisterClassW(&wc);
+            // 不调 ShowWindow：一直不显示
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                PCWSTR(class_w.as_ptr()),
+                PCWSTR(title_w.as_ptr()),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            ready_tx.send(()).unwrap();
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            let _ = DestroyWindow(hwnd);
+        });
+        ready_rx.recv().unwrap();
+        // 同一个完整性级别的窗口本来就收得到；放开也不出错
+        allow_unelevated_messages(&class, &title).unwrap();
+        assert!(forward_to_instance(
+            &class,
+            &title,
+            1542,
+            "C:\\dir|kotone.exe|--background"
+        ));
+        pump.join().unwrap();
+        assert_eq!(
+            GOT.lock().unwrap().clone(),
+            Some((1542, "C:\\dir|kotone.exe|--background\0".to_string()))
+        );
+        assert!(!forward_to_instance(
+            "kotone-no-such-class",
+            "none",
+            1542,
+            "x"
+        ));
     }
 
     #[test]

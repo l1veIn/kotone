@@ -132,7 +132,8 @@ pub(crate) async fn launch(
     }
     let exe = resolve_exe(exe).map_err(|e| (EXIT_USAGE, e))?;
     // 完全脱离且不继承任何句柄：调用方（Agent / MCP 客户端）捕获本命令输出用的管道
-    // 不能泄漏进长驻的桌面进程，否则调用方永远等不到 EOF
+    // 不能泄漏进长驻的桌面进程，否则调用方永远等不到 EOF。
+    // 调用方是管理员身份时以普通权限启动（ADR 044 D2，spawn_detached 里做）：Kotone 要管理员就照自己的设置弹 UAC
     let args: &[&str] = if foreground { &[] } else { &["--background"] };
     let child = kotone_platform_windows::detached::spawn_detached(&exe, args).map_err(|e| {
         (
@@ -146,33 +147,58 @@ pub(crate) async fn launch(
     let started = Instant::now();
     let deadline = started + Duration::from_millis(wait_ms);
     let mut last_error = None;
+    // 启动的进程正常退出了（0）但工具服务还没好：它以管理员身份重开了自己（ADR 044 默认管理员，
+    // 要等玩家点 UAC），接着等新的那一份
+    let mut relaunched = false;
     while Instant::now() < deadline {
-        if let Some(code) = child.try_wait() {
-            // 单实例：第二个进程转交给已在运行的实例后会立即退出，再确认一次
-            if let Ok(status) = running_status().await {
-                return Ok(json!({"alreadyRunning": true, "launched": false, "status": status}));
+        if !relaunched {
+            if let Some(code) = child.try_wait() {
+                // 单实例：第二个进程转交给已在运行的实例后会立即退出，再确认一次
+                if let Ok(status) = running_status().await {
+                    return Ok(
+                        json!({"alreadyRunning": true, "launched": false, "status": status}),
+                    );
+                }
+                if code != 0 {
+                    return Err((
+                        EXIT_TOOL_FAILED,
+                        failure(
+                            ErrorCode::Internal,
+                            format!("kotone.exe 启动后退出（{code}）"),
+                        ),
+                    ));
+                }
+                relaunched = true;
             }
-            return Err((
-                EXIT_TOOL_FAILED,
-                failure(
-                    ErrorCode::Internal,
-                    format!("kotone.exe 启动后退出（{code}）"),
-                ),
-            ));
         }
         match running_status().await {
             Ok(status) => {
+                // 重开过的话进程号是新的那一份的（在 status 里）
+                let pid = if relaunched {
+                    status.get("pid").cloned().unwrap_or(Value::Null)
+                } else {
+                    json!(child.id())
+                };
                 return Ok(json!({
                     "alreadyRunning": false,
                     "launched": true,
-                    "pid": child.id(),
+                    "pid": pid,
                     "readyAfterMs": started.elapsed().as_millis() as u64,
                     "status": status,
-                }))
+                }));
             }
             Err(e) => last_error = Some(e),
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    if relaunched {
+        return Err((
+            EXIT_UNAVAILABLE,
+            failure(
+                ErrorCode::ServiceUnreachable,
+                "kotone.exe 退出了，没等到工具服务：可能在以管理员身份重开、Windows 的确认还没点（ADR 044）",
+            ),
+        ));
     }
     Err((
         EXIT_UNAVAILABLE,

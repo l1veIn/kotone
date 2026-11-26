@@ -119,6 +119,8 @@ struct RuntimeSnapshot {
     active_profile_id: Option<String>,
     elevated: bool,
     run_as_admin_on_start: bool,
+    /// 管理员身份的说明用第几版说法问过（ADR 044，0 = 没问过）
+    admin_prompt_revision: u32,
     history_mode: String,
     history_include_audio: bool,
     overlay_visibility: String,
@@ -243,6 +245,7 @@ pub fn export(
         active_profile_id: settings.active_profile_id.clone(),
         elevated: kotone_platform_windows::elevation::is_elevated(),
         run_as_admin_on_start: settings.run_as_admin_on_start,
+        admin_prompt_revision: settings.admin_prompt_revision,
         history_mode: serde_label(&settings.history.mode),
         history_include_audio: settings.history.include_audio,
         overlay_visibility: serde_label(&settings.overlay.visibility),

@@ -264,7 +264,7 @@ pub const FIELDS: &[Field] = &[
     f("diagnostics.recording", "记录诊断信息", "设置 → 系统", "出问题时导出诊断用（diagnostics.export）。", NONE, NOW),
     f("download.source", "模型下载源", "设置 → 模型", "", &[("auto", "自动（魔搭优先，回退官方）"), ("official", "官方"), ("mirror", "镜像")], NOW),
     f("download.ghProxy", "GitHub 下载代理", "设置 → 模型", "形如 https://ghfast.top/ 的前缀；空 = 不用。", NONE, NOW),
-    f("runAsAdminOnStart", "以管理员身份启动", "设置 → 系统", "部分游戏以管理员运行时需要。现在就要管理员权限用 elevation.restart。", NONE, NEXT),
+    f("runAsAdminOnStart", "启动时以管理员身份运行", "设置 → 系统", "默认开：英雄联盟这类游戏是以管理员身份运行的，Kotone 不是管理员时，游戏在前面时呼叫键、说话键、Esc 停下、快捷指令、一键喊话和往游戏里打字都用不了。每次打开 Kotone 时 Windows 会问一次。现在就要管理员身份用 elevation.restart。", NONE, NEXT),
     f("ui.autoStart", "打开 Kotone 时自动启动本地语音识别", "设置 → 模型 → 语音识别", "只对本地语音识别有意义：true 时每次打开 Kotone 就把本地模型加载进内存，语音输入热键、呼叫键和唤醒词马上能用；false 时要先手动启动（启动热键、标题栏、设置 → 模型 → 语音识别或托盘）。在线识别打开 Kotone 就能用，不看这一项；换成在线识别时值保留。这不是开机自启：开机自启是系统启动项，用 autostart.status / autostart.set。", NONE, NEXT),
     f("ui.startPage", "打开软件时显示", "设置 → 系统", "打开 Kotone 窗口时先显示哪一页。空 = 聊天（默认）；不认识的值也按聊天处理。", &[("", "聊天（默认）"), ("chat", "聊天"), ("voiceInput", "语音输入")], NOW),
     f("ui.updatePromptDisabled", "不再提醒升级", "关于", "", NONE, NOW),
@@ -319,6 +319,7 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("ui.legacyUpgrade", "由玩家在升级欢迎页或新手引导中选择"),
     ("adminPromptDismissed", "界面提示状态"),
     ("autoAdminPromptDismissed", "界面提示状态"),
+    ("adminPromptRevision", "界面提示状态：管理员身份的说明问过没有（ADR 044）"),
     ("evalRecording", "开发评测用"),
     (
         "browser.extensions",
@@ -658,7 +659,8 @@ mod tests {
         let mut new = old.clone();
         set(&mut new, "overlay.style", "card".into());
         set(&mut new, "toolService.enabled", true.into());
-        set(&mut new, "runAsAdminOnStart", true.into());
+        // 默认开（ADR 044），关掉才算改动
+        set(&mut new, "runAsAdminOnStart", false.into());
         let changed = changed_paths(&old, &new);
         assert_eq!(
             changed,

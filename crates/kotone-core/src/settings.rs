@@ -64,7 +64,10 @@ pub struct Settings {
     /// 使用时 clamp 到 vad::SILENCE_MS_RANGE）
     #[serde(default = "default_vad_silence_ms")]
     pub vad_silence_ms: u32,
-    /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
+    /// 启动时自动以管理员重启自身（ADR 044 D1：默认开，英雄联盟这类游戏是管理员权限，普通权限的 Kotone
+    /// 在它们前台时热键收不到、打字被挡）。还没用现在的说法问过（[`Settings::admin_prompt_revision`]）时
+    /// 先不重开，窗口里先说明再弹 UAC；防循环见 elevation::should_auto_elevate。
+    #[serde(default = "default_true")]
     pub run_as_admin_on_start: bool,
     /// 频道切换热键（ADR-008）。按声明顺序循环切换当前
     /// profile 的聊天频道；与录制热键冲突时后端拒绝注册并在状态里给出错误。
@@ -99,6 +102,11 @@ pub struct Settings {
     /// 后置 true，不再弹窗（默认 false；与 admin_prompt_dismissed 独立，两段式提示各记各的）
     #[serde(default)]
     pub auto_admin_prompt_dismissed: bool,
+    /// 管理员身份的说明（ADR 044 D1）用第几版的说法问过：0 = 没问过（新装的、以前点过“不再提示”的、以前就开着的
+    /// 都是 0）。比 `elevation::ADMIN_PROMPT_REVISION` 小时启动先不以管理员身份重开，窗口里说明一句再弹 UAC；
+    /// 玩家点「好」或「先不用」、或者在「设置 → 系统」里拨了开关，就记成现在的版本。上面两个“不再提示”只读不再写。
+    #[serde(default)]
+    pub admin_prompt_revision: u32,
     /// 识别历史记录（默认 capped/1000 条/不含音频；off = 零开销不记录）
     #[serde(default)]
     pub history: crate::history::HistoryConfig,
@@ -687,7 +695,7 @@ impl Default for Settings {
             eval_recording: false,
             interaction_mode: Some(crate::interaction::InteractionMode::PushToTalk),
             vad_silence_ms: default_vad_silence_ms(),
-            run_as_admin_on_start: false,
+            run_as_admin_on_start: true,
             channel_cycle_hotkey: default_channel_cycle_hotkey(),
             resend_last_hotkey: String::new(), // 默认关闭（设置里录入）
             toggle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
@@ -696,6 +704,7 @@ impl Default for Settings {
             automation_stop_hotkey: default_automation_stop_hotkey(),
             admin_prompt_dismissed: false,
             auto_admin_prompt_dismissed: false,
+            admin_prompt_revision: 0,
             history: crate::history::HistoryConfig::default(),
             ui: UiConfig::default(),
             models: ModelsConfig::default(),
@@ -1653,6 +1662,37 @@ mod tests {
     /// 放歌搬进插件（ADR 038 第 4 步）：旧的 `music` 段搬进 `plugins.music.settings`，左侧栏的 `music`
     /// 换成 `plugin:music`；新字段已经有了的不覆盖。
     #[test]
+    fn admin_prompt_revision_is_a_new_field_and_old_answers_are_kept() {
+        // ADR 044 D1：旧配置没有 adminPromptRevision = 0（还没用新说法问过）；写过的 runAsAdminOnStart 照原样读，
+        // 没写的按新默认（开）；两个旧的“不再提示”照原样留着（只加不改，原则 19）
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"runAsAdminOnStart":false,"adminPromptDismissed":true,"autoAdminPromptDismissed":true}"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert!(!s.run_as_admin_on_start);
+        assert_eq!(s.admin_prompt_revision, 0);
+        assert!(s.admin_prompt_dismissed && s.auto_admin_prompt_dismissed);
+        std::fs::write(&path, r#"{"activeProfileId":"lol"}"#).unwrap();
+        let s = load_from(&path);
+        assert!(s.run_as_admin_on_start, "没写的按新默认");
+        assert_eq!(s.admin_prompt_revision, 0);
+        // 记下问过：写回去、读回来
+        let mut answered = s.clone();
+        answered.admin_prompt_revision = 1;
+        answered.run_as_admin_on_start = false;
+        let json = serde_json::to_value(&answered).unwrap();
+        assert_eq!(json["adminPromptRevision"], 1);
+        assert_eq!(json["runAsAdminOnStart"], false);
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.admin_prompt_revision, 1);
+        assert!(!back.run_as_admin_on_start);
+    }
+
+    #[test]
     fn old_music_settings_and_sidebar_move_into_the_music_plugin() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
@@ -2065,7 +2105,9 @@ mod tests {
             s.session_options("sherpa-onnx-x-asr-zh-en")["provider"],
             "cpu"
         );
-        assert!(!s.run_as_admin_on_start);
+        // ADR 044 D1：默认以管理员身份运行，但还没问过（第一次先说明再弹 UAC）
+        assert!(s.run_as_admin_on_start);
+        assert_eq!(s.admin_prompt_revision, 0);
         // 新装不再默认带频道切换（ADR 040 D4）；表里正好呼叫键、停下热键、说话三条
         assert_eq!(s.channel_cycle_hotkey, "");
         assert_eq!(s.hotkeys.bindings.len(), 3);

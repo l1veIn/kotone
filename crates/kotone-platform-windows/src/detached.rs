@@ -3,6 +3,9 @@
 //! `std::process::Command` 在指定标准流时会以继承句柄方式创建进程，调用方的所有可继承
 //! 句柄（例如 Agent 捕获 `kotone-cli` 输出用的管道）都会泄漏到被启动的长驻进程里——
 //! 调用方于是永远等不到 EOF。启动 `kotone.exe` 这类长驻 GUI 进程必须不继承任何句柄。
+//!
+//! 调用方是管理员身份时（ADR 044 D2），以桌面为父进程启动（`unelevated::spawn_detached_under_desktop`），
+//! 起来的进程是普通权限；它要管理员就照自己的设置弹 UAC，不偷偷继承。
 
 use std::path::Path;
 
@@ -73,8 +76,17 @@ fn quote(arg: &str) -> String {
     out
 }
 
-/// 不继承任何句柄地启动 `exe args...`（继承当前环境变量与工作目录）。
+/// 不继承任何句柄地启动 `exe args...`（继承当前环境变量与工作目录）。调用方是管理员身份时降成普通权限，
+/// 降不下来就不启动（错误以“没法用普通权限启动”开头）。
 pub fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<DetachedChild> {
+    if crate::unelevated::needed() {
+        use std::os::windows::io::IntoRawHandle;
+        let (process, pid) = crate::unelevated::spawn_detached_under_desktop(exe, args)?;
+        return Ok(DetachedChild {
+            process: HANDLE(process.into_raw_handle()),
+            pid,
+        });
+    }
     let exe_str = exe.to_string_lossy();
     let mut command_line = quote(&exe_str);
     for arg in args {

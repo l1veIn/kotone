@@ -80,9 +80,10 @@ const mock: MockStore = {
     activeProfileId: "lol",
     language: "zh",
     evalRecording: false,
-    runAsAdminOnStart: false,
+    runAsAdminOnStart: true,
     adminPromptDismissed: false,
     autoAdminPromptDismissed: false,
+    adminPromptRevision: 0,
     channelCycleHotkey: "Shift+CapsLock",
     resendLastHotkey: "",
     togglePostProcessingHotkey: "",
@@ -429,6 +430,7 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 
 export async function getSettings(): Promise<Settings> {
   initMockRuntime();
+  applyElevationSeed();
   if (!mock.settings.ui.sidebar) {
     const sidebar = loadMockSidebar();
     if (sidebar) mock.settings.ui.sidebar = sidebar;
@@ -843,6 +845,30 @@ export async function consoleChatSet(profileId: string, enabled: boolean): Promi
   return consoleChatStatus(profileId);
 }
 
+/**
+ * 管理员身份（ADR 044）的预览和测试：页面加载前放 `window.__kotoneElevationSeed`：
+ * `{ status?: Partial<ElevationStatus>, settings?: { adminPromptRevision?, runAsAdminOnStart? } }`。
+ * 默认 `supported: false`（浏览器里没有管理员这回事），所以别的测试看不到说明框和提示。
+ * 「以管理员身份重开」被点过几次记在 `window.__kotoneRestartAsAdminCalls`。
+ */
+type ElevationSeed = {
+  status?: Partial<ElevationStatus>;
+  settings?: Partial<Pick<Settings, "adminPromptRevision" | "runAsAdminOnStart">>;
+};
+function elevationSeed(): ElevationSeed {
+  return (globalThis as { __kotoneElevationSeed?: ElevationSeed }).__kotoneElevationSeed ?? {};
+}
+// 测试读预览里的设置（看「好」/「先不用」写对了没有）
+if (typeof window !== "undefined") {
+  (window as unknown as { __kotoneMockSettings?: () => Settings }).__kotoneMockSettings = () => clone(mock.settings);
+}
+let elevationSeedApplied = false;
+function applyElevationSeed() {
+  if (elevationSeedApplied) return;
+  elevationSeedApplied = true;
+  Object.assign(mock.settings, elevationSeed().settings ?? {});
+}
+
 /** 游戏兼容状态：自身/游戏提权状态 + 激活 profile 的独占全屏状态 */
 export async function getElevationStatus(): Promise<ElevationStatus> {
   return {
@@ -850,12 +876,17 @@ export async function getElevationStatus(): Promise<ElevationStatus> {
     activeGameElevated: null,
     activeGameFullscreen: null,
     supported: false,
+    adminPromptRevision: 1,
+    notice: null,
+    ...elevationSeed().status,
   };
 }
 
 /** 以管理员身份重启（弹 UAC；成功后当前进程退出，调用方无需后续操作） */
 export async function restartAsAdmin(): Promise<void> {
   console.info("[mock] restart_as_admin");
+  const w = globalThis as { __kotoneRestartAsAdminCalls?: number };
+  w.__kotoneRestartAsAdminCalls = (w.__kotoneRestartAsAdminCalls ?? 0) + 1;
   return;
 }
 

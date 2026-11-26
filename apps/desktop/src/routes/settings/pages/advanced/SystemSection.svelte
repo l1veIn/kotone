@@ -229,7 +229,8 @@
           void patchSettings(
             {
               runAsAdminOnStart: value,
-              ...(value ? { adminPromptDismissed: true, autoAdminPromptDismissed: true } : {}),
+              // 自己拨过开关就算问过（ADR 044 D1）：下次打开不再先弹说明
+              ...(elevation ? { adminPromptRevision: elevation.adminPromptRevision } : {}),
             },
             value ? m.system_compat_auto_admin_on() : m.system_compat_auto_admin_off(),
           )}

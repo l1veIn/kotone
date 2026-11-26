@@ -22,15 +22,15 @@
     toast,
     toastWarn,
     errText,
-    AUTO_ADMIN_PROMPT_FLAG,
   } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import { startPageOf, usesLegacyVoiceInput } from "../../lib/ipc/contracts";
   import LegacyRemindersPage from "./pages/LegacyRemindersPage.svelte";
   import { checkForUpdates } from "../../lib/updater";
   import { Sonner } from "$lib/components/ui/sonner";
-  import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
-  import AutoAdminPrompt from "../../lib/components/AutoAdminPrompt.svelte";
+  import AdminExplainDialog from "../../lib/components/AdminExplainDialog.svelte";
+  import ElevationNotice from "../../lib/components/ElevationNotice.svelte";
+  import type { ElevationNoticeReason } from "../../lib/ipc/contracts";
   import InjectionBlockedDialog from "../../lib/components/InjectionBlockedDialog.svelte";
   import UpdateDialog from "../../lib/components/UpdateDialog.svelte";
   import { appState } from "../../lib/stores/state";
@@ -187,12 +187,16 @@
   });
   let loading = $state(true);
   const legacyVoiceOnly = $derived(usesLegacyVoiceInput($settingsStore?.ui));
-  /** 管理员提权提示 · 第一段（仅 Windows 未提权且用户未表态时弹一次） */
-  let showElevationPrompt = $state(false);
-  /** 弹窗是因为刚才真的发不出去（不是启动时的建议）。 */
-  let elevationBlocked = $state(false);
-  /** 管理员提权提示 · 第二段（第一段「以管理员权限重启」成功后弹一次） */
-  let showAutoAdminPrompt = $state(false);
+  /** 管理员身份的说明（ADR 044 D1）：还没用现在的说法问过时弹一次（窗口藏着时，等它显示出来就在那里） */
+  let adminExplain = $state<{ elevated: boolean; revision: number } | null>(null);
+  /** “用不了什么”：不是管理员身份而管理员身份的游戏在前面 / 打字被拦了（每次启动最多一次） */
+  let elevationNotice = $state<ElevationNoticeReason | null>(null);
+  let elevationNoticeShown = false;
+  function showElevationNotice(reason: ElevationNoticeReason) {
+    if (elevationNoticeShown) return;
+    elevationNoticeShown = true;
+    elevationNotice = reason;
+  }
   /** 模拟输入被系统拦截的排查引导弹窗（SendInput 0/N 时弹出；同一错误只弹一次） */
   let showBlockedDialog = $state(false);
   let blockedDismissedFor = $state<string | null>(null);
@@ -241,22 +245,15 @@
       } else if (startup.onboarding === "always" || (startup.onboarding === "auto" && !s.ui.firstRunCompleted)) {
         onboarding = { mode: "new" };
       }
-      // 两段式提权提示：
-      // 第一段（未提权）：未勾选「不再提示」/「默认提权启动」时，询问是否以管理员身份重启；
-      // 第二段（提权）：第一段的重启成功后（localStorage 接力标记），询问是否启动时自动请求。
-      if (isTauri) {
-        const st = await getElevationStatus().catch(() => null);
-        if (st?.activeGameFullscreen === true) fullscreenWarningStore.set(true);
-        showElevationPrompt =
-          st !== null &&
-          st.supported &&
-          !st.elevated &&
-          !s.adminPromptDismissed &&
-          !s.runAsAdminOnStart;
-        if (st?.supported && st.elevated && localStorage.getItem(AUTO_ADMIN_PROMPT_FLAG)) {
-          localStorage.removeItem(AUTO_ADMIN_PROMPT_FLAG);
-          showAutoAdminPrompt = !s.runAsAdminOnStart && !s.autoAdminPromptDismissed;
+      // 管理员身份（ADR 044 D1）：还没用现在的说法问过 → 先说明一句再弹 UAC（启动时后端没有自动重开）；
+      // 不是管理员身份、这次启动已经发现用不了（窗口打开得晚）→ 补上“用不了什么”。浏览器预览里 supported = false。
+      const st = await getElevationStatus().catch(() => null);
+      if (st?.activeGameFullscreen === true) fullscreenWarningStore.set(true);
+      if (st?.supported) {
+        if ((s.adminPromptRevision ?? 0) < st.adminPromptRevision) {
+          adminExplain = { elevated: st.elevated, revision: st.adminPromptRevision };
         }
+        if (!st.elevated && st.notice) showElevationNotice(st.notice);
       }
     } catch (e) {
       toast(false, m.shell_settings_load_failed({ error: errText(e) }));
@@ -325,14 +322,13 @@
     return () => unlisten?.();
   });
 
-  // 打字 / 按键被 Windows 拦下（游戏是管理员权限、Kotone 不是）：弹“以管理员身份重启”。
-  // 启动时那次提示玩家可能点过“不再提示”，这里是真的失败了，照样弹（她也会用语音说）。
+  // 管理员身份的游戏在前面、或者打字 / 按键被 Windows 拦下（游戏是管理员身份、Kotone 不是）：
+  // 说清楚哪些用不了，给“以管理员身份重开”（ADR 044 D1；她也会用语音说打字被拦的那次）。
   onMount(() => {
     if (!isTauri) return;
     let unlisten: (() => void) | undefined;
-    void listen("kotone://elevation-needed", () => {
-      elevationBlocked = true;
-      showElevationPrompt = true;
+    void listen<{ reason?: ElevationNoticeReason } | null>("kotone://elevation-needed", ({ payload }) => {
+      showElevationNotice(payload?.reason ?? "blocked");
     }).then((un) => (unlisten = un));
     return () => unlisten?.();
   });
@@ -418,14 +414,11 @@
     {/key}
   {/if}
 
-  <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->
-  {#if showElevationPrompt && !loading && !onboarding}
-    <ElevationPrompt blocked={elevationBlocked} onClose={() => { showElevationPrompt = false; elevationBlocked = false; }} />
-  {/if}
-
-  <!-- 管理员提权提示 · 第二段（第一段的重启成功后弹一次） -->
-  {#if showAutoAdminPrompt && !loading && !onboarding}
-    <AutoAdminPrompt onClose={() => (showAutoAdminPrompt = false)} />
+  <!-- 管理员身份的说明（ADR 044 D1，盖在新手引导上面：先决定要不要以管理员身份重开）；“用不了什么”等引导结束再说 -->
+  {#if adminExplain && !loading}
+    <AdminExplainDialog elevated={adminExplain.elevated} revision={adminExplain.revision} onClose={() => (adminExplain = null)} />
+  {:else if elevationNotice && !loading && !onboarding}
+    <ElevationNotice reason={elevationNotice} onClose={() => (elevationNotice = null)} />
   {/if}
 
   <!-- 模拟输入被系统拦截的排查引导（注入 0/N 落地时弹出，同一错误不重复打扰） -->
