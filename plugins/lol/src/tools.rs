@@ -22,6 +22,8 @@ pub const TOOL_CLIENT: &str = "lol.client";
 pub const TOOL_CHAMPIONS: &str = "lol.champions";
 /// 一键喊话（ADR 041 第 3 期）：现生成几行、经本体的发话入口发到游戏聊天。给她和热键（插件命令），不给页面。
 pub const TOOL_SHOUT: &str = "lol.shout";
+/// 只给页面用：记下玩家给一块数据选的来源（点来源标签换的，ADR 043 D8），存在插件设置里。
+pub const TOOL_SOURCE: &str = "lol.source";
 /// 只给页面用：海克斯三选一要的本地文字识别模型，卡片上的“下载 / 不用”（ADR 043 D7）。
 pub const TOOL_AUGMENT_OCR: &str = "lol.augment_ocr";
 
@@ -57,8 +59,9 @@ pub fn specs() -> Vec<ToolSpec> {
         ToolSpec::new(
             TOOL_SCOUT,
             "查英雄联盟这局 10 个人最近的战绩（每人最近 20 局、全部模式，和这局同一模式的单独算）：\
-段位、胜负、连胜连败、KDA、场均死、分均伤害、这个英雄玩过几局（大乱斗、海斗这类随机英雄的模式不看）、谁和谁开黑；隐藏战绩的会标出来。\
-最后一行是按数据算出的“突破口”和原因。进加载界面 Kotone 就开始查，问的时候多半已经查好。\
+段位、胜负、连胜连败、KDA、场均死、分均伤害、这个英雄玩过几局（大乱斗、海斗这类随机英雄的模式不看）、谁和谁开黑；隐藏战绩的会标出来，\
+隐藏了身份的人、电脑只有英雄（查不到，也不去查）。只给事实，不评价人：玩家问谁是突破口时，由你按这些数据说。\
+进加载界面 Kotone 就开始查，问的时候多半已经查好。\
 只问一个人时 player 写英雄名或玩家名。转述时说成信息（“对面辅助最近五连败、劫第一次玩”），隐藏战绩的要提一句。",
             json!({"type": "object", "additionalProperties": false, "properties": {
                 "player": {"type": "string", "maxLength": 40, "description": "只看这一个人：英雄名或玩家名；不写 = 全部 10 个人"}
@@ -97,11 +100,14 @@ pub fn specs() -> Vec<ToolSpec> {
 峡谷是这一路的强度（T0–T5）、胜率、选用率、禁用率，克制关系（难打 / 好打的英雄和胜率），核心出装、鞋、符文、加点、召唤师技能；\
 海斗是英雄榜名次、胜率、最搭的队友、最好的海克斯（比这个英雄平均胜率高几个百分点）。champion 写名字、称号或外号（“刀妹”“亚索”）。\
 mode：rift 峡谷 / mayhem 海斗，不写时这局是海斗就查海斗，否则查峡谷；lane 写分路（上 / 野 / 中 / 下 / 辅），不写用这个英雄最常走的路。\
-“亚索克制谁”“刀妹出什么”“海斗里狗头拿什么海克斯”都用它。聊天里会出现英雄卡片，你只说一两句要紧的，说出处（“掌盟的数据”）。",
+source 换数据源：峡谷 qq101（腾讯 101，国服）/ opgg（OP.GG，全球）；海斗的海克斯 aramhex（aramhex-data）/ opgg。不写按玩家在页面上选的\
+（默认国服用腾讯 101、海斗的海克斯用 aramhex-data）。一次只用一个数据源，不同来源的数字不放在一起比。\
+“亚索克制谁”“刀妹出什么”“海斗里狗头拿什么海克斯”都用它。聊天里会出现英雄卡片，你只说一两句要紧的，说出处（“掌盟的数据”“OP.GG 的全球数据”）。",
             json!({"type": "object", "additionalProperties": false, "required": ["champion"], "properties": {
                 "champion": {"type": "string", "minLength": 1, "maxLength": 30, "description": "英雄的名字、称号或外号"},
                 "mode": {"enum": ["rift", "mayhem"], "description": "rift 召唤师峡谷 / mayhem 海克斯大乱斗"},
-                "lane": {"type": "string", "maxLength": 10, "description": "分路：上 / 野 / 中 / 下 / 辅（峡谷）"}
+                "lane": {"type": "string", "maxLength": 10, "description": "分路：上 / 野 / 中 / 下 / 辅（峡谷）"},
+                "source": {"enum": ["qq101", "opgg", "aramhex"], "description": "数据源：峡谷 qq101 / opgg；海斗的海克斯 aramhex / opgg；不写 = 玩家选的"}
             }}),
         )
         .page(crate::stats_tools::PAGE_CHAMPION)
@@ -142,6 +148,16 @@ ban 禁、hover 只亮出来（还没轮到也行）。champion 写名字、称�
         )
         .app_only()
         .page(crate::pages::PAGE_SETTINGS),
+        ToolSpec::new(
+            TOOL_SOURCE,
+            "记下玩家给一块数据选的来源（页面上点来源标签换的）：kind 是哪一块（rift 峡谷的英雄数据、mayhemAugments 海斗的海克斯），\
+source 是来源。存在插件设置里，下次打开页面、她查的时候照这个用。",
+            json!({"type": "object", "additionalProperties": false, "required": ["kind", "source"], "properties": {
+                "kind": {"enum": ["rift", "mayhemAugments"]},
+                "source": {"enum": ["qq101", "opgg", "aramhex"]}
+            }}),
+        )
+        .app_only(),
         ToolSpec::new(
             TOOL_AUGMENT_OCR,
             "海克斯三选一要用的本地文字识别模型（问要不要下载的那张卡片上的按钮）：action = download 下载推荐的本地模型\
@@ -202,6 +218,7 @@ mod tests {
                 TOOL_CLIENT,
                 TOOL_SHOUT,
                 TOOL_CHAMPIONS,
+                TOOL_SOURCE,
                 TOOL_AUGMENT_OCR
             ]
         );
@@ -211,14 +228,14 @@ mod tests {
             let needs: &[&str] = match s.name.as_str() {
                 TOOL_CHAMPION | TOOL_TIER | TOOL_AUGMENT_OCR => &["stats"],
                 TOOL_CLIENT => &["client", "control"],
-                TOOL_CHAMPIONS => &[],
+                TOOL_CHAMPIONS | TOOL_SOURCE => &[],
                 _ => &["client"],
             };
             assert_eq!(s.needs, needs, "{}", s.name);
             // 读到别人写的字的都按不可信数据
             let trusted = matches!(
                 s.name.as_str(),
-                TOOL_CLIENT | TOOL_CHAMPIONS | TOOL_SHOUT | TOOL_AUGMENT_OCR
+                TOOL_CLIENT | TOOL_CHAMPIONS | TOOL_SHOUT | TOOL_SOURCE | TOOL_AUGMENT_OCR
             );
             assert_eq!(s.untrusted, !trusted, "{}", s.name);
         }
@@ -232,7 +249,7 @@ mod tests {
         for s in specs.iter().filter(|s| {
             !matches!(
                 s.name.as_str(),
-                TOOL_GAME | TOOL_CHAMPIONS | TOOL_AUGMENT_OCR
+                TOOL_GAME | TOOL_CHAMPIONS | TOOL_SOURCE | TOOL_AUGMENT_OCR
             )
         }) {
             assert!(s.instant && s.for_model(), "{}", s.name);
@@ -242,6 +259,9 @@ mod tests {
         assert_eq!(shout.side_effects, ["input", "records-run"]);
         let game = specs.iter().find(|s| s.name == TOOL_GAME).unwrap();
         assert!(!game.for_model());
+        // 换数据源只给页面（ADR 043 D8：点来源标签）
+        let source = specs.iter().find(|s| s.name == TOOL_SOURCE).unwrap();
+        assert!(!source.for_model() && source.for_app());
         // 下载识别模型的按钮只给页面（ADR 043 D7），页面是那张卡片
         let ocr = specs.iter().find(|s| s.name == TOOL_AUGMENT_OCR).unwrap();
         assert!(!ocr.for_model() && ocr.for_app());

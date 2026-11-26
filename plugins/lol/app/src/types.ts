@@ -78,6 +78,11 @@ export type Tag = { kind: TagKind | string; text: string } | string;
 export type MatchPhase = "champ_select" | "loading" | "in_game" | "post_match";
 /** 选人时：锁了 / 预选 / 还没选。 */
 export type PickState = "locked" | "intent" | "none";
+/**
+ * 看得到是谁没有（ADR 043 D9）：known 查战绩；hidden 隐藏了身份（客户端不给名字和 puuid）；name_hidden 选人时看不到名字；
+ * bot 电脑（接口标了的）。后三种只有英雄，不查。旧数据没有这个字段：没有 puuid、名字的按 name_hidden。
+ */
+export type Identity = "known" | "hidden" | "name_hidden" | "bot";
 
 export interface MatchPlayer {
   puuid: string;
@@ -94,7 +99,7 @@ export interface MatchPlayer {
   summary: Summary | null;
   tags: Tag[];
   recent: RecentGame[];
-  weak: string[] | null;
+  identity?: Identity;
   profileIconId?: number | null;
   profileIcon?: string;
   summonerLevel?: number | null;
@@ -289,7 +294,10 @@ export interface ChampionRift {
   spells: { spells: Named[]; winRate: number | null; pickRate: number | null }[];
   sources: Source[];
   stale: boolean;
+  /** 来源换成 OP.GG 时它的结果（文字）；用腾讯 101 时 null。 */
   opgg: OpggBlock | null;
+  /** 这一块的来源标签（ADR 043 D8；旧数据没有时按腾讯 101）。 */
+  source?: SourceChoice;
 }
 export interface MayhemAugment {
   id: number;
@@ -312,6 +320,10 @@ export interface ChampionMayhem {
   /** aramhex-data 的署名（CC BY-NC 4.0）；没读到时 null。 */
   attribution: string | null;
   sources: Source[];
+  /** 海克斯换成 OP.GG 时它的结果（文字）。 */
+  augmentsOpgg?: OpggBlock | null;
+  /** 海克斯那一块的来源标签（旧数据没有时按 aramhex-data）。 */
+  source?: SourceChoice;
 }
 export type ChampionData = ChampionRift | ChampionMayhem;
 
@@ -322,6 +334,19 @@ export function isChampionData(value: unknown): value is ChampionData {
 
 /** aramhex-data 的仓库（署名链接）。 */
 export const ARAMHEX_URL = "https://github.com/czgreat/aramhex-data";
+/** OP.GG（我们答应过的标志和链接，opgg-mcp#26）。 */
+export const OPGG_URL = "https://op.gg";
+
+/** 数据源的 id（plugins/lol/src/stats_tools.rs 的 `FROM_*`；`client` 是英雄联盟客户端）。 */
+export type SourceId = "client" | "qq101" | "opgg" | "aramhex";
+/** 能换来源的一块（`KIND_*`）。 */
+export type SourceKind = "rift" | "mayhemAugments";
+/** 一块数据现在用哪个来源、能换成哪些（`available`：OP.GG 的开关关着时 false）。 */
+export interface SourceChoice {
+  kind: SourceKind;
+  id: SourceId;
+  options: { id: SourceId; available: boolean }[];
+}
 
 // ---------- 强度榜（`lol.tier`，plugins/lol/src/stats_tools.rs 的 tier_tool） ----------
 

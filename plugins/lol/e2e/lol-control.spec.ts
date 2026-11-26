@@ -46,14 +46,14 @@ async function lolConfig(page: Page): Promise<LolSettings> {
   return settings.plugins?.lol ?? {};
 }
 
-test("操作客户端 is off by default with the LeagueAkari #523 risk note; the preferences only open when it is on", async ({ page }) => {
+// 风险提示（LeagueAkari #523）不在开关下面，在插件的“风险和许可”弹窗里（ADR 043 D8，e2e/plugin-risk.spec.ts）
+test("操作客户端 is off by default; the preferences only open when it is on", async ({ page }) => {
   const pluginPage = await open(page);
   const toggle = pluginPage.getByTestId("plugin-lol-source-control");
   await expect(toggle).toHaveAttribute("aria-checked", "false");
-  const risk = pluginPage.getByTestId("plugin-lol-source-control-risk");
-  await expect(risk).toContainText("LeagueAkari");
-  await expect(risk.getByTestId("plugin-lol-source-control-link")).toHaveText("github.com/LeagueAkari/LeagueAkari/issues/523");
+  await expect(pluginPage.getByTestId("plugin-lol-source-control-risk")).toHaveCount(0);
   await expect(pluginPage.getByTestId("lol-control-off")).toBeVisible();
+  await expect(pluginPage.getByTestId("lol-control-off")).not.toContainText("风险");
   await expect(pluginPage.getByTestId("lol-control")).toHaveCount(0);
 
   await toggle.click();
@@ -132,17 +132,13 @@ test("auto-accept, an ordered pick list with lock-in, and a ban list are written
 });
 
 // 在客户端里发聊天（ADR 041 第 2 期）：选英雄、房间里经客户端的聊天接口发，不按键。默认开（只在有人要发时发），
-// 风险提示写出处（屏蔽词 #480、WeGame 去掉的一键喊话 #524、Riot 说客户端接口不正式支持第三方）；关掉写进设置。
-test("在客户端里发聊天 is on by default with its sources in the risk note, and can be turned off", async ({ page }) => {
+// 风险提示写出处（屏蔽词 #480、WeGame 去掉的一键喊话 #524、Riot 说客户端接口不正式支持第三方），在“风险和许可”弹窗里
+// （ADR 043 D8，e2e/plugin-risk.spec.ts）；关掉写进设置。
+test("在客户端里发聊天 is on by default and can be turned off", async ({ page }) => {
   const pluginPage = await open(page);
   const toggle = pluginPage.getByTestId("plugin-lol-source-chat");
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  const risk = pluginPage.getByTestId("plugin-lol-source-chat-risk");
-  await expect(risk).toContainText("developer.riotgames.com/docs/lol");
-  await expect(risk.getByTestId("plugin-lol-source-chat-link")).toHaveText([
-    "github.com/LeagueAkari/LeagueAkari/issues/480",
-    "github.com/LeagueAkari/LeagueAkari/issues/524",
-  ]);
+  await expect(pluginPage.getByTestId("plugin-lol-source-chat-risk")).toHaveCount(0);
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect.poll(async () => (await lolConfig(page)).sources?.chat).toBe(false);

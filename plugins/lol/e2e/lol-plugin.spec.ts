@@ -1,4 +1,4 @@
-// 英雄联盟插件的 App（ADR 038 第 1 步）：从左侧栏「插件」的卡片点开；插件页有“读客户端数据”开关和风险提示；
+// 英雄联盟插件的 App（ADR 038 第 1 步）：从左侧栏「插件」的卡片点开；插件页有“读客户端数据”开关（风险提示在“风险和许可”弹窗里，ADR 043 D8）；
 // 关掉它写的是设置 plugins.lol.sources.client，游戏配置页里插件给的小节和“游戏事件”跟着变；
 // 「插件」里有它的卡片（卡片上的开关只开关插件），插件整个关掉时 App 里的数据开关变灰。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
@@ -28,7 +28,7 @@ async function settings(page: Page): Promise<{ plugins?: Record<string, { enable
   return page.evaluate("import('/src/lib/ipc.ts').then((ipc) => ipc.getSettings())");
 }
 
-test("the League of Legends plugin opens from 插件 with the client-data switch and risk note", async ({ page }, testInfo) => {
+test("the League of Legends plugin opens from 插件 with the client-data switch (its risk is behind 风险和许可)", async ({ page }, testInfo) => {
   await open(page);
   await expect(page.getByTestId("app-sidebar")).not.toContainText("英雄联盟");
   await openPlugin(page, "lol");
@@ -41,7 +41,9 @@ test("the League of Legends plugin opens from 插件 with the client-data switch
   const client = pluginPage.getByTestId("plugin-lol-source-client");
   await expect(enabled).toHaveAttribute("aria-checked", "true");
   await expect(client).toHaveAttribute("aria-checked", "true");
-  await expect(pluginPage.getByTestId("plugin-lol-source-client-risk")).toContainText("可能违反腾讯的用户协议");
+  // 风险提示不在开关下面，在栏上的“风险和许可”弹窗里（ADR 043 D8）
+  await expect(pluginPage.getByTestId("plugin-lol-source-client-risk")).toHaveCount(0);
+  await expect(page.getByTestId("plugin-risk-link")).toBeVisible();
   await expect(pluginPage).toContainText("读客户端数据");
   await screenshot(page, { path: shot(testInfo, "lol-plugin-page") });
 

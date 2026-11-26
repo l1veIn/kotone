@@ -23,6 +23,8 @@ export const TOOL_SCOUT = "kotone_lol_scout";
 export const TOOL_PLAYER = "kotone_lol_player";
 export const TOOL_GAME = "kotone_lol_game";
 export const TOOL_CHAMPION = "kotone_lol_champion";
+/** 来源标签换来源（只给页面，ADR 043 D8）：记在插件设置里。 */
+export const TOOL_SOURCE = "kotone_lol_source";
 
 /** 插件的设置页（宿主的页面：数据开关、风险提示、操作客户端的偏好）。 */
 export const PAGE_SETTINGS = "ui://kotone/lol/settings";

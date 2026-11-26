@@ -190,6 +190,15 @@ pub struct PluginConfig {
     /// 默认（规则在 `kotone-plugin-api` 的 `Manifest::push_switch_in`）。新字段，旧版本会忽略。
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub pushes: std::collections::BTreeMap<String, bool>,
+    /// 插件的“风险和许可”弹窗看过第几版（ADR 043 D8）：0 = 没看过。比界面的版本（`lib/plugins.ts` 的 `RISK_REVISION`）
+    /// 小时，第一次打开有风险的开关、或者有风险的开关默认开着而第一次打开插件页，弹一次；弹出来就记成现在的版本。
+    /// 只是提示，不管任何开关。新字段，旧版本会忽略。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub risk_seen: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Settings {
@@ -1817,6 +1826,33 @@ mod tests {
         assert!(serde_json::to_string(&fresh)
             .unwrap()
             .contains(r#""plugins":{}"#));
+    }
+
+    /// 插件的“风险和许可”弹窗看过第几版（ADR 043 D8）：新字段，旧配置读进来是 0（没看过）、不写出去；
+    /// 记过的写回去、读回来；别的字段照旧。
+    #[test]
+    fn plugin_risk_seen_is_a_new_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"plugins":{"lol":{"sources":{"control":true},"pushes":{"opening":false}}}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert_eq!(s.plugins["lol"].risk_seen, 0);
+        assert!(s.plugin_source_enabled("lol", "control", false));
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(!text.contains("riskSeen"), "{text}");
+
+        let mut seen = s.clone();
+        seen.plugins.get_mut("lol").unwrap().risk_seen = 1;
+        let json = serde_json::to_value(&seen).unwrap();
+        assert_eq!(json["plugins"]["lol"]["riskSeen"], 1);
+        assert_eq!(json["plugins"]["lol"]["pushes"]["opening"], false);
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.plugins["lol"].risk_seen, 1);
+        assert_eq!(back.plugin_push("lol", "opening"), Some(false));
     }
 
     /// 浏览器插件是新字段（ADR 031）：旧配置没有它时为空；写进去的能原样读回；只写了路径的条目默认启用。

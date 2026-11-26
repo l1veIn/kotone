@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 英雄联盟插件的设置（宿主的页面；插件页顶栏的“设置”打开）：数据开关和它们的风险提示、“操作客户端”的偏好
+  // 英雄联盟插件的设置（宿主的页面；插件页顶栏的“设置”打开）：数据开关（风险提示收进顶栏“风险和许可”的弹窗，ADR 043 D8）、“操作客户端”的偏好
   // （自动接受、自动选 / 禁英雄，照 LeagueAkari）。App（这局、战绩、英雄、强度榜）里不放设置：在 Claude 这类宿主里
   // 没有 Kotone 的设置，App 只在页脚写风险提示。
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";

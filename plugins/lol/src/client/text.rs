@@ -147,6 +147,8 @@ fn player_line(
     }
     if p.bot {
         parts.push("电脑".into());
+    } else if p.hidden_identity() {
+        parts.push("隐藏了身份".into());
     }
     parts.join(" · ")
 }
@@ -227,6 +229,33 @@ pub fn render_match(game: &LiveGame, data: Option<&GameData>, tracker: &SpellTra
     out.join("\n")
 }
 
+/// 这个人是谁看得到看不到（ADR 043 D9）。只有接口自己标了是电脑的才算电脑；没有 puuid 的真人照样列出来，
+/// 只显示英雄，不去反查。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Identity {
+    /// 有 puuid，查战绩（还没查完时 `history` 是 None）。
+    #[default]
+    Known,
+    /// 隐藏了身份（主播模式）：加载、对局里客户端不给 puuid，局内接口里名字是空的。不查。
+    Hidden,
+    /// 选人时看不到名字（排位的队友、选人时的对面）：先不查，进了加载按 gameflow 的名单再看。
+    NameHidden,
+    /// 电脑（客户端的 `botDifficulty` / `playerType`、局内接口的 `isBot`）。不查。
+    Bot,
+}
+
+impl Identity {
+    /// 页面数据里的写法（`identity`）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Known => "known",
+            Self::Hidden => "hidden",
+            Self::NameHidden => "name_hidden",
+            Self::Bot => "bot",
+        }
+    }
+}
+
 /// 查战绩时的一个人。
 #[derive(Debug, Clone, Default)]
 pub struct ScoutPlayer {
@@ -250,9 +279,16 @@ pub struct ScoutPlayer {
     pub profile_icon_id: Option<i64>,
     pub spells: [i64; 2],
     pub position: String,
+    /// 看得到是谁没有（隐藏了身份、电脑的不查）。
+    pub identity: Identity,
 }
 
 impl ScoutPlayer {
+    /// 还在查（查得到的人、战绩还没回来）。隐藏了身份、电脑、选人时看不到名字的人不算。
+    pub fn pending(&self) -> bool {
+        self.identity == Identity::Known && self.history.is_none()
+    }
+
     pub fn matches(&self, query: &str) -> bool {
         let q = crate::client::gamedata::normalize(query);
         !q.is_empty()
@@ -271,6 +307,21 @@ fn scout_line(p: &ScoutPlayer, s: Option<&Summary>, mode: &str, random_pick: boo
     }];
     if !p.name.is_empty() {
         parts.push(format!("「{}」", p.name));
+    }
+    match p.identity {
+        Identity::Known => {}
+        Identity::Hidden => {
+            parts.push("隐藏了身份（查不到战绩）".into());
+            return parts.join(" · ");
+        }
+        Identity::NameHidden => {
+            parts.push("选人时看不到名字（进了加载再查）".into());
+            return parts.join(" · ");
+        }
+        Identity::Bot => {
+            parts.push("电脑".into());
+            return parts.join(" · ");
+        }
     }
     let Some(h) = &p.history else {
         parts.push("还在查".into());
@@ -311,7 +362,7 @@ fn scout_line(p: &ScoutPlayer, s: Option<&Summary>, mode: &str, random_pick: boo
 }
 
 /// 开黑的几组（同一边、同一个 `teamParticipantId`、至少两个人）。
-fn parties(players: &[ScoutPlayer]) -> Vec<String> {
+pub(crate) fn parties(players: &[ScoutPlayer]) -> Vec<String> {
     let mut groups: BTreeMap<(bool, i64), Vec<&str>> = BTreeMap::new();
     for p in players {
         if let Some(id) = p.party.filter(|id| *id > 0) {
@@ -331,7 +382,8 @@ fn parties(players: &[ScoutPlayer]) -> Vec<String> {
         .collect()
 }
 
-/// `lol.scout` 的结果。`only` = 只看这个人（英雄名或玩家名）；
+/// `lol.scout` 的结果：每个人的事实（段位、最近的胜负、连胜连败、KDA、这个英雄打过几局）、谁和谁开黑、
+/// 隐藏了身份的有几个。不评价人（ADR 043 D2：谁是突破口由她按这些数据说）。`only` = 只看这个人（英雄名或玩家名）；
 /// `random_pick` = 随机英雄的模式（[`crate::client::gamedata::random_pick`]），不看这个英雄玩没玩过。
 pub fn render_scout(
     players: &[ScoutPlayer],
@@ -394,33 +446,26 @@ pub fn render_scout(
     if !groups.is_empty() {
         out.push(format!("开黑：{}", groups.join("；")));
     }
-    let enemies: Vec<(usize, &Summary)> = players
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.ally)
-        .filter_map(|(i, _)| summaries[i].as_ref().map(|s| (i, s)))
+    let hidden = |ally: bool| {
+        players
+            .iter()
+            .filter(|p| p.ally == ally && p.identity == Identity::Hidden)
+            .count()
+    };
+    let hidden: Vec<String> = [("我方", hidden(true)), ("对面", hidden(false))]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(side, n)| format!("{side} {n} 人"))
         .collect();
-    let waiting = players.iter().filter(|p| p.history.is_none()).count();
+    if !hidden.is_empty() {
+        out.push(format!(
+            "隐藏了身份（客户端不给名字和战绩，不查）：{}",
+            hidden.join("、")
+        ));
+    }
+    let waiting = players.iter().filter(|p| p.pending()).count();
     if waiting > 0 {
         out.push(format!("还有 {waiting} 个人在查，过几秒再问会更全。"));
-    }
-    let spots = scout::weak_spots(&enemies, random_pick);
-    if spots.is_empty() {
-        out.push("突破口：对面几个人最近的数据差不多，看不出明显的突破口。".into());
-    } else {
-        let lines: Vec<String> = spots
-            .iter()
-            .map(|w| {
-                let p = &players[w.index];
-                let hidden = if p.history.as_ref().is_some_and(PlayerHistory::hidden) {
-                    "（隐藏战绩）"
-                } else {
-                    ""
-                };
-                format!("{}{hidden}——{}", p.short, w.reasons.join("、"))
-            })
-            .collect();
-        out.push(format!("突破口（对面，按数据）：{}", lines.join("；")));
     }
     out.join("\n")
 }
@@ -493,8 +538,10 @@ mod tests {
         }
     }
 
+    /// ADR 043 D2：只给事实（最近的胜负、连胜连败、这个英雄几局、谁开黑），不说谁是突破口；
+    /// D9：隐藏了身份的人照样列出来（只有英雄），电脑写“电脑”，都不算“还在查”。
     #[test]
-    fn scout_text_flags_hidden_players_parties_and_the_weak_spot() {
+    fn scout_text_states_facts_hidden_players_and_parties_only() {
         let good: Vec<_> = (0..10)
             .map(|i| h::game(i, 2400, 39, i % 3 != 0, (8, 3, 10), 30000))
             .collect();
@@ -511,16 +558,29 @@ mod tests {
         let mut waiting = scout_player("戊", false, None, vec![]);
         waiting.history = None;
         players.push(waiting);
+        for (short, identity) in [("己", Identity::Hidden), ("庚", Identity::Bot)] {
+            let mut p = scout_player(short, true, None, vec![]);
+            p.name = String::new();
+            p.history = None;
+            p.identity = identity;
+            players.push(p);
+        }
         let text = render_scout(&players, 2400, "海克斯大乱斗", true, None);
         assert!(text.contains("隐藏战绩"), "{text}");
         assert!(text.contains("开黑：对面 乙 + 丙"), "{text}");
+        assert!(text.contains("5 连败"), "{text}");
+        assert!(!text.contains("突破口"), "插件不推测突破口：{text}");
+        assert!(text.contains("「戊的主人」 · 还在查"), "{text}");
         assert!(
-            text.contains("突破口（对面，按数据）：丁（隐藏战绩）——"),
+            text.contains("- 称号 己 · 隐藏了身份（查不到战绩）"),
             "{text}"
         );
-        assert!(text.contains("5 连败"), "{text}");
-        assert!(text.contains("「戊的主人」 · 还在查"), "{text}");
-        assert!(text.contains("还有 1 个人在查"), "{text}");
+        assert!(text.contains("- 称号 庚 · 电脑"), "{text}");
+        assert!(
+            text.contains("隐藏了身份（客户端不给名字和战绩，不查）：我方 1 人"),
+            "{text}"
+        );
+        assert!(text.contains("还有 1 个人在查"), "只数查得到的人：{text}");
 
         let one = render_scout(&players, 2400, "海克斯大乱斗", true, Some("丁"));
         assert!(one.contains("丁") && !one.contains("乙"), "{one}");
@@ -553,7 +613,7 @@ mod tests {
             "{aram}"
         );
         assert!(!aram.contains("这个英雄 0 局"), "{aram}");
-        assert!(aram.contains("看不出明显的突破口"), "{aram}");
+        assert!(!aram.contains("突破口"), "{aram}");
 
         // 峡谷：同样的数据照旧标出来
         let rift = render_scout(&players, 420, "单双排", false, None);

@@ -153,9 +153,10 @@ test("console chat switch shows only for profiles that declare it and reports th
   expect(saved?.consoleChat).toEqual({ cfgDir: "game/dota/cfg" });
 });
 
-// ADR 035 D5 → ADR 038：英雄联盟的配置里有英雄联盟插件给的一节：“读客户端数据”开关（默认开、写着风险），
-// 改的是插件的设置 plugins.lol.sources.client，不随“保存”走。
-test("the League profile shows the plugin's client-data switch with its risk note and saves plugins.lol.sources.client", async ({ page }, testInfo) => {
+// ADR 035 D5 → ADR 038：英雄联盟的配置里有英雄联盟插件给的一节：“读客户端数据”开关（默认开），
+// 改的是插件的设置 plugins.lol.sources.client，不随“保存”走。风险提示不摆在这里（ADR 043 D8：插件的“风险和许可”弹窗，
+// e2e/plugin-risk.spec.ts）。
+test("the League profile shows the plugin's client-data switch and saves plugins.lol.sources.client", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-game").click();
@@ -172,7 +173,7 @@ test("the League profile shows the plugin's client-data switch with its risk not
   await lol.getByRole("button", { name: "编辑", exact: true }).click();
   const box = lol.getByTestId("game-profile-lol-data");
   await expect(box).toContainText("读客户端数据");
-  await expect(box).toContainText("可能违反腾讯的用户协议");
+  await expect(box).not.toContainText("可能违反腾讯的用户协议");
   const toggle = box.getByTestId("profile-lol-data");
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await screenshot(box, { path: testInfo.outputPath("lol-data-switch.png") });
@@ -186,7 +187,7 @@ test("the League profile shows the plugin's client-data switch with its risk not
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  expect(settings.plugins?.lol).toEqual({ sources: { client: false } });
+  expect(settings.plugins?.lol?.sources).toEqual({ client: false });
   // 读客户端数据关了：只剩通用的事
   await expect(events.getByTestId("game-profile-events-list")).not.toContainText("拿了大龙");
   await expect(events).toContainText("“读客户端数据”关着");

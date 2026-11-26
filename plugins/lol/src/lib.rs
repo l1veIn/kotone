@@ -1,12 +1,14 @@
-//! 英雄联盟插件（ADR 035、036、038）：像 LeagueAkari 那样查这局 10 个人的战绩、找突破口、记对面的
-//! 召唤师技能；带游戏中心的 `lol` 适配器（对局阶段、局内的事）。
+//! 英雄联盟插件（ADR 035、036、038）：像 LeagueAkari 那样查这局 10 个人的战绩、记对面的召唤师技能；
+//! 带游戏中心的 `lol` 适配器（对局阶段、局内的事）。插件只说“是什么”（数字、出处），谁是突破口这类评价归她
+//! （ADR 043 D2）。
 //!
 //! - [`client`]：数据开关“读客户端数据”（`client`）背后的东西：本机的客户端接口（LCU）和局内接口，
-//!   战绩、突破口、技能计时，都是纯函数加一个只连 127.0.0.1 的 HTTP 客户端；
+//!   战绩、技能计时，都是纯函数加一个只连 127.0.0.1 的 HTTP 客户端；
 //! - [`tools`]：给她和页面的工具（名字、说明、参数）；
 //! - [`pages`]：页面的数据（这局、战绩、单局详情，照 MCP Apps 的 `structuredContent`）；
 //! - [`stats`]：数据开关“用网上的统计”（`stats`）背后的东西：腾讯 101、aramhex-data、外号和名字表，
-//!   以及默认关的 OP.GG（`opgg`）；工具在 `stats_tools.rs`；
+//!   以及 OP.GG（`opgg`，默认开，按需请求、最多 2 个并发）；工具在 `stats_tools.rs`，页面上每块数据一个来源标签
+//!   （ADR 043 D8，`lol.source` 记住玩家换的来源）；
 //! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现；
 //! - [`pushes`]：选英雄卡片、海克斯三选一两条推送（ADR 043 D7，原来的两个覆盖层；开局战绩、这局总结在 `watcher/auto_cards.rs`）；
 //! - [`app`]：做成 MCP App 的页面（`app/` 里独立的 HTML，ADR 039 D5），Kotone 和外部宿主显示同一份；
@@ -184,7 +186,35 @@ mod tests {
         );
     }
 
-    /// 界面上的文字（messages/<语言>.json）和清单一致：名字、说明、开关的名字和风险提示（中文）；英文也都有。
+    /// 风险和许可（ADR 043 D8）：Riot 关于海克斯胜率的规定照原文写在“用网上的统计”的风险里；许可证要求的署名、
+    /// 答应过 OP.GG 的用法、图片的出处、Riot 的声明都在 `[[notices]]` 里。
+    #[test]
+    fn risks_and_notices_cover_what_we_promised() {
+        let m = manifest();
+        let riot_rule = "“Products cannot display win rates for Augments or Arena Mode items. \
+                         This applies to all websites, applications and overlays.”";
+        assert!(m.source(SOURCE_STATS).unwrap().risk.contains(riot_rule));
+        assert!(m
+            .source(SOURCE_CONTROL)
+            .unwrap()
+            .risk
+            .contains("LeagueAkari/issues/523"));
+        assert!(m
+            .source(SOURCE_OPGG)
+            .unwrap()
+            .risk
+            .contains("opgg-mcp/issues/26"));
+        let ids: Vec<&str> = m.notices.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["aramhex-data", "opgg", "images", "riot"]);
+        assert!(m.notices[0].body.contains("CC BY-NC 4.0"));
+        assert!(m.notices[1]
+            .links
+            .iter()
+            .any(|l| l.ends_with("opgg-mcp/issues/26")));
+        assert!(m.notices[3].body.contains("Legal Jibber Jabber"));
+    }
+
+    /// 界面上的文字（messages/<语言>.json）和清单一致：名字、说明、开关的名字和风险提示、许可和出处（中文）；英文也都有。
     #[test]
     fn messages_match_the_manifest() {
         let zh: serde_json::Map<String, Value> =
@@ -216,6 +246,12 @@ mod tests {
                 s.description.clone(),
             ));
             expect.push((format!("plugin_lol_source_{}_risk", s.id), s.risk.clone()));
+        }
+        // 许可和出处（ADR 043 D8）：“风险和许可”弹窗照这几条画
+        for n in &m.notices {
+            let id = n.id.replace('-', "_");
+            expect.push((format!("plugin_lol_notice_{id}_title"), n.title.clone()));
+            expect.push((format!("plugin_lol_notice_{id}_body"), n.body.clone()));
         }
         for (key, text) in expect {
             assert_eq!(

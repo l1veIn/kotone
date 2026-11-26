@@ -173,7 +173,7 @@
       {:else if loading}
         <p class="banner" aria-busy="true">{m.plugin_lol_loading()}</p>
       {/if}
-      <Footer data={m.plugin_lol_foot_client()} onLink={session.openLink} />
+      <Footer sources={[{ id: "client" }]} onLink={session.openLink} />
     </main>
   </div>
 {:else}
@@ -219,7 +219,7 @@
           </span>
         </div>
       {/each}
-      <Footer data="" card onLink={session.openLink} />
+      <Footer card sources={[{ id: "client" }]} onLink={session.openLink} />
     {:else if error}
       <p class="card-line danger" role="alert">{m.plugin_lol_failed({ error })}</p>
     {:else if status}

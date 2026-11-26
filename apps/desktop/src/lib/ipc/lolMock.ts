@@ -29,7 +29,7 @@ function puuid(i: number): string {
   return `sample-puuid-${i}`;
 }
 
-/** 第 i 个人最近的输赢（对面 5 号连败、7 号隐藏战绩）。 */
+/** 第 i 个人最近的输赢（对面 5 号连败、7 号隐藏战绩；我方 3、4 号隐藏了身份）。 */
 function wins(i: number): boolean[] {
   // 对面 5 号：先 6 连败，20 局只赢 6 局
   if (i === 5) return Array.from({ length: 20 }, (_, g) => g >= 6 && g % 2 === 0 && g < 18);
@@ -62,17 +62,25 @@ function games(i: number): PlayerGame[] {
   });
 }
 
+/** 我方 3、4 号隐藏了身份（照 2026-11-26 那一把海斗：客户端不给名字和 puuid，只有英雄；ADR 043 D9）。 */
+const HIDDEN_IDENTITY = [3, 4];
+
 function player(i: number): MatchPlayer {
+  if (HIDDEN_IDENTITY.includes(i)) {
+    return {
+      puuid: "", champion: CHAMPIONS[i], name: "", riotId: "", me: false, ally: i < 5, party: null,
+      pending: false, hidden: false, rank: null, error: null, summary: null, tags: [], recent: [], identity: "hidden",
+    };
+  }
   const s = summary(i);
   const hidden = i === 7;
-  const weak = i === 5 ? ["最近 20 局只赢了 6 局", "6 连败", "场均死 13.2 次"] : null;
   const tags = s.streak >= 3 ? [`${s.streak} 连胜`] : s.streak <= -3 ? [`${-s.streak} 连败`] : [];
   return {
     puuid: puuid(i), champion: CHAMPIONS[i], name: NAMES[i], riotId: `${NAMES[i]}#${1001 + i}`,
     me: i === 0, ally: i < 5, party: i === 1 || i === 2 ? 2 : i === 6 || i === 8 ? 7 : null,
     pending: false, hidden, rank: RANKS[i], error: null, summary: s, tags,
     recent: games(i).slice(0, 10).map((g) => ({ gameId: g.gameId, win: g.win, championId: g.champion.id, kills: g.kills, deaths: g.deaths, assists: g.assists })),
-    weak,
+    identity: "known",
   };
 }
 

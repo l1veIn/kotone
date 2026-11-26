@@ -1,7 +1,7 @@
 [package]
 name = "kotone-plugin-lol"
 version = "0.1.0"
-description = "Kotone 英雄联盟插件（ADR 035 / 038）：客户端和局内的本机接口（LCU、Live Client Data）、战绩、突破口、召唤师技能计时、游戏中心的 lol 适配器"
+description = "Kotone 英雄联盟插件（ADR 035 / 038）：客户端和局内的本机接口（LCU、Live Client Data）、战绩、召唤师技能计时、游戏中心的 lol 适配器"
 edition = "2021"
 rust-version = "1.77.2"
 

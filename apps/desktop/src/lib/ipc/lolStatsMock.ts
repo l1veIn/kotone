@@ -3,7 +3,7 @@
  * 形状照后端 plugins/lol/src/stats_tools.rs 和 pushes/champ_select.rs。数字是编的（看上去合理就行），不是真实统计。
  */
 import type {
-  ChampionMayhem, ChampionRift, Named, StatChampion, TierMayhem, TierRift, TierRow,
+  ChampionMayhem, ChampionRift, Named, SourceChoice, StatChampion, TierMayhem, TierRift, TierRow,
 } from "$plugins/lol/ui/types";
 
 // i18n-ignore-start：整个文件是浏览器预览的示例数据（真实应用里来自腾讯 101、aramhex-data），不是界面文字
@@ -82,8 +82,36 @@ export function findSampleChampion(query: string): StatChampion | null {
 
 const pick = (i: number) => CHAMPS[i % CHAMPS.length];
 
-export function sampleChampionRift(champion: StatChampion, lane = "TOP"): ChampionRift & { abilities: Ability[] } {
+/** 来源标签（ADR 043 D8）：这一块用的、能换成的（OP.GG 的开关关着时 OP.GG 用不了）。 */
+function sourceChoice(kind: "rift" | "mayhemAugments", id: "qq101" | "opgg" | "aramhex", opggOn: boolean): SourceChoice {
+  const first = kind === "rift" ? "qq101" : "aramhex";
+  return { kind, id, options: [{ id: first, available: true }, { id: "opgg", available: opggOn }] };
+}
+
+/** OP.GG 的回复（原样的一段文字；示例是编的）。 */
+function opggBlock(champion: StatChampion, what: string) {
+  // i18n-ignore-start：示例数据（真实的是 OP.GG 原样的回复）
+  return {
+    text: `class ${champion.label}${what} {
+  win_rate: 0.512, pick_rate: 0.041
+  core_items: [破败王者之刃, 海妖杀手, 死亡之舞]
+}`,
+    attribution: "OP.GG（全球数据，op.gg）", url: "https://op.gg", stale: false,
+  };
+  // i18n-ignore-end
+}
+
+export function sampleChampionRift(champion: StatChampion, lane = "TOP", source: "qq101" | "opgg" = "qq101", opggOn = true): ChampionRift & { abilities: Ability[] } {
   const laneName = LANES.find((l) => l.id === lane)?.name ?? lane;
+  if (source === "opgg") {
+    return {
+      mode: "rift", champion, lane, laneName, patch: "", date: "", tier: null, goodAgainst: [], badAgainst: [],
+      build: { starting: [], boots: [], core: [], fourth: [], fifth: [], sixth: [] },
+      runes: [], skillPriority: [], skillOrder: [], abilities: ABILITIES[champion.id] ?? [], spells: [],
+      sources: [{ name: "OP.GG（全球数据，op.gg）" }], stale: false, // i18n-ignore：示例数据
+      opgg: opggBlock(champion, ""), source: sourceChoice("rift", "opgg", opggOn),
+    };
+  }
   const option = (ids: number[], win: number, pickRate: number) => ({
     items: ids.map((i) => ITEMS[i]), winRate: win, pickRate,
   });
@@ -108,10 +136,18 @@ export function sampleChampionRift(champion: StatChampion, lane = "TOP"): Champi
     sources: [{ name: TENCENT, date: DATE }],
     stale: false,
     opgg: null,
+    source: sourceChoice("rift", "qq101", opggOn),
   };
 }
 
-export function sampleChampionMayhem(champion: StatChampion): ChampionMayhem {
+export function sampleChampionMayhem(champion: StatChampion, source: "aramhex" | "opgg" = "aramhex", opggOn = true): ChampionMayhem {
+  if (source === "opgg") {
+    return {
+      mode: "mayhem", champion, rank: 31, winRate: 0.5212, pickRate: 0.0123, partners: [pick(10), pick(11), pick(12)],
+      augments: [], attribution: null, sources: [{ name: TENCENT, date: DATE }, { name: "OP.GG（全球数据，op.gg）" }], // i18n-ignore：示例数据
+      augmentsOpgg: opggBlock(champion, " · ARAM augments"), source: sourceChoice("mayhemAugments", "opgg", opggOn),
+    };
+  }
   return {
     mode: "mayhem", champion, rank: 31, winRate: 0.5212, pickRate: 0.0123,
     partners: [pick(10), pick(11), pick(12)],
@@ -121,6 +157,7 @@ export function sampleChampionMayhem(champion: StatChampion): ChampionMayhem {
     })),
     attribution: "海斗数据：github.com/czgreat/aramhex-data（CC BY-NC 4.0，版本 16.23，截至 2026-11-20T08:00:00+08:00，4991976 局）", // i18n-ignore：示例数据（真实的由后端写）
     sources: [{ name: TENCENT, date: DATE }, { name: "github.com/czgreat/aramhex-data", license: "CC BY-NC 4.0", date: "2026-11-20T08:00:00+08:00" }],
+    source: sourceChoice("mayhemAugments", "aramhex", opggOn),
   };
 }
 
@@ -160,7 +197,7 @@ export function sampleChampSelect(mode: "mayhem" | "rift" = "mayhem", me = "艾�
   const champ = (id: number, short: string) => ({ id, short, icon: `/lol-game-data/assets/v1/champion-icons/${id}.png` });
   if (mode === "rift") {
     return {
-      mode: "rift", source: TENCENT, ended, bench: [],
+      mode: "rift", source: "qq101", ended, bench: [],
       team: [
         { champion: champ(157, "亚索"), me: false, lane: "中路", tier: "T1", winRate: 0.5023 },
         { champion: champ(39, me), me: true, lane: "上路", tier: "T0", winRate: 0.5231 },
@@ -174,7 +211,7 @@ export function sampleChampSelect(mode: "mayhem" | "rift" = "mayhem", me = "艾�
     ? { champion: champ(39, "艾瑞莉娅"), me: true, winRate: 0.5212, rank: 31, grade: "A" }
     : { champion: champ(901, me), me: true, winRate: 0.5302, rank: 6, grade: "S" };
   return {
-    mode: "mayhem", source: TENCENT, total: 172, ended,
+    mode: "mayhem", source: "qq101", total: 172, ended,
     team: [
       mine,
       { champion: champ(223, "塔姆"), me: false, winRate: 0.5384, rank: 1, grade: "S" },

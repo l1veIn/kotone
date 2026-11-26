@@ -226,7 +226,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | --- | --- | --- | --- |
 | 英雄联盟（`lol`，数据开关 `client` 读客户端数据） | `lol.match` | 无 | 这局现在的样子（模式、时间、比分、10 个人的英雄 / 技能 / KDA / 装备、对面谁闪没好、谁没带闪）。只读本机的局内接口 |
 | | `lol.spell` | `champion`、`spell`（缺省闪现）、`ago`、`clear` | 记下谁交了召唤师技能，返回几点好和一句能发到聊天框的 `chat` |
-| | `lol.scout` | `player`（可选） | 这局 10 个人最近 20 局的战绩、开黑、突破口。进加载界面就在后台查。页面 `ui://kotone/lol/match`（这局） |
+| | `lol.scout` | `player`（可选） | 这局 10 个人最近 20 局的战绩、开黑（只给事实，谁是突破口由她按数据说，ADR 043 D2；隐藏了身份的人只有英雄）。进加载界面就在后台查。页面 `ui://kotone/lol/match`（这局） |
 | | `lol.shout` | `what`（`flash` / `records` / `premade`）、`side`（`enemy` / `ally` / `all`）、`channel`、`preview` | 一键喊话（ADR 041 第 3 期）：按这局已有的数据生成几行（闪现只有玩家报过的、`lol.spell` 记的；不发玩家名），经“发到游戏”的入口发，结果和 `game_chat.send` 一样再加 `lines`；`preview: true` 只返回几行不发。没东西可喊、入口不发都是错误。副作用 `input`、`records-run`；页面调不到 |
 | | `lol.player` | `player`（这局里的英雄名或玩家名，或“名字#编号”）或 `puuid`；都不写 = 自己 | 一个人最近 20 局的战绩、段位、常玩英雄、每一局。页面 `ui://kotone/lol/player`（战绩） |
 | | `lol.game`（只给页面） | `gameId` | 一局的详情：两边 10 个人的 KDA、伤害、经济、补刀、装备、海克斯。页面 `ui://kotone/lol/game` |

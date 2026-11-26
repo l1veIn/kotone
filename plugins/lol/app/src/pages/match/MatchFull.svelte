@@ -1,7 +1,8 @@
 <script lang="ts">
   // “这局”全屏（插件页、Claude 的全屏），照 docs/design/lol-app.md 第三节 1 分四种状态：
   // 选人（我方每人一块、对面只有英雄、备选席）、加载 / 对局中（10 个人）、结算（顶上“刚结束”，下面照旧是 10 个人）。
-  // 宽 ≥ 880 两队并排（我方左、对面右）；窄时上下叠，对面在上。
+  // 加载、对局中、结算：宽 ≥ 640 照 LeagueAkari 的对局页（ADR 043 D9）——两队上下排、对面在上，每人一列（TeamGrid，
+  // 每列最近 10 局）；窄时上下叠，一人一块（PlayerBlock）。选人时照旧。
   import ChampIcon from "../../components/ChampIcon.svelte";
   import Icon from "../../components/Icon.svelte";
   import { duration } from "../../format";
@@ -9,6 +10,7 @@
   import type { MatchData, MatchPlayer } from "../../types";
   import { partyOf, phaseOf, pickOf } from "./match";
   import PlayerBlock from "./PlayerBlock.svelte";
+  import TeamGrid from "./TeamGrid.svelte";
   import TeamHead from "./TeamHead.svelte";
 
   let {
@@ -23,6 +25,10 @@
     onMine: () => void;
   } = $props();
 
+  /** 宽到能并排放 5 列（LeagueAkari 的排布）。 */
+  const WIDE = 640;
+  let width = $state(0);
+  const grid = $derived(width >= WIDE);
   const phase = $derived(phaseOf(match));
   const champSelect = $derived(phase === "champ_select");
   const party = $derived(partyOf(match));
@@ -64,6 +70,13 @@
   </p>
 {/if}
 
+<div class="measure" bind:clientWidth={width}></div>
+{#if grid && !champSelect}
+  <div class="grids" data-testid="lol-match-grid">
+    <TeamGrid ally={false} team={match.enemies} {party} recent={10} testid="lol-match-player" {onPlayer} />
+    <TeamGrid ally team={match.allies} {party} recent={10} testid="lol-match-player" {onPlayer} />
+  </div>
+{:else}
 <div class="teams">
   <section class="team ally" aria-label={m.plugin_lol_allies()} data-testid="lol-match-allies">
     <TeamHead ally team={match.allies} {party} />
@@ -96,6 +109,8 @@
   </section>
 </div>
 
+{/if}
+
 {#if champSelect && match.bench && match.bench.length > 0}
   <div class="bench" data-testid="lol-match-bench">
     <span class="bench-label">{m.plugin_lol_bench()}</span>
@@ -114,6 +129,7 @@
   .teams .team.enemy {
     order: -1;
   }
+  /* 选人时宽屏照旧两队并排（我方左、对面右） */
   @container (min-width: 880px) {
     .teams {
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -122,6 +138,13 @@
     .teams .team.enemy {
       order: 0;
     }
+  }
+  .measure {
+    height: 0;
+  }
+  .grids {
+    display: grid;
+    gap: var(--lol-sp-5);
   }
   /* 一人一块之间的细线（PlayerBlock 一个组件只有一块，兄弟选择器写在这里） */
   .team :global(.p + .p) {

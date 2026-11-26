@@ -32,8 +32,8 @@ pub const PUSH_CHAMP_SELECT: &str = "champ-select";
 pub const PUSH_AUGMENT_PICK: &str = "augment-pick";
 /// 海克斯大乱斗（海斗）的队列。
 pub(crate) const MAYHEM_QUEUE: i64 = 2400;
-/// 数据从哪来（卡片底下那一行）。
-pub(crate) const SOURCE_QQ101: &str = "腾讯 101（掌盟）";
+/// 数据从哪来：卡片上的来源标签（ADR 043 D8，页面的 `SourceTag`，id 和 `stats_tools.rs` 的来源一样）。
+pub(crate) const SOURCE_QQ101: &str = "qq101";
 
 /// 现在的 Unix 毫秒。
 pub(crate) fn now_ms() -> i64 {

@@ -23,7 +23,7 @@ use crate::client::history::PlayerHistory;
 use crate::client::live::LiveGame;
 use crate::client::scout;
 use crate::client::spells::{short_spell, SpellTracker};
-use crate::client::text::{champion_names, ScoutPlayer};
+use crate::client::text::{champion_names, Identity, ScoutPlayer};
 use crate::client::GameData;
 use crate::pages::MatchPhase;
 use crate::LolPlugin;
@@ -261,7 +261,8 @@ pub(crate) fn record_lines(
     if wanted.is_empty() {
         return Err("这局还没有这一边的人：这次没发".into());
     }
-    let waiting = wanted.iter().filter(|(p, _)| p.history.is_none()).count();
+    // 隐藏了身份的、电脑不查，不算没查完（ADR 043 D9）
+    let waiting = wanted.iter().filter(|(p, _)| p.pending()).count();
     if waiting > 0 {
         return Err(format!(
             "战绩还没查完（还差 {waiting} 个人），过几秒再按：这次没发"
@@ -269,10 +270,17 @@ pub(crate) fn record_lines(
     }
     let mut lines: Vec<String> = wanted
         .iter()
-        .filter_map(|(p, floor)| {
-            p.history
+        .filter_map(|(p, floor)| match p.identity {
+            Identity::Hidden => Some(format!(
+                "{} {}：隐藏了身份",
+                side_name(p.ally),
+                who(p, *floor)
+            )),
+            Identity::Bot => Some(format!("{} {}：电脑", side_name(p.ally), who(p, *floor))),
+            _ => p
+                .history
                 .as_ref()
-                .map(|h| record_line(p, *floor, h, queue_id, random))
+                .map(|h| record_line(p, *floor, h, queue_id, random)),
         })
         .collect();
     lines.truncate(MAX_LINES);
@@ -593,6 +601,16 @@ mod tests {
         let waiting = record_lines(&players, 420, false, Side::Enemy).unwrap_err();
         assert!(waiting.contains("还差 1 个人"), "{waiting}");
         assert!(record_lines(&players, 420, false, Side::Ally).is_ok());
+        // 隐藏了身份的、电脑（ADR 043 D9）：不算没查完，一行写明
+        players[2].identity = Identity::Hidden;
+        let lines = record_lines(&players, 420, false, Side::Enemy).unwrap();
+        assert!(
+            lines.iter().any(|l| l.ends_with("：隐藏了身份")),
+            "{lines:?}"
+        );
+        players[2].identity = Identity::Bot;
+        let lines = record_lines(&players, 420, false, Side::Enemy).unwrap();
+        assert!(lines.iter().any(|l| l.ends_with("：电脑")), "{lines:?}");
     }
 
     /// 选英雄时还没选英雄的用分路、几楼叫；开黑一组一行，对面在前；看不出开黑不发。

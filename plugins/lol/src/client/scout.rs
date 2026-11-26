@@ -1,8 +1,7 @@
-//! 战绩统计和“突破口”（ADR 035 D3）。数字由这里算，她只负责用说信息的口吻说出来。
+//! 战绩统计（ADR 035 D3）：每个人最近的胜负、连胜连败、KDA、这个英雄打过几局。只数数，不评价人
+//! （ADR 043 D2：谁是突破口、谁会坑是她的判断，插件不推测；原来的 `weak_spots` 去掉了）。
 //!
 //! - 每人最近 20 局、全部模式；和这局同一个队列的单独算（峡谷和大乱斗的伤害不放在一起比）；
-//! - 突破口：在对面里比对面的平均，胜率 / KDA / 同模式分均伤害偏低、连败、第一次玩这个英雄加分，
-//!   连胜、常玩这个英雄且赢得多减分；分数最高的一两个，原因一起写出来；
 //! - 随机英雄的模式（大乱斗、海斗，见 [`crate::client::gamedata::random_pick`]）不看这个英雄玩没玩过：英雄是随机的，
 //!   实测海斗里几乎每个人都“最近没玩过”，是噪音。
 
@@ -73,9 +72,6 @@ pub fn summarize(games: &[GameRecord], champion_id: i64, queue_id: i64) -> Summa
     out
 }
 
-/// 至少这么多局才拿来比。
-pub const MIN_GAMES: usize = 3;
-
 /// 第一次玩这个英雄（最近 20 局一局没有），要至少有几局才算数。
 pub fn first_time(s: &Summary) -> bool {
     s.games >= 5 && s.champ_games == 0
@@ -112,103 +108,6 @@ pub fn tagged(s: &Summary, random_pick: bool) -> Vec<(&'static str, String)> {
             format!("常玩这个英雄（{} 局 {} 胜）", s.champ_games, s.champ_wins),
         ));
     }
-    out
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct WeakSpot {
-    /// 传进来的下标。
-    pub index: usize,
-    pub score: f64,
-    pub reasons: Vec<String>,
-}
-
-fn average(values: impl Iterator<Item = f64>) -> Option<f64> {
-    let v: Vec<f64> = values.collect();
-    (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64)
-}
-
-/// 对面谁是突破口：传对面每个人的（下标，统计），返回最多两个，分数 ≥ 1 才算。
-/// `random_pick` = 这局是随机英雄的模式：不看这个英雄玩没玩过。
-pub fn weak_spots(enemies: &[(usize, &Summary)], random_pick: bool) -> Vec<WeakSpot> {
-    let known: Vec<&(usize, &Summary)> = enemies
-        .iter()
-        .filter(|(_, s)| s.games >= MIN_GAMES)
-        .collect();
-    if known.len() < 2 {
-        return Vec::new();
-    }
-    let wr_avg = average(known.iter().map(|(_, s)| s.win_rate())).unwrap_or(0.5);
-    let kda_avg = average(known.iter().map(|(_, s)| s.kda)).unwrap_or(0.0);
-    let deaths_avg = average(known.iter().map(|(_, s)| s.deaths)).unwrap_or(0.0);
-    let dpm_avg = average(
-        known
-            .iter()
-            .filter(|(_, s)| s.mode_games >= MIN_GAMES)
-            .map(|(_, s)| s.mode_dpm),
-    );
-    let dpm_min = known
-        .iter()
-        .filter(|(_, s)| s.mode_games >= MIN_GAMES)
-        .map(|(_, s)| s.mode_dpm)
-        .fold(f64::INFINITY, f64::min);
-
-    let mut out: Vec<WeakSpot> = known
-        .iter()
-        .map(|(index, s)| {
-            let mut score = 0.0;
-            let mut reasons = Vec::new();
-            let wr = s.win_rate();
-            if wr < wr_avg - 0.05 {
-                score += (wr_avg - wr) * 5.0;
-                reasons.push(format!("最近 {} 局只赢了 {} 局", s.games, s.wins));
-            }
-            if kda_avg > 0.0 && s.kda < kda_avg * 0.85 {
-                score += (1.0 - s.kda / kda_avg) * 2.0;
-                reasons.push(format!("KDA {:.1}（对面平均 {:.1}）", s.kda, kda_avg));
-            }
-            if deaths_avg > 0.0 && s.deaths > deaths_avg * 1.2 {
-                score += 0.5;
-                reasons.push(format!("场均死 {:.1} 次", s.deaths));
-            }
-            if let Some(avg) = dpm_avg {
-                if s.mode_games >= MIN_GAMES && avg > 0.0 && s.mode_dpm < avg * 0.85 {
-                    score += (1.0 - s.mode_dpm / avg) * 2.0;
-                    let lowest = if (s.mode_dpm - dpm_min).abs() < 0.5 {
-                        "，对面最低"
-                    } else {
-                        ""
-                    };
-                    reasons.push(format!(
-                        "这个模式分均伤害 {:.0}（对面平均 {:.0}{lowest}）",
-                        s.mode_dpm, avg
-                    ));
-                }
-            }
-            if s.streak <= -3 {
-                score += 1.0 + 0.25 * f64::from(-s.streak - 3);
-                reasons.push(format!("{} 连败", -s.streak));
-            } else if s.streak >= 3 {
-                score -= 1.0;
-            }
-            if random_pick {
-                // 英雄是随机的
-            } else if first_time(s) {
-                score += 1.0;
-                reasons.push("这个英雄最近 20 局没玩过".into());
-            } else if main_champion(s) && s.champ_wins * 10 >= s.champ_games * 6 {
-                score -= 0.5;
-            }
-            WeakSpot {
-                index: *index,
-                score,
-                reasons,
-            }
-        })
-        .filter(|w| w.score >= 1.0 && !w.reasons.is_empty())
-        .collect();
-    out.sort_by(|a, b| b.score.total_cmp(&a.score));
-    out.truncate(2);
     out
 }
 
@@ -263,90 +162,32 @@ mod tests {
         assert_eq!(summarize(&[], 39, 2400), Summary::default());
     }
 
-    fn summary(
-        games: usize,
-        wins: usize,
-        streak: i32,
-        kda: f64,
-        deaths: f64,
-        dpm: f64,
-        champ: usize,
-    ) -> Summary {
+    fn summary(games: usize, wins: usize, streak: i32, champ: usize) -> Summary {
         Summary {
             games,
             wins,
             streak,
-            kda,
-            deaths,
+            kda: 3.0,
+            deaths: 5.0,
             mode_games: games,
             mode_wins: wins,
-            mode_dpm: dpm,
+            mode_dpm: 2000.0,
             champ_games: champ,
             champ_wins: champ / 2,
         }
     }
 
     #[test]
-    fn the_losing_unfamiliar_low_damage_player_is_the_weak_spot() {
-        let strong = summary(20, 14, 4, 4.0, 4.0, 2400.0, 8);
-        let normal = summary(20, 10, 1, 3.0, 5.0, 2000.0, 2);
-        let weak = summary(20, 6, -4, 1.6, 7.5, 1300.0, 0);
-        let tiny = summary(1, 0, -1, 0.5, 9.0, 100.0, 0);
-        let enemies = [
-            (0, &strong),
-            (1, &normal),
-            (2, &weak),
-            (3, &normal),
-            (4, &tiny),
-        ];
-        let spots = weak_spots(&enemies, false);
-        assert_eq!(spots[0].index, 2, "{spots:?}");
-        let reasons = spots[0].reasons.join("；");
-        for want in [
-            "4 连败",
-            "这个英雄最近 20 局没玩过",
-            "对面最低",
-            "最近 20 局只赢了 6 局",
-        ] {
-            assert!(reasons.contains(want), "{reasons}");
-        }
-        // 只有一局的不拿来比；连胜的不是突破口
-        assert!(spots.iter().all(|w| w.index != 4 && w.index != 0));
-    }
-
-    #[test]
-    fn no_weak_spot_when_everyone_is_alike() {
-        let a = summary(20, 10, 1, 3.0, 5.0, 2000.0, 2);
-        assert!(weak_spots(&[(0, &a), (1, &a), (2, &a)], false).is_empty());
-        assert!(weak_spots(&[(0, &a)], false).is_empty(), "一个人没法比");
-    }
-
-    #[test]
     fn random_pick_modes_ignore_champion_familiarity() {
         // 海斗实测：英雄是随机的，几乎每个人这个英雄都是 0 局
-        let fresh = summary(20, 10, 1, 3.0, 5.0, 2000.0, 0);
+        let fresh = summary(20, 10, 1, 0);
         assert_eq!(tags(&fresh, false), ["这个英雄最近没玩过"]);
         assert!(tags(&fresh, true).is_empty());
-        let main = summary(20, 10, 1, 3.0, 5.0, 2000.0, 6);
+        let main = summary(20, 10, 1, 6);
         assert!(tags(&main, false)[0].starts_with("常玩这个英雄"));
         assert!(tags(&main, true).is_empty());
-
-        // 只是没玩过这个英雄、其余和别人一样：峡谷里是突破口，随机英雄的模式里不是
-        let same = summary(20, 10, 1, 3.0, 5.0, 2000.0, 2);
-        let enemies = [(0, &same), (1, &same), (2, &fresh)];
-        let spots = weak_spots(&enemies, false);
-        assert_eq!(spots.len(), 1, "{spots:?}");
-        assert_eq!(spots[0].reasons, ["这个英雄最近 20 局没玩过"]);
-        assert!(weak_spots(&enemies, true).is_empty());
-
-        // 别的理由照样算，只是原因里没有“没玩过”
-        let weak = summary(20, 6, -4, 1.6, 7.5, 1300.0, 0);
-        let spots = weak_spots(&[(0, &same), (1, &same), (2, &weak)], true);
-        assert_eq!(spots[0].index, 2);
-        let reasons = spots[0].reasons.join("；");
-        assert!(
-            reasons.contains("4 连败") && !reasons.contains("没玩过"),
-            "{reasons}"
-        );
+        // 连胜连败两种模式都标
+        assert_eq!(tags(&summary(20, 6, -4, 2), true), ["4 连败"]);
+        assert_eq!(tags(&summary(20, 14, 3, 2), false), ["3 连胜"]);
     }
 }

@@ -3,7 +3,7 @@
 //!
 //! - **开局战绩**：进加载（游戏开始、局内接口还没有游戏时间）以后，10 个人的战绩都查完就发；进加载 20 秒还没查完
 //!   也发（卡片和那句话里写“还在查 N 人”）。页面是“这局”（`ui://kotone/lol/match`），数据和 `lol.scout` 的一样；
-//!   给琴音的那句复用突破口的算法（`scout::summarize` / `weak_spots`），不另拼结论。
+//!   给琴音的那句只写事实（连胜连败、这个英雄几局、开黑、隐藏了身份的人），不评价人（ADR 043 D2）。
 //! - **这局总结**：从对局里进了结算（`WaitingForStats` / `PreEndOfGame` / `EndOfGame`）就去读这局的详情，拿到就发；
 //!   读不到每 5 秒再试，60 秒还没有就不发（调研 G29）。页面是“单局详情”（`ui://kotone/lol/game`，带 `justEnded`）。
 //! - 不发：选人、对局中；训练模式、自定义对局（队列 ≤ 0）、观战（这局里没有自己）；Kotone 开的时候已经在对局里了
@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use super::MatchView;
 use crate::client::http::paths;
 use crate::client::scout::{self, Summary};
-use crate::client::text::ScoutPlayer;
+use crate::client::text::{Identity, ScoutPlayer};
 use crate::pages;
 use crate::LolPlugin;
 
@@ -105,50 +105,79 @@ fn summaries(view: &MatchView) -> Vec<Option<Summary>> {
         .collect()
 }
 
-/// 开局战绩给琴音的那句（约 120 字以内）：模式、对面的突破口（最多两个人、每人最多两条原因）、我方开黑、还在查几个人。
+/// 开局战绩给琴音的那句（不超过 [`Push::NOTE_MAX`] 字）：只写事实（ADR 043 D2：插件说“是什么”，“意味着什么”归她）——
+/// 两边谁连胜连败（3 局以上）、这个英雄最近没玩过 / 常玩（自己选英雄的模式）、谁和谁开黑、隐藏了身份的几个人、还在查几个人。
+/// 放不下时先省掉不要紧的（我方的、开黑），句子不截断。
 pub(crate) fn opening_note(view: &MatchView) -> String {
     let summaries = summaries(view);
-    let enemies: Vec<(usize, &Summary)> = view
-        .players
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.ally)
-        .filter_map(|(i, _)| summaries[i].as_ref().map(|s| (i, s)))
-        .collect();
-    let spots = scout::weak_spots(&enemies, view.random);
-    let mut out = format!("{TITLE_OPENING}（{}）。", view.mode);
-    if spots.is_empty() {
-        out.push_str("对面几个人最近的数据差不多，看不出明显的突破口。");
-    } else {
-        let lines: Vec<String> = spots
+    let facts = |ally: bool| -> Vec<String> {
+        view.players
             .iter()
-            .map(|w| {
-                let reasons: Vec<&str> = w.reasons.iter().take(2).map(String::as_str).collect();
-                format!("{}，{}", view.players[w.index].short, reasons.join("、"))
+            .enumerate()
+            .filter(|(_, p)| p.ally == ally)
+            .filter_map(|(i, p)| {
+                let s = summaries[i].as_ref().filter(|s| s.games > 0)?;
+                let words: Vec<String> = scout::tagged(s, view.random)
+                    .into_iter()
+                    .map(|(kind, text)| match kind {
+                        "main" => format!("这个英雄 {} 局", s.champ_games),
+                        _ => text,
+                    })
+                    .collect();
+                (!words.is_empty()).then(|| format!("{} {}", p.short, words.join("、")))
             })
-            .collect();
-        out.push_str(&format!("对面可能的突破口：{}。", lines.join("；")));
+            .take(3)
+            .collect()
+    };
+    let side = |name: &str, list: Vec<String>| {
+        (!list.is_empty()).then(|| format!("{name}：{}。", list.join("，")))
+    };
+    let parties = crate::client::text::parties(&view.players);
+    let hidden: Vec<String> = [("我方", true), ("对面", false)]
+        .into_iter()
+        .filter_map(|(name, ally)| {
+            let n = view
+                .players
+                .iter()
+                .filter(|p| p.ally == ally && p.identity == Identity::Hidden)
+                .count();
+            (n > 0).then(|| format!("{name} {n} 人"))
+        })
+        .collect();
+    let waiting = view.players.iter().filter(|p| p.pending()).count();
+    // （要紧的程度，这句）：按顺序写，放不下时从最不要紧的开始省
+    let parts: Vec<(u8, Option<String>)> = vec![
+        (0, Some(format!("{TITLE_OPENING}（{}）。", view.mode))),
+        (1, side("对面", facts(false))),
+        (4, side("我方", facts(true))),
+        (
+            3,
+            (!parties.is_empty()).then(|| format!("开黑：{}。", parties.join("；"))),
+        ),
+        (
+            2,
+            (!hidden.is_empty()).then(|| format!("隐藏了身份：{}。", hidden.join("、"))),
+        ),
+        (0, (waiting > 0).then(|| format!("还在查 {waiting} 人。"))),
+    ];
+    let mut keep: Vec<(u8, String)> = parts
+        .into_iter()
+        .filter_map(|(rank, text)| text.map(|t| (rank, t)))
+        .collect();
+    let len = |k: &[(u8, String)]| k.iter().map(|(_, t)| t.chars().count()).sum::<usize>();
+    while len(&keep) > Push::NOTE_MAX {
+        let Some(worst) = keep
+            .iter()
+            .enumerate()
+            .filter(|(_, (rank, _))| *rank > 0)
+            .max_by_key(|(_, (rank, _))| *rank)
+            .map(|(i, _)| i)
+        else {
+            break;
+        };
+        keep.remove(worst);
     }
-    let party = largest_party(view.players.iter().filter(|p| p.ally));
-    if party >= 2 {
-        out.push_str(&format!("我方有 {party} 人开黑。"));
-    }
-    let waiting = view.players.iter().filter(|p| p.history.is_none()).count();
-    if waiting > 0 {
-        out.push_str(&format!("还在查 {waiting} 人。"));
-    }
-    out
-}
-
-/// 一边最大的开黑小队有几个人。
-fn largest_party<'a>(players: impl Iterator<Item = &'a ScoutPlayer>) -> usize {
-    let mut counts = std::collections::HashMap::new();
-    for p in players {
-        if let Some(id) = p.party.filter(|id| *id > 0) {
-            *counts.entry(id).or_insert(0usize) += 1;
-        }
-    }
-    counts.into_values().max().unwrap_or(0)
+    keep.into_iter().map(|(_, t)| t).collect()
 }
 
 /// 这局是不是重开局（提前投降、有人没进）。
@@ -245,9 +274,13 @@ impl LolPlugin {
         let due = {
             let mut s = self.state();
             let Some((game_id, fetched)) = s.current.as_ref().map(|m| {
+                // 只等查得到的人：隐藏了身份的、电脑不查（ADR 043 D9）
                 let fetched = m.members.len() >= 2
                     && m.pending.is_empty()
-                    && m.members.iter().all(|x| m.histories.contains_key(&x.puuid));
+                    && m.members
+                        .iter()
+                        .filter(|x| x.identity == Identity::Known)
+                        .all(|x| m.histories.contains_key(&x.puuid));
                 (m.game_id, fetched)
             }) else {
                 return;
@@ -448,6 +481,7 @@ mod tests {
             profile_icon_id: None,
             spells: [0, 0],
             position: String::new(),
+            identity: Identity::Known,
         }
     }
 
@@ -496,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn the_opening_note_names_the_weak_spot_parties_and_who_is_still_loading() {
+    fn the_opening_note_states_streaks_parties_hidden_players_and_who_is_still_loading() {
         let mut players = vec![
             player(
                 "伊泽瑞尔",
@@ -558,13 +592,45 @@ mod tests {
             ),
         ];
         players[9].history = None;
+        // 隐藏了身份（ADR 043 D9）：不查，也不算还在查
+        players[8].history = None;
+        players[8].identity = Identity::Hidden;
         let note = opening_note(&view(players));
         assert!(note.starts_with("开局战绩（海克斯大乱斗）。"), "{note}");
-        assert!(note.contains("对面可能的突破口：寒冰，"), "{note}");
-        assert!(note.contains("我方有 3 人开黑"), "{note}");
+        // ADR 043 D2：只说事实，不说谁是突破口
+        assert!(note.contains("对面：寒冰 5 连败"), "{note}");
+        assert!(!note.contains("突破口"), "{note}");
+        assert!(note.contains("开黑：我方 伊泽瑞尔 + 锤石 + 璐璐"), "{note}");
+        assert!(note.contains("隐藏了身份：对面 1 人"), "{note}");
         assert!(note.contains("还在查 1 人"), "{note}");
         assert!(!note.contains("的玩家"), "不写玩家名：{note}");
         assert!(note.chars().count() <= Push::NOTE_MAX, "{note}");
+    }
+
+    /// 十个人都有事可说时，那句话照样不超过 160 字，先省掉我方的、开黑；对面和“还在查”留着。
+    #[test]
+    fn a_crowded_opening_note_drops_the_least_important_sentences() {
+        let streak = [false, false, false, false, false];
+        let players: Vec<ScoutPlayer> = (0..10)
+            .map(|i| {
+                let mut p = player(
+                    &format!("名字很长的英雄{i}"),
+                    i < 5,
+                    i == 0,
+                    Some(i64::from(i < 5)),
+                    &streak,
+                );
+                if i == 9 {
+                    p.history = None;
+                }
+                p
+            })
+            .collect();
+        let note = opening_note(&view(players));
+        assert!(note.chars().count() <= Push::NOTE_MAX, "{note}");
+        assert!(note.contains("对面："), "{note}");
+        assert!(note.ends_with("还在查 1 人。"), "{note}");
+        assert!(!note.contains("我方："), "先省掉我方的：{note}");
     }
 
     fn page(my_damage: i64, win: bool) -> Value {

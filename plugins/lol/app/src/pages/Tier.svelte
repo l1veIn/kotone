@@ -14,7 +14,7 @@
   import StateBlock from "../components/StateBlock.svelte";
   import type { ToolState } from "../status";
   import { m } from "../i18n.svelte";
-  import { isTierData, type Source, type TierData } from "../types";
+  import { isTierData, type TierData } from "../types";
 
 
   let {
@@ -82,15 +82,6 @@
   const shownLane = $derived(lanes.some((l) => l.id === lane) ? lane : (lanes[0]?.id ?? ""));
   const riftRows = $derived(tier?.mode === "rift" ? (tier.lanes[shownLane] ?? []) : []);
 
-  /** “数据：腾讯 101（20261124）”。 */
-  function sourcesLine(sources: Source[]): string {
-    return sources
-      .map((s) => {
-        const extra = [s.license ?? "", s.date ? s.date.slice(0, 10) : ""].filter(Boolean).join(" · ");
-        return extra ? m.plugin_lol_source_with({ name: s.name, extra }) : s.name;
-      })
-      .join(" · ");
-  }
   const tierTone = (t: string) => (t === "T0" ? "t0" : t === "T1" ? "t1" : "");
 
   /** 点一行进英雄页（同一种模式、同一路）。 */
@@ -198,9 +189,10 @@
 
     {#if tier}
       {#if full}
-        <span data-testid="lol-app-sources"><Footer data={m.plugin_lol_sources({ sources: sourcesLine(tier.sources) })} onLink={session.openLink} /></span>
+        <!-- 强度榜只有腾讯 101 一个来源（ADR 043 D8：标签只写出处） -->
+        <span data-testid="lol-app-sources"><Footer sources={[{ id: "qq101", date: tier.date, stale: tier.stale }]} onLink={session.openLink} /></span>
       {:else}
-        <span data-testid="lol-app-sources"><Footer data={m.plugin_lol_sources({ sources: sourcesLine(tier.sources) })} card onLink={session.openLink} /></span>
+        <span data-testid="lol-app-sources"><Footer card sources={[{ id: "qq101", date: tier.date, stale: tier.stale }]} onLink={session.openLink} /></span>
       {/if}
     {/if}
   </main>

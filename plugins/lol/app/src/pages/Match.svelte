@@ -168,7 +168,7 @@
           <div class="team">{@render skeleton(5)}</div>
         </div>
       {/if}
-      <Footer data={m.plugin_lol_foot_client()} onLink={session.openLink} />
+      <Footer sources={[{ id: "client" }]} onLink={session.openLink} />
     </main>
   </div>
 {:else}

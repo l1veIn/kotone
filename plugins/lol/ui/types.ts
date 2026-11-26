@@ -55,8 +55,8 @@ export interface MatchPlayer {
   /** 标签：`{kind, text}`（2026-11-25 起带种类，App 按种类上色）；旧数据是一句话。 */
   tags: (string | { kind: string; text: string })[];
   recent: RecentGame[];
-  /** 是突破口时的原因。 */
-  weak: string[] | null;
+  /** 看得到是谁没有（ADR 043 D9）：known / hidden（隐藏了身份）/ name_hidden（选人时看不到名字）/ bot（电脑）。 */
+  identity?: "known" | "hidden" | "name_hidden" | "bot";
   profileIconId?: number | null;
   profileIcon?: string;
   /** 还在查、查不到时 null。 */
@@ -135,6 +135,13 @@ export interface TierRowRaw {
 
 export interface OpggBlock { text?: string; error?: string; attribution: string; url: string; stale?: boolean }
 
+/** 一块数据的来源标签（ADR 043 D8，plugins/lol/src/stats_tools.rs 的 `source_tag`）。 */
+export interface SourceChoice {
+  kind: "rift" | "mayhemAugments";
+  id: "qq101" | "opgg" | "aramhex";
+  options: { id: "qq101" | "opgg" | "aramhex"; available: boolean }[];
+}
+
 export interface ChampionRift {
   mode: "rift";
   champion: StatChampion;
@@ -148,6 +155,7 @@ export interface ChampionRift {
   sources: StatSource[];
   stale: boolean;
   opgg: OpggBlock | null;
+  source?: SourceChoice;
 }
 
 export interface MayhemAugment { id: number; name: string; rarity: string; games: number; winRate: number; delta: number; lowSample: boolean }
@@ -161,6 +169,8 @@ export interface ChampionMayhem {
   /** aramhex-data 的署名（CC BY-NC 4.0）；没读到 aramhex 时 null。 */
   attribution: string | null;
   sources: StatSource[];
+  augmentsOpgg?: OpggBlock | null;
+  source?: SourceChoice;
 }
 
 export type ChampionData = ChampionRift | ChampionMayhem;

@@ -21,8 +21,93 @@ pub const PAGE_CHAMPION: &str = "ui://kotone/lol/champion";
 pub const PAGE_TIER: &str = "ui://kotone/lol/tier";
 /// “用网上的统计”开关（plugin.toml 的 sources）。
 pub const SOURCE_STATS: &str = "stats";
-/// OP.GG（默认关，等 OP.GG 回复 issue #26）。
+/// OP.GG 的数据开关（ADR 043 D9：默认开；用法照 issue #26 答应的，见 [`stats::opgg`]）。
 pub const SOURCE_OPGG: &str = "opgg";
+
+/// 来源标签（ADR 043 D8）：同一块内容一次只用一个数据源，不把不同来源的数字混在一张表里。页面上每块一个小标签，
+/// 能换的块点标签换，玩家选的记在插件设置 `plugins.lol.settings.sourceFor.<块>` 里（[`source_tool`]）。
+/// 能换的只有两块：峡谷的英雄数据（腾讯 101 / OP.GG）、海斗的海克斯（aramhex-data / OP.GG）；
+/// 强度榜、海斗英雄榜只有腾讯 101，这局、战绩、单局详情只有客户端（标签只写出处）。
+pub const KIND_RIFT: &str = "rift";
+pub const KIND_MAYHEM_AUGMENTS: &str = "mayhemAugments";
+/// 数据源的 id（页面上的名字在 messages 里：`plugin_lol_source_tag_<id>`）。
+pub const FROM_QQ101: &str = "qq101";
+pub const FROM_OPGG: &str = "opgg";
+pub const FROM_ARAMHEX: &str = "aramhex";
+/// 设置里放玩家选的来源的那一项。
+const SETTING_SOURCE_FOR: &str = "sourceFor";
+
+/// 这一块能用哪些来源，第一个是默认（国服的峡谷用腾讯 101，海斗的海克斯用 aramhex-data，ADR 043 D8）。
+fn source_options(kind: &str) -> Option<&'static [&'static str]> {
+    match kind {
+        KIND_RIFT => Some(&[FROM_QQ101, FROM_OPGG]),
+        KIND_MAYHEM_AUGMENTS => Some(&[FROM_ARAMHEX, FROM_OPGG]),
+        _ => None,
+    }
+}
+
+/// 玩家给这一块选的来源（插件设置里没写、写的不认得时是默认）。
+pub fn chosen_source(settings: &Value, kind: &str) -> &'static str {
+    let options = source_options(kind).unwrap_or(&[FROM_QQ101]);
+    let picked = settings[SETTING_SOURCE_FOR][kind].as_str().unwrap_or("");
+    options
+        .iter()
+        .find(|o| **o == picked)
+        .copied()
+        .unwrap_or(options[0])
+}
+
+/// 这一次用哪个来源：她在参数里写了就用她的，不然用玩家选的；OP.GG 的开关关着时退回默认。
+fn source_for(host: &dyn Host, arguments: &Value, kind: &str) -> &'static str {
+    let options = source_options(kind).unwrap_or(&[FROM_QQ101]);
+    let asked = arguments.get("source").and_then(Value::as_str);
+    let wanted = asked
+        .and_then(|a| options.iter().find(|o| **o == a).copied())
+        .unwrap_or_else(|| chosen_source(&host.settings(), kind));
+    if wanted == FROM_OPGG && !host.source_enabled(SOURCE_OPGG) {
+        options[0]
+    } else {
+        wanted
+    }
+}
+
+/// 页面上这一块的来源标签：现在用的、能换成哪些（OP.GG 的开关关着时标成用不了）。
+fn source_tag(host: &dyn Host, kind: &str, current: &str) -> Value {
+    let options: Vec<Value> = source_options(kind)
+        .unwrap_or(&[])
+        .iter()
+        .map(|id| json!({"id": id, "available": *id != FROM_OPGG || host.source_enabled(SOURCE_OPGG)}))
+        .collect();
+    json!({"kind": kind, "id": current, "options": options})
+}
+
+/// `lol.source`（只给页面）：记下玩家给一块选的来源。整份 `sourceFor` 一起写（别的块选的不丢）。
+pub(crate) fn source_tool(host: &dyn Host, arguments: &Value) -> ToolResult {
+    let kind = arguments.get("kind").and_then(Value::as_str).unwrap_or("");
+    let source = arguments
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let Some(options) = source_options(kind) else {
+        return ToolResult::content(status("error", "kind 只能是 rift 或 mayhemAugments"));
+    };
+    let Some(source) = options.iter().find(|o| **o == source) else {
+        return ToolResult::content(status(
+            "error",
+            format!("{kind} 只能用这些来源：{}", options.join("、")),
+        ));
+    };
+    let mut picked = host.settings()[SETTING_SOURCE_FOR]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    picked.insert(kind.to_string(), json!(source));
+    match host.update_settings(json!({ SETTING_SOURCE_FOR: picked })) {
+        Ok(()) => ToolResult::content(json!({"status": "ok", "kind": kind, "source": source})),
+        // 别的 MCP 宿主里改不了 Kotone 的设置：这一次照样换，只是不记
+        Err(e) => ToolResult::content(status("not_saved", format!("记不下来：{e}"))),
+    }
+}
 /// 海克斯大乱斗的队列。
 const MAYHEM_QUEUE: i64 = 2400;
 /// 海克斯评分至少要多少局才列进“最好的海克斯”。
@@ -144,14 +229,108 @@ impl LolPlugin {
             _ => self.in_mayhem(),
         };
         if mayhem {
-            self.mayhem_champion(host, id).await
+            let from = source_for(host, arguments, KIND_MAYHEM_AUGMENTS);
+            self.mayhem_champion(host, id, from).await
         } else {
             let lane = arguments
                 .get("lane")
                 .and_then(Value::as_str)
                 .and_then(qq101::lane_code);
-            self.rift_champion(host, id, lane).await
+            match source_for(host, arguments, KIND_RIFT) {
+                FROM_OPGG => self.rift_champion_opgg(host, id, lane).await,
+                _ => self.rift_champion(host, id, lane).await,
+            }
         }
+    }
+
+    /// 峡谷的英雄数据换成 OP.GG（全球数据，ADR 043 D8）：一次 `lol_get_champion_analysis`，结果原样给页面和她
+    /// （OP.GG 的回复是一种紧凑的文字，不是表）。分路没写时按腾讯 101 的强度榜找这个英雄最常走的路（只用来问 OP.GG，
+    /// 页面上不放 101 的数字）。
+    async fn rift_champion_opgg(
+        &self,
+        host: &dyn Host,
+        id: i64,
+        lane: Option<&'static str>,
+    ) -> ToolResult {
+        let lane = match lane {
+            Some(lane) => lane,
+            None => self.main_lane(host, id).await.unwrap_or("TOP"),
+        };
+        let stats = self.stats_for(host);
+        let (names, skills) = tokio::join!(self.names(host), self.champion_abilities(host, id));
+        let names = names.as_deref();
+        let me = names
+            .map(|n| n.short(id))
+            .unwrap_or_else(|| format!("英雄 {id}"));
+        let lane_name = qq101::lane_name(lane);
+        let alias = names
+            .and_then(|n| n.aliases.get(&id).cloned())
+            .or_else(|| {
+                self.loaded_data()
+                    .and_then(|d| d.champion(id).map(|c| c.alias.clone()))
+            })
+            .unwrap_or_default();
+        let fetched = if alias.is_empty() {
+            Err("不知道这个英雄的英文名，问不了 OP.GG".to_string())
+        } else {
+            stats
+                .opgg(
+                    "lol_get_champion_analysis",
+                    json!({
+                        "champion": stats::opgg::champion_key(&alias),
+                        "position": stats::opgg::position(lane),
+                        "game_mode": "ranked",
+                        "lang": "zh_CN",
+                    }),
+                    &host.app_version(),
+                )
+                .await
+        };
+        let (text, block, ok) = match fetched {
+            Ok(f) => {
+                let short: String = f.value.chars().take(1500).collect();
+                (
+                    format!(
+                        "{me} {lane_name}（{}）：{short}\n数据：{}",
+                        stats::opgg::ATTRIBUTION,
+                        stats::opgg::ATTRIBUTION
+                    ),
+                    json!({"text": f.value, "attribution": stats::opgg::ATTRIBUTION,
+                           "url": stats::opgg::HOME, "stale": f.stale}),
+                    true,
+                )
+            }
+            Err(e) => (
+                format!("OP.GG 查不到：{e}"),
+                json!({"error": e, "attribution": stats::opgg::ATTRIBUTION, "url": stats::opgg::HOME}),
+                false,
+            ),
+        };
+        let empty: Vec<Value> = Vec::new();
+        let page = json!({
+            "mode": "rift",
+            "champion": Self::champion_json(names, id),
+            "lane": lane,
+            "laneName": lane_name,
+            "patch": "",
+            "date": "",
+            "tier": Value::Null,
+            "goodAgainst": empty,
+            "badAgainst": empty,
+            "build": {"starting": empty, "boots": empty, "core": empty, "fourth": empty, "fifth": empty, "sixth": empty},
+            "runes": empty,
+            "skillPriority": empty,
+            "skillOrder": empty,
+            "abilities": skills,
+            "spells": empty,
+            "sources": [{"name": stats::opgg::ATTRIBUTION}],
+            "stale": block["stale"].as_bool().unwrap_or(false),
+            "opgg": block,
+            "source": source_tag(host, KIND_RIFT, FROM_OPGG),
+        });
+        let status_word = if ok { "ok" } else { "error" };
+        ToolResult::content(json!({"status": status_word, "text": text}))
+            .with_page(PAGE_CHAMPION, page)
     }
 
     /// 这个英雄最常走的路（五路强度榜里选用率最高的那一路）。
@@ -269,32 +448,7 @@ impl LolPlugin {
                 statics.spell(pair.spells[1])
             ));
         }
-        // OP.GG（全球数据，开关默认关）
-        let mut opgg_block = Value::Null;
-        if host.source_enabled(SOURCE_OPGG) {
-            if let Some(alias) = names.and_then(|n| n.aliases.get(&id)) {
-                let args = json!({
-                    "champion": stats::opgg::champion_key(alias),
-                    "position": stats::opgg::position(lane),
-                    "game_mode": "ranked",
-                    "lang": "zh_CN",
-                });
-                match stats
-                    .opgg("lol_get_champion_analysis", args, &host.app_version())
-                    .await
-                {
-                    Ok(text) => {
-                        let short: String = text.value.chars().take(1200).collect();
-                        lines.push(format!("{}：{short}", stats::opgg::ATTRIBUTION));
-                        opgg_block = json!({"text": text.value, "attribution": stats::opgg::ATTRIBUTION,
-                                            "url": stats::opgg::HOME, "stale": text.stale});
-                    }
-                    Err(e) => {
-                        opgg_block = json!({"error": e, "attribution": stats::opgg::ATTRIBUTION, "url": stats::opgg::HOME})
-                    }
-                }
-            }
-        }
+        // OP.GG 不再接在后面（ADR 043 D8：一块只用一个来源）；要全球数据就换来源（[`Self::rift_champion_opgg`]）
         lines.push(format!(
             "数据：{TENCENT}{}",
             if detail.stale {
@@ -367,18 +521,47 @@ impl LolPlugin {
             })).collect::<Vec<_>>(),
             "sources": [{"name": TENCENT, "date": date}],
             "stale": detail.stale,
-            "opgg": opgg_block,
+            "opgg": Value::Null,
+            "source": source_tag(host, KIND_RIFT, FROM_QQ101),
         });
         ToolResult::content(json!({"status": "ok", "text": lines.join("\n")}))
             .with_page(PAGE_CHAMPION, page)
     }
 
-    async fn mayhem_champion(&self, host: &dyn Host, id: i64) -> ToolResult {
+    /// 海斗的英雄：英雄榜（腾讯 101）+ 最好的海克斯（`from`：aramhex-data，或者换成 OP.GG 的
+    /// `lol_list_aram_augments`，ADR 043 D8）。只请求用得着的那一个。
+    async fn mayhem_champion(&self, host: &dyn Host, id: i64, from: &'static str) -> ToolResult {
         let stats = self.stats_for(host);
         let days = recent_days();
-        let (table, hex, names) = tokio::join!(
+        let opgg_wanted = from == FROM_OPGG;
+        let version = host.app_version();
+        let (table, hex, opgg, names) = tokio::join!(
             stats.mayhem_champions(&days),
-            stats.aramhex(),
+            async {
+                if opgg_wanted {
+                    Err("换成了 OP.GG".to_string())
+                } else {
+                    stats.aramhex().await
+                }
+            },
+            async {
+                if !opgg_wanted {
+                    return None;
+                }
+                Some(
+                    stats
+                        .opgg(
+                            "lol_list_aram_augments",
+                            json!({
+                                "champion_id": id,
+                                "lang": "zh_CN",
+                                "desired_output_fields": ["data.augments[].{id,name,tier,performance,popular}"],
+                            }),
+                            &version,
+                        )
+                        .await,
+                )
+            },
             self.names(host)
         );
         let names = names.as_deref();
@@ -447,6 +630,26 @@ impl LolPlugin {
                 json!({"name": aramhex::REPO, "license": aramhex::LICENSE, "date": d.snapshot_at}),
             );
         }
+        // 海克斯换成 OP.GG：原样给（文字），出处写 OP.GG
+        let mut augments_opgg = Value::Null;
+        match opgg {
+            Some(Ok(f)) => {
+                let short: String = f.value.chars().take(800).collect();
+                lines.push(format!(
+                    "最好的海克斯（{}）：{short}",
+                    stats::opgg::ATTRIBUTION
+                ));
+                sources.push(json!({"name": stats::opgg::ATTRIBUTION}));
+                augments_opgg = json!({"text": f.value, "attribution": stats::opgg::ATTRIBUTION,
+                                       "url": stats::opgg::HOME, "stale": f.stale});
+            }
+            Some(Err(e)) => {
+                lines.push(format!("OP.GG 的海克斯查不到：{e}"));
+                augments_opgg = json!({"error": e, "attribution": stats::opgg::ATTRIBUTION,
+                                       "url": stats::opgg::HOME});
+            }
+            None => {}
+        }
         if lines.is_empty() {
             let why = [table.err(), hex.err()]
                 .into_iter()
@@ -473,6 +676,8 @@ impl LolPlugin {
             "augments": augments,
             "attribution": attribution,
             "sources": sources,
+            "augmentsOpgg": augments_opgg,
+            "source": source_tag(host, KIND_MAYHEM_AUGMENTS, from),
         });
         ToolResult::content(json!({"status": "ok", "text": lines.join("\n")}))
             .with_page(PAGE_CHAMPION, page)
@@ -595,5 +800,125 @@ mod tests {
         assert_eq!(recent_days().len(), 7);
         assert_eq!(pct(Some(0.5)), "50.0%");
         assert_eq!(pct(None), "—");
+    }
+
+    /// 记得住玩家选的来源（插件设置 `sourceFor`），只有设置、没有别的状态。
+    struct SettingsHost {
+        settings: std::sync::Mutex<Value>,
+        opgg: bool,
+    }
+
+    impl Host for SettingsHost {
+        fn plugin(&self) -> &str {
+            "lol"
+        }
+        fn enabled(&self) -> bool {
+            true
+        }
+        fn source_enabled(&self, source: &str) -> bool {
+            source != SOURCE_OPGG || self.opgg
+        }
+        fn settings(&self) -> Value {
+            self.settings.lock().unwrap().clone()
+        }
+        fn update_settings(&self, patch: Value) -> Result<(), String> {
+            // 和宿主一样：对象按字段合并（这里只合一层，测试 source_tool 自己把整份 sourceFor 写全）
+            let mut settings = self.settings.lock().unwrap();
+            for (k, v) in patch.as_object().unwrap() {
+                settings[k] = v.clone();
+            }
+            Ok(())
+        }
+        fn data_dir(&self) -> std::path::PathBuf {
+            std::path::PathBuf::new()
+        }
+        fn spawn(&self, _task: kotone_plugin_api::BoxFuture<'static, ()>) {}
+        fn process_ids(&self, _exe: &str) -> Vec<u32> {
+            Vec::new()
+        }
+        fn process_command_line(&self, _pid: u32) -> Option<String> {
+            None
+        }
+        fn game_observe(&self, _game: &str, _observation: kotone_plugin_api::Observation) {}
+        fn game_claim(&self, _game: &str, _claimed: bool) {}
+        fn game_event(
+            &self,
+            _game: &str,
+            _kind: &str,
+            _source: &str,
+            _data: serde_json::Map<String, Value>,
+            _game_time: Option<f64>,
+        ) {
+        }
+    }
+
+    /// OP.GG 默认开（ADR 043 D9，玩家决定“直接用”）。
+    #[test]
+    fn opgg_is_on_by_default() {
+        let m = crate::manifest();
+        assert!(m.source(SOURCE_OPGG).unwrap().enabled_by_default);
+    }
+
+    /// ADR 043 D8：默认国服的峡谷用腾讯 101、海斗的海克斯用 aramhex-data；点标签换了会记住，两块各记各的；
+    /// 她在参数里写了来源就用她的；OP.GG 的开关关着时退回默认；不认得的来源不收。
+    #[test]
+    fn source_tags_switch_and_remember() {
+        let host = SettingsHost {
+            settings: std::sync::Mutex::new(json!({"autoAccept": true})),
+            opgg: true,
+        };
+        assert_eq!(source_for(&host, &json!({}), KIND_RIFT), FROM_QQ101);
+        assert_eq!(
+            source_for(&host, &json!({}), KIND_MAYHEM_AUGMENTS),
+            FROM_ARAMHEX
+        );
+        let tag = source_tag(&host, KIND_RIFT, FROM_QQ101);
+        assert_eq!(
+            tag,
+            json!({"kind": "rift", "id": "qq101", "options": [
+                {"id": "qq101", "available": true}, {"id": "opgg", "available": true}]})
+        );
+
+        let ok = source_tool(&host, &json!({"kind": "rift", "source": "opgg"}));
+        assert_eq!(ok.content["status"], "ok");
+        let ok = source_tool(&host, &json!({"kind": "mayhemAugments", "source": "opgg"}));
+        assert_eq!(ok.content["status"], "ok");
+        let saved = host.settings();
+        assert_eq!(
+            saved["sourceFor"],
+            json!({"rift": "opgg", "mayhemAugments": "opgg"})
+        );
+        assert_eq!(saved["autoAccept"], true, "别的设置不动");
+        assert_eq!(source_for(&host, &json!({}), KIND_RIFT), FROM_OPGG);
+        // 她写了来源：用她的（这一次），不改玩家选的
+        assert_eq!(
+            source_for(&host, &json!({"source": "qq101"}), KIND_RIFT),
+            FROM_QQ101
+        );
+        assert_eq!(chosen_source(&host.settings(), KIND_RIFT), FROM_OPGG);
+        // 不认得的
+        let bad = source_tool(&host, &json!({"kind": "rift", "source": "aramhex"}));
+        assert_eq!(bad.content["status"], "error");
+        let bad = source_tool(&host, &json!({"kind": "tier", "source": "qq101"}));
+        assert_eq!(bad.content["status"], "error");
+        assert_eq!(
+            chosen_source(&json!({"sourceFor": {"rift": "x"}}), KIND_RIFT),
+            FROM_QQ101
+        );
+
+        // OP.GG 关着：退回默认，标签上标成用不了
+        let off = SettingsHost {
+            settings: std::sync::Mutex::new(host.settings()),
+            opgg: false,
+        };
+        assert_eq!(source_for(&off, &json!({}), KIND_RIFT), FROM_QQ101);
+        assert_eq!(
+            source_for(&off, &json!({"source": "opgg"}), KIND_MAYHEM_AUGMENTS),
+            FROM_ARAMHEX
+        );
+        assert_eq!(
+            source_tag(&off, KIND_RIFT, FROM_QQ101)["options"][1]["available"],
+            false
+        );
     }
 }

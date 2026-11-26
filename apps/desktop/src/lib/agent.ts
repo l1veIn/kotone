@@ -204,7 +204,7 @@ const previewConversation: Conversation = {
     // 插件工具带页面的结果（ADR 038）：聊天里出一张卡片，点开在右侧栏
     { role: "user", text: "查一下这把的战绩，对面谁是突破口", source: "chat", atMs: t0 + 240_000 },
     { role: "assistant", text: "", atMs: t0 + 241_000, toolCalls: [{ id: "call-3", name: "lol.scout", arguments: "{}" }] },
-    { role: "tool", callId: "call-3", name: "lol.scout", content: '{"status":"ok","text":"每人最近 20 局……突破口（对面，按数据）：亚索——6 连败"}', isError: false, untrusted: true, atMs: t0 + 242_000,
+    { role: "tool", callId: "call-3", name: "lol.scout", content: '{"status":"ok","text":"每人最近 20 局……对面：- 疾风剑豪 亚索 · 近 20 局 6 胜 14 负 · 6 连败……隐藏了身份（客户端不给名字和战绩，不查）：我方 2 人"}', isError: false, untrusted: true, atMs: t0 + 242_000,
       display: { structuredContent: sampleMatch(), ui: { uri: "ui://kotone/lol/match" } } },
     { role: "assistant", text: "对面亚索最近 20 局只赢 6 局，刚 6 连败，可以多找他。", atMs: t0 + 244_000 },
     // 网上的统计（ADR 038 第 3 步）：英雄卡片

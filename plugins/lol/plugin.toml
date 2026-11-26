@@ -4,7 +4,7 @@
 
 id = "lol"
 name = "英雄联盟"
-description = "这局 10 个人的战绩和突破口、任何人的战绩、记对面交的召唤师技能；英雄的强度、克制、出装和海斗海克斯"
+description = "这局 10 个人的战绩、任何人的战绩、记对面交的召唤师技能；英雄的强度、克制、出装和海斗海克斯"
 games = ["lol"]
 adapter = "lol"
 enabled_by_default = true
@@ -12,7 +12,7 @@ enabled_by_default = true
 [[sources]]
 id = "client"
 name = "读客户端数据"
-description = "读英雄联盟客户端和对局里的本地接口（只读，不改任何东西）：查这局玩家的战绩、找对面的突破口、记对面交的召唤师技能；游戏中心靠它知道选英雄、加载、对局中这些阶段和局内的事。"
+description = "读英雄联盟客户端和对局里的本地接口（只读，不改任何东西）：查这局玩家的战绩、记对面交的召唤师技能；游戏中心靠它知道选英雄、加载、对局中这些阶段和局内的事。"
 enabled_by_default = true
 risk = "国服用这类功能可能违反腾讯的用户协议，LeagueAkari 等工具有封号、禁言的报告；Riot 也限制第三方的技能冷却计时。用不用由你决定。"
 
@@ -21,14 +21,14 @@ id = "stats"
 name = "用网上的统计"
 description = "从网上查英雄联盟的统计（国服）：腾讯 101 / 掌盟的峡谷强度榜、克制、出装、符文、加点和海斗英雄榜；czgreat/aramhex-data 的海斗英雄 × 海克斯胜率；腾讯的英雄外号。只按需请求（打开页面、她问的时候），不带你的账号。"
 enabled_by_default = true
-risk = "数据来自腾讯和 aramhex 的非官方接口，没有文档、随时可能变或停；aramhex 的数据是 CC BY-NC 4.0，要署名、不能商用（Kotone 不收费，页面上写了出处）。"
+risk = "数据来自腾讯和 aramhex 的非官方接口，没有文档、随时可能变或停。Riot 的规定：“Products cannot display win rates for Augments or Arena Mode items. This applies to all websites, applications and overlays.”（developer.riotgames.com/docs/lol）海斗三选一的评分和海克斯的胜率都在这条里面，换到聊天、悬浮窗里显示，风险也一样。"
 
 [[sources]]
 id = "opgg"
 name = "用 OP.GG 的数据"
-description = "用 OP.GG 官方 MCP 补充全球数据（英雄的出装、克制分析），只在打开英雄页面、她查一个英雄的时候请求，存 24 小时；页面上写 OP.GG 的出处和链接。"
-enabled_by_default = false
-risk = "已经替你去问 OP.GG 能不能在 Kotone 里用（github.com/opgginc/opgg-mcp/issues/26）；OP.GG 回复同意前默认关。网站协议不许程序自动访问，打开就是你自己决定先用。"
+description = "用 OP.GG 官方 MCP 的全球数据（英雄的出装、克制分析，海斗的海克斯）：页面上把来源换成 OP.GG、她查的时候才请求，最多同时 2 个，存 24 小时；页面上放 OP.GG 的标志和链接。"
+enabled_by_default = true
+risk = "OP.GG 还没回复同意 Kotone 用它的数据（github.com/opgginc/opgg-mcp/issues/26），它的网站协议不许程序自动访问。不想用就关掉，英雄页面照样有腾讯 101 的数据。"
 
 [[sources]]
 id = "control"
@@ -43,6 +43,32 @@ name = "在客户端里发聊天"
 description = "选英雄、房间里，你用语音输入说的话、她替你发的话，经客户端自己的本机聊天接口发出去，不按键（照 LeagueAkari）。几行连成一条消息发。只在你说话、让她发、或者你设的热键和自动化要发的时候发。要“读客户端数据”也开着。"
 enabled_by_default = true
 risk = "国服用第三方工具可能违反腾讯的用户协议；经接口发的话照样过腾讯的屏蔽词和禁言规则（LeagueAkari 用户报告过模板里的词被屏蔽：github.com/LeagueAkari/LeagueAkari/issues/480；WeGame 去掉了能改内容的一键喊话：github.com/LeagueAkari/LeagueAkari/issues/524）。Riot 说客户端接口不正式支持第三方使用（developer.riotgames.com/docs/lol）。关掉以后，选英雄时她不替你发；你自己的语音输入照旧按键打进前台窗口。"
+
+# 许可和出处（ADR 043 D8）：和上面数据开关的 risk 一起放进插件的“风险和许可”弹窗（风险在前，这些在后），设置页上不再一条条摆。
+# 界面上的文字在 messages 里（plugin_lol_notice_<id>_title / _body），要和这里一致（tests::messages_match_the_manifest）。
+[[notices]]
+id = "aramhex-data"
+title = "海斗海克斯数据：aramhex-data"
+body = "海斗里英雄 × 海克斯的胜率来自 czgreat/aramhex-data，许可是 CC BY-NC 4.0：要写明出处、不能商用。Kotone 不收费，用到这份数据的页面都写了出处。"
+links = ["https://github.com/czgreat/aramhex-data", "https://creativecommons.org/licenses/by-nc/4.0/"]
+
+[[notices]]
+id = "opgg"
+title = "OP.GG"
+body = "全球数据（英雄的出装、克制分析）来自 OP.GG 官方的 MCP。我们在 issue 里答应过的用法：只按需请求、最多同时 2 个、存 24 小时、请求里写明是 Kotone，页面上放 OP.GG 的标志和链接，她说的时候带上出处。"
+links = ["https://op.gg/", "https://github.com/opgginc/opgg-mcp/issues/26"]
+
+[[notices]]
+id = "images"
+title = "图片：英雄联盟客户端、CommunityDragon"
+body = "英雄头像、装备、海克斯这些图先从你电脑上的英雄联盟客户端取，客户端没开时从 CommunityDragon（社区做的客户端素材镜像）取；安装包里不带这些图。图片归 Riot Games。"
+links = ["https://www.communitydragon.org/"]
+
+[[notices]]
+id = "riot"
+title = "Riot Games 的声明"
+body = "Kotone 依照 Riot Games 的“Legal Jibber Jabber”政策使用了 Riot Games 的素材；Riot Games 不认可、也不赞助本项目。"
+links = ["https://www.riotgames.com/en/legal"]
 
 [[pages]]
 uri = "ui://kotone/lol/match"
@@ -233,12 +259,13 @@ label = "我复活了"
 needs = ["client"]
 
 [agent]
-overview = "英雄联盟里查这局玩家的战绩和突破口、查任何人的战绩、记对面交的召唤师技能，查英雄的强度、克制、出装和海斗海克斯"
+overview = "英雄联盟里查这局玩家的战绩、查任何人的战绩、记对面交的召唤师技能，查英雄的强度、克制、出装和海斗海克斯"
 rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回）：这局的样子、“谁没闪”“对面谁没带闪”用 lol.match；\
 玩家说“对面阿狸闪了”就用 lol.spell 记下（不用问），简短应一声几点好；“查战绩”“对面谁是突破口”用 lol.scout，\
-挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句；\
+它只给事实（最近的胜负、连胜连败、这个英雄几局、谁开黑），谁是突破口由你按这些数据判断；\
+挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句，隐藏了身份的人查不到、不用猜是谁；\
 “我最近怎么样”“查一下对面亚索 / 某某#1234 的战绩”用 lol.player；\
-“亚索克制谁”“刀妹出什么”“海斗里这个英雄拿什么海克斯”用 lol.champion，“现在什么英雄强”用 lol.tier，说的时候带一句出处（“掌盟的数据”）。\
+“亚索克制谁”“刀妹出什么”“海斗里这个英雄拿什么海克斯”用 lol.champion，“现在什么英雄强”用 lol.tier，说的时候带一句出处（“掌盟的数据”“OP.GG 的全球数据”）。\
 玩家说“帮我接受对局”“帮我选 / 禁 亚索”“先亮一下亚索”才用 lol.client（操作客户端，玩家没说就不用）。\
 玩家说了“发出去 / 发聊天框”才用 game_chat.send 发（选英雄、房间里也是它：客户端在前台时经客户端的聊天接口发，只有队伍频道）：\
 技能发 lol.spell 返回的 chat 那句，战绩一条一行；“把对面闪现 / 战绩 / 开黑发出去”用 lol.shout（一次调用、措辞固定、不发玩家名）。

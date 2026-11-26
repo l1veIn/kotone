@@ -1,4 +1,6 @@
 <script lang="ts" module>
+  import type { SourceId } from "../types";
+
   /** 评级（照 AramHex：按国服胜率排名，前 10% S、30% A、60% B、85% C、其余 D；plugins/lol/src/pushes/rules.rs）。 */
   export type Grade = "S" | "A" | "B" | "C" | "D";
   export interface SelectChampion { id: number; short: string; icon?: string }
@@ -10,8 +12,8 @@
     total?: number;
     team: { champion: SelectChampion; me: boolean; winRate: number | null; rank?: number | null; grade?: Grade | null; lane?: string | null; tier?: string | null }[];
     bench: { champion: SelectChampion; winRate: number | null; rank?: number | null; grade?: Grade | null; better?: boolean; best?: boolean }[];
-    /** 数据从哪来：现在两种都是腾讯 101 的榜。 */
-    source: string;
+    /** 数据从哪来（来源标签，ADR 043 D8）：现在两种都是腾讯 101 的榜。 */
+    source: SourceId;
     ended?: boolean;
   }
   export function isChampSelect(value: unknown): value is ChampSelectData {
@@ -28,6 +30,7 @@
   // 只学 AramHex 标什么，视觉是“记分纸”（docs/design/lol-app.md），不抄代码。
   import { onMount } from "svelte";
   import ChampIcon from "../components/ChampIcon.svelte";
+  import SourceTag from "../components/SourceTag.svelte";
   import type { DisplayMode, Session, ToolResult } from "../host";
   import { m } from "../i18n.svelte";
 
@@ -44,6 +47,8 @@
   let panel = $state<ChampSelectData | null>(null);
   let loaded = $state(false);
   const full = $derived(display !== "inline");
+  /** 认得的来源；不认得的（旧数据）按腾讯 101 显示。 */
+  const SOURCES: SourceId[] = ["client", "qq101", "opgg", "aramhex"];
   const mayhem = $derived(panel?.mode === "mayhem");
   const anyBetter = $derived(panel?.bench.some((b) => b.better) ?? false);
 
@@ -98,7 +103,7 @@
           {/each}
         </div>
       {/if}
-      <div class="card-foot">{m.plugin_lol_champ_select_source({ source: panel.source })}</div>
+      <div class="card-foot"><SourceTag id={SOURCES.includes(panel.source) ? panel.source : "qq101"} onLink={session.openLink} /></div>
     </div>
   {:else if loaded}
     {#if full}

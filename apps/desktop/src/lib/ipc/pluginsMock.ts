@@ -11,7 +11,7 @@ import musicZh from "../../../../../plugins/music/messages/zh-CN.json";
 import interpreterZh from "../../../../../plugins/interpreter/messages/zh-CN.json";
 import voiceInputZh from "../../../../../plugins/voice-input/messages/zh-CN.json";
 import type { PluginInfo, PluginManifest, PluginToolResult, PluginVisibility } from "../plugins";
-import { getSettings } from "./browserMock";
+import { getSettings, updateSettings } from "./browserMock";
 import { remotePlugins } from "./mcpServersMock";
 import { gameVoiceCall } from "./gameVoiceMock";
 import { interpreterCall } from "./interpreterMock";
@@ -44,11 +44,11 @@ const lol: PluginManifest = {
     enabledByDefault: true,
     risk: lolZh.plugin_lol_source_stats_risk,
   }, {
-    // OP.GG：等 OP.GG 回复同意前默认关（opgginc/opgg-mcp#26）
+    // OP.GG：默认开（ADR 043 D9，玩家决定“直接用”；用法照 opgginc/opgg-mcp#26 里答应的）
     id: "opgg",
     name: lolZh.plugin_lol_source_opgg_name,
     description: lolZh.plugin_lol_source_opgg_desc,
-    enabledByDefault: false,
+    enabledByDefault: true,
     risk: lolZh.plugin_lol_source_opgg_risk,
   }, {
     // 操作客户端（照 LeagueAkari，第 3.5 步）：默认关，风险提示写着 LeagueAkari #523
@@ -77,6 +77,18 @@ const lol: PluginManifest = {
     { uri: "ui://kotone/lol/settings", title: lolZh.plugin_lol_tab_settings, needs: [] },
   ],
   agent: { overview: "", rule: "" },
+  // 许可和出处（plugin.toml 的 [[notices]]，ADR 043 D8）：标题、正文用插件的文案，链接和 plugin.toml 一样
+  notices: ([
+    ["aramhex-data", ["https://github.com/czgreat/aramhex-data", "https://creativecommons.org/licenses/by-nc/4.0/"]],
+    ["opgg", ["https://op.gg/", "https://github.com/opgginc/opgg-mcp/issues/26"]],
+    ["images", ["https://www.communitydragon.org/"]],
+    ["riot", ["https://www.riotgames.com/en/legal"]],
+  ] as [string, string[]][]).map(([id, links]) => ({
+    id,
+    title: (lolZh as Record<string, string>)[`plugin_lol_notice_${id.replace(/-/g, "_")}_title`],
+    body: (lolZh as Record<string, string>)[`plugin_lol_notice_${id.replace(/-/g, "_")}_body`],
+    links,
+  })),
   // 内置推送（plugin.toml 的 [[pushes]]，ADR 043 D4）：名字、时机、做什么用插件的文案
   pushes: ([
     ["opening", ["card"], "normal", ["client"]],
@@ -170,6 +182,8 @@ const TOOLS: Record<string, MockTool[]> = {
     { name: "lol.tier", needs: ["stats"], visibility: BOTH, page: PAGE_TIER },
     { name: "lol.client", needs: ["client", "control"], visibility: BOTH, page: null },
     { name: "lol.champions", needs: [], visibility: ["app"], page: "ui://kotone/lol/settings" },
+    // 来源标签换来源（ADR 043 D8）：只给页面，写 plugins.lol.settings.sourceFor
+    { name: "lol.source", needs: [], visibility: ["app"], page: null },
     { name: "lol.augment_ocr", needs: ["stats"], visibility: ["app"], page: PAGE_AUGMENT_OCR },
   ],
   "game-voice": [
@@ -292,10 +306,27 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
       const query = typeof args.champion === "string" ? args.champion : "";
       const champion = findSampleChampion(query);
       if (!champion) return { content: { status: "not_found", text: query } };
-      const data = args.mode === "mayhem"
-        ? sampleChampionMayhem(champion)
-        : sampleChampionRift(champion, typeof args.lane === "string" && args.lane ? args.lane : "TOP");
+      // 来源（ADR 043 D8）：参数里写了用参数的，不然用玩家选的（plugins.lol.settings.sourceFor），OP.GG 关着退回默认
+      const mayhem = args.mode === "mayhem";
+      const kind = mayhem ? "mayhemAugments" : "rift";
+      const opggOn = !(await sourceOff("opgg"));
+      const picked = ((await getSettings()).plugins?.lol?.settings as { sourceFor?: Record<string, string> } | undefined)?.sourceFor?.[kind];
+      const asked = typeof args.source === "string" ? args.source : picked;
+      const opgg = asked === "opgg" && opggOn;
+      const data = mayhem
+        ? sampleChampionMayhem(champion, opgg ? "opgg" : "aramhex", opggOn)
+        : sampleChampionRift(champion, typeof args.lane === "string" && args.lane ? args.lane : "TOP", opgg ? "opgg" : "qq101", opggOn);
       return { content: { status: "ok", text: champion.label }, structuredContent: data, ui: { uri: PAGE_CHAMPION } };
+    }
+    case "lol.source": {
+      const kind = String(args.kind ?? "");
+      const source = String(args.source ?? "");
+      const options: Record<string, string[]> = { rift: ["qq101", "opgg"], mayhemAugments: ["aramhex", "opgg"] };
+      if (!options[kind]?.includes(source)) return { content: { status: "error", text: `${kind}: ${source}` } };
+      const lolSettings = ((await getSettings()).plugins?.lol?.settings ?? {}) as { sourceFor?: Record<string, string> };
+      const sourceFor = { ...(lolSettings.sourceFor ?? {}), [kind]: source };
+      await updateSettings({ plugins: { lol: { settings: { ...lolSettings, sourceFor } } } } as never);
+      return { content: { status: "ok", kind, source } };
     }
     case "lol.tier": {
       const data = args.mode === "mayhem" ? sampleTierMayhem() : sampleTierRift(typeof args.lane === "string" ? args.lane : undefined);

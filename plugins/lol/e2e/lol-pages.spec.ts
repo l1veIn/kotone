@@ -18,6 +18,8 @@ async function openPlugin(page: Page, id: string) {
 
 /** 截图放在仓库的 target/plugin-shots/round7/（实现记录用）；testDir 是 plugins/。 */
 const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "round7", `${name}.png`);
+/** 这一轮（ADR 043 A 轮）给主会话看的截图：target/plugin-shots/feed-and-orb/。 */
+const feedShot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "feed-and-orb", `${name}.png`);
 
 async function open(page: Page, phase?: string) {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -49,23 +51,29 @@ test("the plugin page is the App itself: its own tabs, 这局 while loading, a p
   for (const tab of ["player", "champion", "tier"]) await expect(lol.getByTestId(`lol-app-tab-${tab}`)).toBeVisible();
   await expect(lol.getByTestId("lol-app-tab-settings")).toHaveCount(0);
 
-  // 这局（加载）：阶段牌、10 个人、突破口、隐藏战绩、开黑字母、页脚的出处和风险
+  // 这局（加载）：阶段牌；宽的插件页照 LeagueAkari 排（两队上下、每人一列，ADR 043 D9）；10 个人（隐藏了身份的两个
+  // 照样在，只有英雄）；只给事实，没有“突破口”（D2）；隐藏战绩、开黑字母；页脚只有出处和拳头的声明，没有风险提示（D8）
   const match = lol.getByTestId("lol-app-match");
   await expect(match).toHaveAttribute("data-phase", "loading");
   await expect(lol.getByTestId("lol-match-phase")).toContainText("加载中");
+  await expect(lol.getByTestId("lol-match-grid")).toBeVisible();
   await expect(lol.getByTestId("lol-match-player")).toHaveCount(10);
-  const weak = lol.locator('[data-testid="lol-match-player"][data-weak="true"]');
-  await expect(weak).toHaveCount(1);
-  await expect(weak.getByTestId("lol-match-weak")).toContainText("6 连败");
+  await expect(lol.locator('[data-testid="lol-match-player"][data-identity="hidden"]')).toHaveCount(2);
+  await expect(lol.getByTestId("lol-match-identity")).toHaveText(["隐藏了身份", "隐藏了身份"]);
+  await expect(lol.getByTestId("lol-team-hidden")).toHaveText("2 人隐藏了身份");
+  await expect(match).not.toContainText("突破口");
   await expect(lol.getByTestId("lol-match-hidden")).toHaveCount(1);
   await expect(lol.getByTestId("lol-match-party")).toHaveCount(4);
   await expect(lol.getByTestId("lol-app-foot")).toContainText("Legal Jibber Jabber");
-  await lol.getByTestId("lol-app-risk").locator("summary").click();
-  await expect(lol.getByTestId("lol-app-risk")).toContainText("github.com/LeagueAkari/LeagueAkari/issues/523");
+  await expect(lol.getByTestId("lol-app-foot").getByTestId("lol-source-tag")).toHaveAttribute("data-source", "client");
+  await expect(lol.getByTestId("lol-app-risk")).toHaveCount(0);
+  await expect(match).not.toContainText("封号");
   await screenshot(page, { path: shot(testInfo, "kotone-plugin-page-match") });
+  await screenshot(page, { path: feedShot(testInfo, "plugin-page-match-grid") });
 
-  // 点对面的亚索：他的战绩（App 里换页）
-  await weak.click();
+  // 点对面的亚索：他的战绩（App 里换页）；隐藏了身份的那一列点不开
+  await expect(lol.locator('[data-testid="lol-match-player"][data-identity="hidden"]').first()).not.toHaveAttribute("role", "button");
+  await lol.locator('[data-testid="lol-match-player"][data-puuid="sample-puuid-5"]').click();
   await expect(lol.getByTestId("lol-app-player")).toBeVisible();
   await expect(lol.getByTestId("lol-app-tab-player")).toHaveAttribute("aria-current", "page");
   await expect(lol.getByTestId("lol-player-name")).toHaveText("对手子#1006");
@@ -137,7 +145,9 @@ test("the 设置 button next to the plugin's name opens the host's settings for 
   await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-view", "settings");
   const settings = page.getByTestId("plugin-settings");
   await expect(settings.getByTestId("plugin-lol-source-client")).toHaveAttribute("aria-checked", "true");
-  await expect(settings.getByTestId("plugin-lol-source-client-risk")).toContainText("可能违反腾讯的用户协议");
+  // 风险提示收进栏上的“风险和许可”（ADR 043 D8）
+  await expect(settings.getByTestId("plugin-lol-source-client-risk")).toHaveCount(0);
+  await expect(page.getByTestId("plugin-risk-link")).toBeVisible();
   await expect(settings.getByTestId("plugin-lol-control-section")).toBeVisible();
   await screenshot(page, { path: shot(testInfo, "kotone-plugin-settings") });
   // 点插件名或再点一次“设置”：回到 App（没重新加载，还在原来那页）
@@ -159,9 +169,17 @@ test("asking for this match's history leaves the App as a card in the chat; open
   await expect(frame).toHaveAttribute("data-display", "inline");
   await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   const inline = app(card);
-  await expect(inline.getByTestId("lol-match-card")).toBeVisible();
+  const matchCard = inline.getByTestId("lol-match-card");
+  await expect(matchCard).toBeVisible();
+  // 聊天里的卡片不到 640 宽：两队上下排、每人一行（ADR 043 D9）；隐藏了身份的两行照样在；没有突破口、没有风险提示
+  await expect(matchCard).toHaveAttribute("data-layout", "rows");
   await expect(inline.getByTestId("lol-card-row")).toHaveCount(10);
-  await expect(inline.getByTestId("lol-card-weak")).toContainText("亚索");
+  await expect(inline.locator('[data-testid="lol-card-row"][data-identity="hidden"]')).toHaveCount(2);
+  await expect(inline.getByTestId("lol-card-identity")).toHaveText(["隐藏了身份", "隐藏了身份"]);
+  await expect(matchCard).not.toContainText("突破口");
+  await expect(inline.getByTestId("lol-card-foot")).toContainText("客户端");
+  await expect(inline.getByTestId("lol-app-risk")).toHaveCount(0);
+  await expect(matchCard).not.toContainText("风险");
   await screenshot(card, { path: shot(testInfo, "kotone-chat-card-match") });
 
   await card.getByTestId("plugin-card-open").click();
@@ -173,10 +191,73 @@ test("asking for this match's history leaves the App as a card in the chat; open
   const full = app(stack);
   await expect(full.getByTestId("lol-match-player")).toHaveCount(10);
   // App 里点人：在 App 里换页（右侧栏的一叠不变）
-  await full.locator('[data-testid="lol-match-player"][data-weak="true"]').click();
+  await full.locator('[data-testid="lol-match-player"][data-puuid="sample-puuid-5"]').click();
   await expect(full.getByTestId("lol-player-name")).toHaveText("对手子#1006");
   await expect(stack).toHaveAttribute("data-depth", "1");
   await screenshot(page, { path: shot(testInfo, "kotone-sidebar-player") });
+});
+
+// ADR 043 D9：开局战绩照 LeagueAkari 的排布，适度简化给小窗用（玩家：“窄的时候两队上下排，每人一行，点开看详情”）。
+// 卡片的宽度按宿主给的来：这里把聊天里那张卡片的外框改成悬浮窗小窗的宽（360）和一个宽的宿主（720，例如 Claude 的聊天卡片）。
+test("the opening card: at mini-window width each player is a row that opens in place; a wide host gets LeagueAkari's columns", async ({ page }, testInfo) => {
+  await open(page);
+  // 高一点的窗口：截图里卡片不被下面的输入框挡住
+  await page.setViewportSize({ width: 1440, height: 1500 });
+  const card = page.locator('[data-testid="plugin-card"][data-uri="ui://kotone/lol/match"]');
+  await card.scrollIntoViewIfNeeded();
+  await expect(card.getByTestId("mcp-app-frame")).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  const inline = app(card);
+  const matchCard = inline.getByTestId("lol-match-card");
+  const resize = async (width: number) => {
+    await card.evaluate((el, w) => {
+      (el as HTMLElement).style.width = `${w}px`;
+      (el as HTMLElement).style.maxWidth = `${w}px`;
+      el.scrollIntoView({ block: "start" });
+    }, width);
+  };
+
+  // 悬浮窗的小窗（约 360）：两队上下排、对面在上，每人一行
+  await resize(360);
+  await expect(matchCard).toHaveAttribute("data-layout", "rows");
+  const teams = inline.locator('[data-testid="lol-card-enemies"], [data-testid="lol-card-allies"]');
+  await expect(teams).toHaveCount(2);
+  await expect(teams.first()).toHaveAttribute("data-testid", "lol-card-enemies");
+  await expect(inline.getByTestId("lol-card-row")).toHaveCount(10);
+  // 一行里没有挤不下的东西：每一行都不比卡片宽
+  const overflow = await inline.getByTestId("lol-card-row").evaluateAll((rows) => rows.filter((r) => r.scrollWidth > r.clientWidth + 1).length);
+  expect(overflow).toBe(0);
+
+  // 点一行：在下面展开详情（段位、胜负、KDA、最近 10 局、标签）；点另一行换成那一个；再点收起
+  const yasuo = inline.getByTestId("lol-card-row").filter({ hasText: "亚索" });
+  await yasuo.click();
+  await expect(yasuo).toHaveAttribute("aria-expanded", "true");
+  const detail = inline.getByTestId("lol-card-detail");
+  await expect(detail).toHaveCount(1);
+  await expect(detail).toContainText("KDA");
+  await expect(detail).toContainText("6 连败");
+  await expect(detail.locator(".recent .ci")).toHaveCount(10);
+  await screenshot(card, { path: feedShot(testInfo, "opening-card-mini-360-expanded") });
+  const ashe = inline.getByTestId("lol-card-row").filter({ hasText: "艾希" });
+  await ashe.click();
+  await expect(detail).toHaveCount(1);
+  await expect(yasuo).toHaveAttribute("aria-expanded", "false");
+  await ashe.click();
+  await expect(detail).toHaveCount(0);
+  // 隐藏了身份的那两行只有英雄，点不开
+  const hidden = inline.locator('[data-testid="lol-card-row"][data-identity="hidden"]');
+  await expect(hidden).toHaveCount(2);
+  await expect(hidden.first()).not.toHaveAttribute("aria-expanded", /.*/);
+  await expect(hidden.first()).toContainText("金克丝");
+  await screenshot(card, { path: feedShot(testInfo, "opening-card-mini-360") });
+
+  // 宽的宿主：LeagueAkari 用户习惯的样子，每队一行、每人一列（带最近 5 局）
+  await resize(720);
+  await expect(matchCard).toHaveAttribute("data-layout", "grid");
+  await expect(inline.getByTestId("lol-card-row")).toHaveCount(10);
+  await expect(inline.locator('[data-testid="lol-card-row"][data-identity="hidden"]')).toHaveCount(2);
+  await expect(inline.locator('[data-testid="lol-card-row"][data-puuid="sample-puuid-5"] .games li')).toHaveCount(5);
+  await expect(matchCard).not.toContainText("风险");
+  await screenshot(card, { path: feedShot(testInfo, "opening-card-wide-720") });
 });
 
 test("ui.open with parameters opens that page of the App in the right sidebar; old settings addresses still land", async ({ page }) => {

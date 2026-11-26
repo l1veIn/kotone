@@ -1,6 +1,6 @@
 // “这局”页面算出来的东西：开黑字母、队伍表头的平均数、阶段。只拼数，不写字（字在 messages/）。
 import { pctOf, rateTone } from "../../format";
-import type { MatchData, MatchPhase, MatchPlayer } from "../../types";
+import type { Identity, MatchData, MatchPhase, MatchPlayer } from "../../types";
 
 export interface PartyInfo {
   letter: string;
@@ -72,4 +72,19 @@ export function phaseOf(match: MatchData): MatchPhase | null {
 export function pickOf(p: MatchPlayer): "locked" | "intent" | "none" {
   if (p.pick === "intent" || p.pick === "none") return p.pick;
   return p.champion.id > 0 ? "locked" : "none";
+}
+
+/**
+ * 看得到是谁没有（ADR 043 D9）。旧数据没有 `identity`：没有 puuid、也没有名字的按“选人时看不到名字”。
+ * 隐藏了身份、电脑、看不到名字的人只显示英雄，点不开。
+ */
+export function identityOf(p: MatchPlayer): Identity {
+  const id = p.identity;
+  if (id === "known" || id === "hidden" || id === "name_hidden" || id === "bot") return id;
+  return p.puuid || p.riotId || p.name ? "known" : "name_hidden";
+}
+
+/** 一队里隐藏了身份的人数（表头写“N 人隐藏了身份”）。 */
+export function hiddenIn(team: MatchPlayer[]): number {
+  return team.filter((p) => identityOf(p) === "hidden").length;
 }

@@ -2,7 +2,7 @@
 //!
 //! 照 MCP 和 MCP Apps（<https://modelcontextprotocol.io/docs/extensions/apps>）：
 //! - **清单** [`Manifest`]（`plugins/<id>/plugin.toml`）：我是谁、挂在哪些游戏上、带哪个游戏中心适配器、
-//!   数据开关和风险提示、页面（`ui://kotone/<id>/<页面>`）、给她的两段话；
+//!   数据开关和风险提示、许可和出处（`[[notices]]`）、页面（`ui://kotone/<id>/<页面>`）、给她的两段话；
 //! - **工具** [`ToolSpec`]：照 MCP 的 `tools/list`，加上 MCP Apps 的 `_meta.ui`：`visibility`
 //!   （`model` 给她、`app` 给页面）和 `resourceUri`（[`ToolSpec::page`]）。说明和参数（JSON Schema）写在
 //!   插件的 Rust 代码里，和工具的实现放在一起；
@@ -97,6 +97,10 @@ pub struct Manifest {
     /// 每条一个开关，宿主执行开关；插件经 [`Host::push`] 推，`trigger` 是这里的 id。见 [`push`] 模块。
     #[serde(default)]
     pub pushes: Vec<PushSpec>,
+    /// 许可和出处（ADR 043 D8，`[[notices]]`：id、标题、一段话、链接）：数据和图片从哪来、按什么许可用、答应过别人什么。
+    /// 和数据开关的 `risk` 一起放进插件的“风险和许可”弹窗（宿主画：风险在前，这些在后），不在设置页上一条条摆出来。
+    #[serde(default)]
+    pub notices: Vec<NoticeSpec>,
 }
 
 fn yes() -> bool {
@@ -114,9 +118,25 @@ pub struct SourceSpec {
     pub description: String,
     #[serde(default = "yes")]
     pub enabled_by_default: bool,
-    /// 风险提示（为什么可能有风险、出处）。空 = 没有。
+    /// 风险提示（为什么可能有风险、出处）。空 = 没有。界面上只在插件的“风险和许可”弹窗里显示（ADR 043 D8）：
+    /// 第一次打开这个开关、或者它默认开着而玩家第一次打开插件页时弹一次；文字里的 `github.com/…` 这类地址做成链接。
     #[serde(default)]
     pub risk: String,
+}
+
+/// 一条许可或出处（`[[notices]]`，ADR 043 D8）。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all(serialize = "camelCase"))]
+pub struct NoticeSpec {
+    /// 小写字母、数字和连字符（`aramhex-data`）；界面文案的键是 `plugin_<插件>_notice_<id>_title / _body`。
+    pub id: String,
+    /// 标题（“海斗海克斯数据：aramhex-data”）。
+    pub title: String,
+    /// 一段话：用了什么、按什么许可、我们怎么做的。
+    pub body: String,
+    /// 链接（`https://…`，界面上点了用系统浏览器打开）：仓库、许可证原文、答应过的 issue。
+    #[serde(default)]
+    pub links: Vec<String>,
 }
 
 /// 一个页面。
@@ -230,7 +250,38 @@ impl Manifest {
             self.check_needs(&format!("发到游戏（{}）", chat.game), &chat.needs)?;
         }
         self.check_pushes()?;
+        self.check_notices()?;
         self.check_events()
+    }
+
+    /// 许可和出处（`[[notices]]`）：id 写法对、不重名，有标题和正文，链接都是 `https://` 开头、不带空白。
+    fn check_notices(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for notice in &self.notices {
+            if !valid_id(&notice.id) || !seen.insert(notice.id.as_str()) {
+                return Err(format!(
+                    "插件 {} 的许可说明 “{}” 重名或写法不对（只能用小写字母、数字和连字符）",
+                    self.id, notice.id
+                ));
+            }
+            if notice.title.trim().is_empty() || notice.body.trim().is_empty() {
+                return Err(format!(
+                    "插件 {} 的许可说明 {} 要写 title 和 body",
+                    self.id, notice.id
+                ));
+            }
+            let full = |link: &str| {
+                link.strip_prefix("https://")
+                    .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
+            };
+            if let Some(bad) = notice.links.iter().find(|link| !full(link)) {
+                return Err(format!(
+                    "插件 {} 的许可说明 {} 的链接 “{bad}” 要是 https:// 开头的完整地址",
+                    self.id, notice.id
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 页面地址是不是这个插件的（`ui://kotone/<id>/<页面>`）。
@@ -1017,6 +1068,55 @@ description = \"发到队伍聊天\"
         );
         assert!(Manifest::parse(&format!("{SAMPLE}\nunknown = 1")).is_err());
         assert!(Manifest::parse(&SAMPLE.replace("id = \"stats\"", "id = \"client\"")).is_err());
+    }
+
+    /// 许可和出处（ADR 043 D8，`[[notices]]`）：读得进来、发给界面是 camelCase；写错的读不进来。
+    #[test]
+    fn notices_are_parsed_and_checked() {
+        let notice = |id: &str, title: &str, body: &str, links: &str| {
+            format!(
+                "{SAMPLE}\n[[notices]]\nid = \"{id}\"\ntitle = \"{title}\"\nbody = \"{body}\"\nlinks = [{links}]\n"
+            )
+        };
+        let ok = notice(
+            "aramhex-data",
+            "海斗海克斯数据",
+            "CC BY-NC 4.0：署名、不商用",
+            "\"https://github.com/czgreat/aramhex-data\"",
+        );
+        let m = Manifest::parse(&ok).unwrap();
+        assert_eq!(m.notices.len(), 1);
+        assert_eq!(
+            m.notices[0].links,
+            ["https://github.com/czgreat/aramhex-data"]
+        );
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["notices"][0]["id"], "aramhex-data");
+        assert_eq!(v["notices"][0]["title"], "海斗海克斯数据");
+        // 没写 = 没有；没写链接 = 空
+        assert!(Manifest::parse(SAMPLE).unwrap().notices.is_empty());
+        let no_links =
+            format!("{SAMPLE}\n[[notices]]\nid = \"riot\"\ntitle = \"拳头\"\nbody = \"声明\"\n");
+        assert!(Manifest::parse(&no_links).unwrap().notices[0]
+            .links
+            .is_empty());
+
+        // 写错的：id 写法、重名、空标题 / 正文、不是 https、带空白、不认得的字段
+        let bad = [
+            notice("Riot", "拳头", "声明", ""),
+            format!(
+                "{ok}\n[[notices]]\nid = \"aramhex-data\"\ntitle = \"又一条\"\nbody = \"重名\"\n"
+            ),
+            notice("riot", " ", "声明", ""),
+            notice("riot", "拳头", "", ""),
+            notice("riot", "拳头", "声明", "\"http://example.com\""),
+            notice("riot", "拳头", "声明", "\"https://\""),
+            notice("riot", "拳头", "声明", "\"https://exa mple.com\""),
+            format!("{ok}color = \"red\"\n"),
+        ];
+        for text in bad {
+            assert!(Manifest::parse(&text).is_err(), "{text}");
+        }
     }
 
     #[test]

@@ -26,8 +26,9 @@ const pluginUiFiles = () => pluginIds.flatMap((id) => ["ui", join("app", "src")]
 }));
 /** 插件的名字、说明、数据开关的名字 / 说明 / 风险提示、登记的游戏事件的名字（`event_<名字>`，lib/gameEvents.ts）由宿主按约定的键取
  * （lib/plugins.ts 的 pluginText），插件登记的命令在热键表里的名字（`command_<命令>_name`，lib/hotkeyNames.ts）、内置推送的名字 /
- * 时机 / 做什么（`push_<推送>_title|when|what`，插件页「设置 → 推送」）也是，代码里不直接写 m.xxx。 */
-const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk)|event_[a-z0-9_]+|command_[a-z0-9_]+_name|push_[a-z0-9_]+_(title|when|what))$/;
+ * 时机 / 做什么（`push_<推送>_title|when|what`，插件页「设置 → 推送」）、许可和出处的标题 / 正文（`notice_<条目>_title|body`，
+ * “风险和许可”弹窗）也是，代码里不直接写 m.xxx。 */
+const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk)|event_[a-z0-9_]+|command_[a-z0-9_]+_name|push_[a-z0-9_]+_(title|when|what)|notice_[a-z0-9_]+_(title|body))$/;
 
 function walk(dir: string, exts: string[]): string[] {
   return readdirSync(dir).flatMap((name) => {

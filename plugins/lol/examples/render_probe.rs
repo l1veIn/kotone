@@ -153,6 +153,12 @@ fn main() {
                 } else {
                     position.to_string()
                 },
+                // 没有 puuid 的真人是隐藏了身份（ADR 043 D9）
+                identity: if puuid.is_empty() {
+                    kotone_plugin_lol::client::text::Identity::Hidden
+                } else {
+                    kotone_plugin_lol::client::text::Identity::Known
+                },
             });
         }
     }

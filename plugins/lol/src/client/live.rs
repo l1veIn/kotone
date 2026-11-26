@@ -141,6 +141,12 @@ impl LivePlayer {
             None
         }
     }
+
+    /// 隐藏了身份（主播模式，ADR 043 D9）：不是电脑、局内接口里没有名字（2026-11-26 实测 `riotId` 是 `#`、
+    /// `riotIdGameName` 空、`summonerName` 是英雄名）。只用来写“隐藏了身份”，不去反查是谁。
+    pub fn hidden_identity(&self) -> bool {
+        !self.bot && self.name.trim().is_empty()
+    }
 }
 
 pub fn alias_from_raw(raw: &str) -> String {
@@ -315,6 +321,61 @@ pub(crate) mod tests {
             ]},
             "gameData": {"gameMode": "KIWI", "gameTime": 754.2, "mapNumber": 12}
         })
+    }
+
+    /// 照 2026-11-26 录的那一把海斗（`target/lol-probe/20261126-mayhem-midgame` 的 `allgamedata-t0000.json`）：
+    /// ORDER 五个人里卡牌大师、无极剑圣隐藏了身份（`riotId` 是 `#`、`riotIdGameName` 空、`summonerName` 是英雄名），
+    /// 谁都不是电脑。名字换成了编的（录的是真人）。
+    pub(crate) fn mayhem_hidden_json() -> Value {
+        let named = |name: &str, raw: &str, team: &str| {
+            let mut v = p(name, raw, raw, team, ["闪现", "标记"], 0);
+            v["position"] = json!("NONE");
+            v
+        };
+        let hidden = |raw: &str, title: &str| {
+            let mut v = named("", raw, "ORDER");
+            v["riotId"] = json!("#");
+            v["riotIdGameName"] = json!("");
+            v["riotIdTagLine"] = json!("");
+            v["summonerName"] = json!(title);
+            v
+        };
+        json!({
+            "activePlayer": {"riotId": "玩家甲#1", "summonerName": "玩家甲#1"},
+            "allPlayers": [
+                named("玩家甲", "Viego", "ORDER"),
+                named("玩家乙", "Lucian", "ORDER"),
+                named("玩家丙", "Ashe", "ORDER"),
+                hidden("TwistedFate", "卡牌大师"),
+                hidden("MasterYi", "无极剑圣"),
+                named("对手子", "Locke", "CHAOS"),
+                named("对手丑", "Ambessa", "CHAOS"),
+                named("对手寅", "Taliyah", "CHAOS"),
+                named("对手卯", "Leona", "CHAOS"),
+                named("对手辰", "Viktor", "CHAOS"),
+            ],
+            "events": {"Events": []},
+            "gameData": {"gameMode": "KIWI", "gameTime": 0.02, "mapNumber": 12}
+        })
+    }
+
+    #[test]
+    fn hidden_identity_is_a_human_without_a_name() {
+        let game = parse_all_game_data(&mayhem_hidden_json()).unwrap();
+        let hidden: Vec<&str> = game
+            .players
+            .iter()
+            .filter(|p| p.hidden_identity())
+            .map(|p| p.alias.as_str())
+            .collect();
+        assert_eq!(hidden, ["TwistedFate", "MasterYi"]);
+        assert_eq!(game.allies().count(), 5, "ORDER 五个人都在");
+        assert!(game.players.iter().all(|p| !p.bot));
+        // 电脑看 isBot，不看名字
+        let mut v = mayhem_hidden_json();
+        v["allPlayers"][3]["isBot"] = json!(true);
+        let game = parse_all_game_data(&v).unwrap();
+        assert!(game.players[3].bot && !game.players[3].hidden_identity());
     }
 
     #[test]

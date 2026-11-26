@@ -4,7 +4,7 @@
   //   第一行：英雄名（选人时加分路）· 名字#编号 · 开黑字母 · 我 · 隐藏战绩 ……右边段位徽章 + 字
   //   第二行：近 20 局胜负 · 胜率 · KDA · 场均死 · 这个模式的局数、胜率、分均伤害
   //   第三行：最近 10 局的英雄小头像 · 标签
-  //   突破口：整块墨线圈住 + 一行原因。
+  //   隐藏了身份的人、电脑（ADR 043 D9）：只有第一行（英雄 + “隐藏了身份” / “电脑”），点不开。
   import ChampIcon from "../../components/ChampIcon.svelte";
   import Icon from "../../components/Icon.svelte";
   import LaneIcon from "../../components/LaneIcon.svelte";
@@ -15,7 +15,7 @@
   import { kdaTone, laneName, num, one, pctOf, rateTone, splitRiotId } from "../../format";
   import { m } from "../../i18n.svelte";
   import type { MatchPlayer } from "../../types";
-  import { pickOf, type PartyInfo } from "./match";
+  import { identityOf, pickOf, type PartyInfo } from "./match";
 
   let {
     p,
@@ -34,9 +34,10 @@
   const s = $derived(p.summary && p.summary.games > 0 ? p.summary : null);
   const pick = $derived(champSelect ? pickOf(p) : "locked");
   const [nm, tag] = $derived(splitRiotId(p.riotId || p.name));
-  /** 排位选人时队友的名字看不到（没有 puuid、也没有名字）。 */
-  const anonymous = $derived(!p.puuid && !p.riotId && !p.name);
-  const clickable = $derived(!!p.puuid && !!onOpen);
+  const identity = $derived(identityOf(p));
+  /** 只有英雄的人：隐藏了身份、电脑、排位选人时看不到名字的队友。 */
+  const anonymous = $derived(identity !== "known");
+  const clickable = $derived(!!p.puuid && !!onOpen && !anonymous);
   const recent = $derived(p.recent.slice(0, 10));
 
   function open() {
@@ -54,14 +55,13 @@
 <div
   class="p stripe"
   class:me={p.me}
-  class:weak={!!p.weak}
   class:clickable
   role={clickable ? "button" : undefined}
   tabindex={clickable ? 0 : undefined}
   title={clickable ? m.plugin_lol_open_player({ name: p.riotId || p.name }) : undefined}
   data-testid="lol-match-player"
   data-puuid={p.puuid}
-  data-weak={p.weak ? "true" : "false"}
+  data-identity={identity}
   data-pick={pick}
   onclick={open}
   onkeydown={key}
@@ -85,7 +85,11 @@
       {#if champSelect && p.position}
         <span class="lane"><LaneIcon lane={p.position} />{laneName(p.position)}</span>
       {/if}
-      {#if anonymous}
+      {#if identity === "hidden"}
+        <span class="chip warn" title={m.plugin_lol_identity_hidden_desc()} data-testid="lol-match-identity">{m.plugin_lol_identity_hidden()}</span>
+      {:else if identity === "bot"}
+        <span class="chip" data-testid="lol-match-identity">{m.plugin_lol_identity_bot()}</span>
+      {:else if anonymous}
         <span class="who">{m.plugin_lol_name_hidden()}</span>
       {:else}
         <span class="who" title={p.riotId || p.name}>{nm}{#if tag}<span class="tagline">#{tag}</span>{/if}</span>
@@ -99,8 +103,10 @@
         <span class="end"><RankBadge ranked={p.ranked?.solo} legacy={p.rank} /></span>
       {/if}
     </div>
-    {#if anonymous}
-      <!-- 名字看不到：没有第二、三行 -->
+    {#if identity === "hidden"}
+      <div class="l2">{m.plugin_lol_identity_hidden_desc()}</div>
+    {:else if anonymous}
+      <!-- 名字看不到、电脑：没有第二、三行 -->
     {:else if p.pending}
       <div class="l2">{m.plugin_lol_pending_row()} <span class="skel" style:width="72px"></span><span class="skel" style:width="48px"></span></div>
     {:else if s}
@@ -123,11 +129,6 @@
       <div class="l2">{m.plugin_lol_no_games()}</div>
     {/if}
   </div>
-  {#if p.weak}
-    <div class="why" data-testid="lol-match-weak">
-      <span class="chip ink"><Icon name="target" />{m.plugin_lol_weak()}</span><span>{p.weak.join(" · ")}</span>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -146,11 +147,6 @@
   }
   .p.me {
     background: var(--lol-ally-soft);
-  }
-  .p.weak {
-    outline: 1.5px solid var(--lol-text);
-    outline-offset: -3px;
-    border-radius: 7px;
   }
   .pics {
     display: flex;
@@ -233,13 +229,5 @@
     gap: 4px;
     min-width: 0;
     overflow: hidden;
-  }
-  .why {
-    grid-column: 1 / -1;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 6px;
-    color: var(--lol-text);
   }
 </style>

@@ -205,7 +205,7 @@ export interface Settings {
    * 搬到 `plugins.lol.sources.client`；旧的 `voiceChat` 搬到 `plugins.game-voice`；旧的 `music`（音质、音量）
    * 搬到 `plugins.music.settings`）。
    */
-  plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown>; pushes?: Record<string, boolean> }>;
+  plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown>; pushes?: Record<string, boolean>; riskSeen?: number }>;
   /**
    * 热键表（ADR 040 D8，后端 `kotone_core::hotkey_bindings`）。热键的旧字段（`hotkey.key`、`channelCycleHotkey`、
    * 呼叫键……）是它的镜像，后端每次保存照表写回；改旧字段也会改进表里。

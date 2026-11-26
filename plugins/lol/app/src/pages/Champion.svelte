@@ -1,9 +1,11 @@
 <script lang="ts">
   // 英雄（`ui://kotone/lol/champion`，`lol.champion` 的页面；docs/design/lol-app.md 第三节 4，调研 G39）。
   // 峡谷：头部（头像 56、名字、分路、版本、强度和胜率）、换分路、难打 / 好打（点英雄进它的页）、出装（核心、鞋、出门、
-  // 第四到第六件）、符文、加点（主升和前 18 级，技能图标压键位字母，没图时是字母格子）、召唤师技能、OP.GG（开了才有，折叠）。
+  // 第四到第六件）、符文、加点（主升和前 18 级，技能图标压键位字母，没图时是字母格子）、召唤师技能。
   // 海斗：英雄榜名次和胜率、最搭的队友、最好的海克斯（比这个英雄平均胜率高几个百分点，样本少的变淡）。
-  // 出处写在页脚：腾讯 101（版本 · 日期）、aramhex-data（CC BY-NC 4.0，署名、不商用）、OP.GG。
+  // 来源标签（ADR 043 D8）：每块一个，写在那块的标题旁边——峡谷的英雄数据：腾讯 101（国服，默认）/ OP.GG（全球）；
+  // 海斗英雄榜：腾讯 101；海斗的海克斯：aramhex-data（CC BY-NC 4.0，默认）/ OP.GG。能换的点标签换，记住
+  // （`lol.source`）；换成 OP.GG 时那块是 OP.GG 原样的结果。一块一次只用一个来源，不混在一起。
   // 卡片（inline，她调 `lol.champion` 时）：头像 + 强度一行；核心出装一行；海斗时前 3 个海克斯。
   import { onMount } from "svelte";
   import AbilityIcon from "../components/AbilityIcon.svelte";
@@ -13,13 +15,25 @@
   import Icon from "../components/Icon.svelte";
   import LaneIcon from "../components/LaneIcon.svelte";
   import Pic from "../components/Pic.svelte";
+  import SourceTag from "../components/SourceTag.svelte";
   import StateBlock from "../components/StateBlock.svelte";
   import TopBar, { type PageId } from "../components/TopBar.svelte";
   import { laneName, num, rate } from "../format";
-  import { PAGE_SETTINGS, resultStatus, TOOL_CHAMPION, type DisplayMode, type Session, type ToolResult } from "../host";
+  import { PAGE_SETTINGS, resultStatus, TOOL_CHAMPION, TOOL_SOURCE, type DisplayMode, type Session, type ToolResult } from "../host";
   import { m } from "../i18n.svelte";
   import type { ToolState } from "../status";
-  import { ARAMHEX_URL, isChampionData, type Ability, type BuildOption, type ChampionData, type Named, type Source } from "../types";
+  import {
+    ARAMHEX_URL,
+    isChampionData,
+    type Ability,
+    type BuildOption,
+    type ChampionData,
+    type Named,
+    type OpggBlock,
+    type SourceChoice,
+    type SourceId,
+    type SourceKind,
+  } from "../types";
 
   let {
     session,
@@ -108,7 +122,10 @@
     if (name) void load({ champion: name, mode: next });
   }
   function switchLane(lane: string) {
-    if (data) void load({ champion: data.champion.short, mode: "rift", lane });
+    if (!data) return;
+    const next: Record<string, unknown> = { champion: data.champion.short, mode: "rift", lane };
+    if (choice && choice.id !== "qq101") next.source = choice.id;
+    void load(next);
   }
   function openOther(name: string) {
     const next: Record<string, string> = { champion: name, mode: data?.mode ?? mode };
@@ -122,25 +139,37 @@
     }
   }
 
-  /** “腾讯 101（16.23 · 20261124）”。 */
-  function sourcesLine(sources: Source[], extra = ""): string {
-    return sources
-      .map((s) => {
-        const more = [s.license ?? "", s.date ? s.date.slice(0, 10) : ""].filter(Boolean).join(" · ");
-        return more ? m.plugin_lol_source_with({ name: s.name, extra: more }) : s.name;
-      })
-      .concat(extra ? [extra] : [])
-      .join(" · ");
+  /** 能换来源的块现在用的是哪个（旧数据没有 `source` 时按默认：峡谷腾讯 101、海斗的海克斯 aramhex-data）。 */
+  function choiceOf(d: ChampionData): SourceChoice {
+    if (d.source) return d.source;
+    return d.mode === "rift"
+      ? { kind: "rift", id: "qq101", options: [{ id: "qq101", available: true }] }
+      : { kind: "mayhemAugments", id: "aramhex", options: [{ id: "aramhex", available: true }] };
   }
-  const footData = $derived(
-    data
-      ? m.plugin_lol_sources({
-          sources:
-            sourcesLine(data.sources, data.mode === "rift" && data.opgg ? "OP.GG" : "") +
-            (data.mode === "rift" && data.stale ? ` · ${m.plugin_lol_stale()}` : ""),
-        })
-      : m.plugin_lol_sources({ sources: "—" }),
-  );
+  const choice = $derived(data ? choiceOf(data) : null);
+  /** 海斗英雄榜的日期（腾讯 101 那一份）。 */
+  const qqDate = $derived(data?.sources.find((s) => !s.license && !s.name.startsWith("OP.GG"))?.date ?? "");
+  /** 卡片上：换成 OP.GG 时它那段话的开头。 */
+  const cardOpgg = $derived(data ? (data.mode === "rift" ? data.opgg : (data.augmentsOpgg ?? null)) : null);
+  let switching = $state(false);
+  /** 换了来源但没记住（别的 MCP 宿主里改不了 Kotone 的设置）。 */
+  let notSaved = $state(false);
+
+  /** 点来源标签换来源：先记住（`lol.source`），再按新的来源取这一页。 */
+  async function switchSource(kind: SourceKind, source: SourceId) {
+    if (!data || switching) return;
+    switching = true;
+    try {
+      const saved = await session.call(TOOL_SOURCE, { kind, source });
+      notSaved = resultStatus(saved).status !== "ok";
+    } catch {
+      notSaved = true;
+    }
+    const next: Record<string, unknown> = { champion: data.champion.short, mode: data.mode, source };
+    if (data.mode === "rift" && data.lane) next.lane = data.lane;
+    await load(next);
+    switching = false;
+  }
   const BUILD_GROUPS = [
     ["core", () => m.plugin_lol_build_core()],
     ["boots", () => m.plugin_lol_build_boots()],
@@ -159,6 +188,19 @@
 
 {#snippet keyTile(k: string, size: number, abilities: Ability[] | undefined)}
   <AbilityIcon {k} ability={abilities?.find((a) => a.key === k)} {size} />
+{/snippet}
+
+<!-- 换成 OP.GG 时那一块：OP.GG 原样的结果（文字），带它的标志和链接（来源标签上） -->
+{#snippet opggBlock(block: OpggBlock | null, testid: string)}
+  <section class="sec opgg" data-testid={testid}>
+    {#if !block}
+      <p class="muted">—</p>
+    {:else if block.error}
+      <p class="muted" role="alert">{block.error}</p>
+    {:else}
+      <pre>{block.text}</pre>
+    {/if}
+  </section>
 {/snippet}
 
 {#if full}
@@ -204,7 +246,17 @@
           {#each LANES as l (l)}
             <button type="button" class="lane" aria-pressed={d.lane === l} data-testid="lol-champion-lane-{l}" onclick={() => switchLane(l)}><LaneIcon lane={l} />{laneName(l)}</button>
           {/each}
+          {#if choice}
+            <span class="src-at" data-testid="lol-champion-source">
+              <SourceTag id={choice.id} {choice} date={choice.id === "qq101" ? d.date : ""} stale={d.stale} busy={switching}
+                onPick={(id) => void switchSource("rift", id)} onLink={session.openLink} />
+            </span>
+          {/if}
         </div>
+        {#if notSaved}<p class="hint-line muted" data-testid="lol-source-not-saved">{m.plugin_lol_source_not_saved()}</p>{/if}
+        {#if choice?.id === "opgg"}
+          {@render opggBlock(d.opgg, "lol-champion-opgg")}
+        {:else}
         <div class="vs">
           {#each [["bad", m.plugin_lol_bad_against(), d.badAgainst], ["good", m.plugin_lol_good_against(), d.goodAgainst]] as const as [id, label, list] (id)}
             <section class="box" data-testid="lol-champion-{id}">
@@ -281,12 +333,6 @@
             {/each}
           </section>
         {/if}
-        {#if d.opgg}
-          <details class="sec opgg" data-testid="lol-champion-opgg">
-            <summary><span class="chip">OP.GG</span>{m.plugin_lol_opgg_title()}</summary>
-            {#if d.opgg.error}<p class="muted">{d.opgg.error}</p>{:else}<pre>{d.opgg.text}</pre>{/if}
-            <p class="muted"><a href={d.opgg.url} onclick={(e) => { e.preventDefault(); session.openLink(d.opgg?.url ?? ""); }}>{d.opgg.attribution}</a></p>
-          </details>
         {/if}
       {:else if data?.mode === "mayhem"}
         {@const d = data}
@@ -295,6 +341,7 @@
           <div>
             <p class="name" data-testid="lol-champion-name">{d.champion.label}</p>
             <p class="meta num" data-testid="lol-champion-mayhem-rank">{m.plugin_lol_mayhem_rank({ rank: d.rank ?? "—", win: rate(d.winRate), pick: rate(d.pickRate) })}</p>
+            <p class="meta"><SourceTag id="qq101" date={qqDate} onLink={session.openLink} /></p>
           </div>
         </header>
         {#if d.partners.length}
@@ -309,7 +356,17 @@
           </section>
         {/if}
         <section class="sec" data-testid="lol-champion-augments">
-          <h3>{m.plugin_lol_best_augments()}</h3>
+          <h3 class="with-src">{m.plugin_lol_best_augments()}
+            {#if choice}
+              <span class="src-at" data-testid="lol-champion-augments-source">
+                <SourceTag id={choice.id} {choice} busy={switching} onPick={(id) => void switchSource("mayhemAugments", id)} onLink={session.openLink} />
+              </span>
+            {/if}
+          </h3>
+          {#if notSaved}<p class="hint-line muted" data-testid="lol-source-not-saved">{m.plugin_lol_source_not_saved()}</p>{/if}
+          {#if choice?.id === "opgg"}
+            {@render opggBlock(d.augmentsOpgg ?? null, "lol-champion-augments-opgg")}
+          {:else}
           <p class="muted note-line">{m.plugin_lol_augments_note({ champion: d.champion.short })}</p>
           {#each d.augments as a (a.id)}
             <div class="aug" class:low={a.lowSample} data-testid="lol-champion-augment">
@@ -323,10 +380,12 @@
           {#if d.attribution}
             <p class="muted note-line" data-testid="lol-champion-attribution">{d.attribution} · <a href={ARAMHEX_URL} onclick={(e) => { e.preventDefault(); session.openLink(ARAMHEX_URL); }}>{m.plugin_lol_attribution_open()}</a></p>
           {/if}
+          {/if}
         </section>
       {/if}
       {#if data}
-        <span data-testid="lol-champion-sources"><Footer data={footData} onLink={session.openLink} /></span>
+        <!-- 来源标签在每块的标题旁边；页脚只有图片出处和拳头的声明 -->
+        <Footer onLink={session.openLink} />
       {/if}
     </main>
   </div>
@@ -363,7 +422,8 @@
             <span class="num {a.delta > 0 ? 'good' : ''}">{a.delta > 0 ? "+" : ""}{a.delta.toFixed(1)}</span></p>
         {/each}
       {/if}
-      <Footer data={m.plugin_lol_sources({ sources: sourcesLine(data.sources) })} card onLink={session.openLink} />
+      {#if cardOpgg?.text}<p class="card-row excerpt" data-testid="lol-champion-card-opgg">{cardOpgg.text.slice(0, 160)}</p>{/if}
+      <Footer card sources={data.mode === "rift" ? [{ id: choice?.id ?? "qq101", date: choice?.id === "qq101" ? data.date : "" }] : [{ id: "qq101", date: qqDate }, { id: choice?.id ?? "aramhex" }]} onLink={session.openLink} />
     {:else if error}
       <p class="card-line danger" role="alert">{m.plugin_lol_failed({ error })}</p>
     {:else if status}
@@ -629,8 +689,7 @@
     margin: 0;
     font-size: var(--lol-fs-xs);
   }
-  .note-line a,
-  .opgg a {
+  .note-line a {
     color: inherit;
   }
   .aug {
@@ -651,16 +710,27 @@
     text-align: right;
     font-weight: var(--lol-fw-medium);
   }
-  .opgg summary {
+  .src-at {
+    margin-left: auto;
+  }
+  .with-src {
     display: flex;
     align-items: center;
     gap: 8px;
-    cursor: pointer;
+  }
+  .hint-line {
+    margin: 0 0 var(--lol-sp-4);
     font-size: var(--lol-fs-xs);
+  }
+  .excerpt {
+    display: block;
+    overflow: hidden;
     color: var(--lol-text-2);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .opgg pre {
-    max-height: 240px;
+    max-height: 420px;
     margin: 0;
     padding: 8px;
     overflow: auto;

@@ -1,12 +1,14 @@
 //! 选人阶段的“这局”（调研 G1，设计文档第三节 1“选人阶段”）：从 `/lol-champ-select/v1/session` 读双方的英雄、
 //! 我方的分路和召唤师技能、备选席；我方 `puuid` 不空、名字没被隐藏的人马上开始查战绩（和加载阶段同一套，
-//! 进加载以后接着用，不重查）。对面只有英雄（客户端不给名字），排位选人时队友的名字也看不到。
+//! 进加载以后接着用，不重查）。对面只有英雄（客户端不给名字），排位选人时队友的名字也看不到（`NameHidden`）；
+//! 客户端标了是电脑的（`playerType` / `botDifficulty` / `isBot`）是电脑（ADR 043 D9），也不查。
 //!
 //! 这里只解析，不连客户端；连接和查战绩在 [`super`]。
 
 use serde_json::Value;
 
-use super::Member;
+use super::{flagged_bot, real_puuid, Member};
+use crate::client::text::Identity;
 use crate::pages::Pick;
 
 /// 选人 session 里能用的东西。
@@ -33,21 +35,30 @@ fn team_members(list: &Value, team: u8, hidden: &mut bool, local_cell: Option<i6
                         && m["nameVisibilityType"]
                             .as_str()
                             .is_some_and(|v| v.eq_ignore_ascii_case("HIDDEN"));
-                    let puuid = m["puuid"].as_str().unwrap_or("").trim();
-                    if name_hidden && team == 1 {
+                    let puuid = real_puuid(m);
+                    let bot = flagged_bot(m);
+                    if name_hidden && team == 1 && !bot {
                         *hidden = true;
                     }
+                    let puuid = if name_hidden || bot {
+                        String::new()
+                    } else {
+                        puuid
+                    };
+                    let identity = if bot {
+                        Identity::Bot
+                    } else if puuid.is_empty() {
+                        Identity::NameHidden
+                    } else {
+                        Identity::Known
+                    };
                     let position = m["assignedPosition"]
                         .as_str()
                         .unwrap_or("")
                         .trim()
                         .to_ascii_uppercase();
                     Member {
-                        puuid: if name_hidden {
-                            String::new()
-                        } else {
-                            puuid.to_string()
-                        },
+                        puuid,
                         champion_id: locked.or(intent).unwrap_or(0),
                         team,
                         party: None,
@@ -66,6 +77,7 @@ fn team_members(list: &Value, team: u8, hidden: &mut bool, local_cell: Option<i6
                             (None, Some(_)) => Pick::Intent,
                             (None, None) => Pick::None,
                         },
+                        identity,
                     }
                 })
                 .collect()
@@ -91,6 +103,9 @@ pub(crate) fn parse(session: &Value, fallback_game_id: i64) -> Option<ChampSelec
     // 对面的名字客户端不给；就算给了也不查（选人时查对面是 LeagueAkari 也不做的事）
     for m in &mut theirs {
         m.puuid.clear();
+        if m.identity == Identity::Known {
+            m.identity = Identity::NameHidden;
+        }
     }
     members.append(&mut theirs);
     let bench = session["benchChampions"]
@@ -162,6 +177,42 @@ mod tests {
             (2, "", 22)
         );
         assert_eq!(cs.members[4].pick, Pick::None);
+    }
+
+    /// ADR 043 D9：只有客户端标了的才是电脑；名字看不到的队友、对面照样在名单里（只有英雄），都不查。
+    #[test]
+    fn bots_are_only_what_the_client_flags() {
+        let session = json!({
+            "gameId": 5, "localPlayerCellId": 0,
+            "myTeam": [
+                {"cellId": 0, "puuid": "me", "championId": 81, "playerType": ""},
+                {"cellId": 1, "puuid": "", "championId": 99, "nameVisibilityType": "HIDDEN", "isHumanoid": true},
+                {"cellId": 2, "puuid": "00000000-0000-0000-0000-000000000000", "championId": 22},
+                {"cellId": 3, "puuid": "", "championId": 86, "playerType": "BOT"}
+            ],
+            "theirTeam": [
+                {"cellId": 5, "puuid": "", "championId": 1, "botDifficulty": "RSINTERMEDIATE"},
+                {"cellId": 6, "puuid": "", "championId": 2, "botDifficulty": "NONE"}
+            ]
+        });
+        let cs = parse(&session, 0).unwrap();
+        let ids: Vec<(Identity, &str)> = cs
+            .members
+            .iter()
+            .map(|m| (m.identity, m.puuid.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                (Identity::Known, "me"),
+                (Identity::NameHidden, ""),
+                (Identity::NameHidden, ""),
+                (Identity::Bot, ""),
+                (Identity::Bot, ""),
+                (Identity::NameHidden, ""),
+            ]
+        );
+        assert!(cs.names_hidden);
     }
 
     #[test]

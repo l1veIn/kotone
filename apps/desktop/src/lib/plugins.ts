@@ -70,6 +70,15 @@ export interface PluginManifest {
   events?: PluginEventSpec[];
   /** 内置推送（没有 = 不推送）。 */
   pushes?: PluginPushSpec[];
+  /** 许可和出处（`plugin.toml` 的 `[[notices]]`，ADR 043 D8；没有 = 没有）：和数据开关的风险一起放进“风险和许可”弹窗。 */
+  notices?: PluginNoticeSpec[];
+}
+/** 一条许可或出处：标题、一段话、链接（`https://…`）。 */
+export interface PluginNoticeSpec {
+  id: string;
+  title: string;
+  body: string;
+  links: string[];
 }
 export interface PluginToolInfo {
   name: string;
@@ -99,6 +108,8 @@ export interface PluginConfig {
   settings?: Record<string, unknown>;
   /** 内置推送的开关（玩家动过的才有；ADR 043 D4）。 */
   pushes?: Record<string, boolean>;
+  /** “风险和许可”弹窗看过第几版（ADR 043 D8；没有 = 没看过）。 */
+  riskSeen?: number;
 }
 
 const store = writable<PluginInfo[]>([]);
@@ -188,6 +199,32 @@ export async function setPluginPush(id: string, push: string, enabled: boolean):
   settingsStore.set(await updateSettings({ plugins: { [id]: { pushes: { [push]: enabled } } } }));
 }
 
+/**
+ * “风险和许可”弹窗的版本（ADR 043 D8）：设置里 `plugins.<id>.riskSeen` 比它小 = 这一版还没看过。以后风险变大了
+ * （多了有风险的开关、说法有实质的变化）就加一，玩家会再看到一次。
+ */
+export const RISK_REVISION = 1;
+
+/** 插件有没有要放进“风险和许可”弹窗的东西：数据开关的风险提示，或者许可和出处。 */
+export function hasRiskNotes(manifest: PluginManifest): boolean {
+  return manifest.sources.some((s) => s.risk) || (manifest.notices?.length ?? 0) > 0;
+}
+
+/** 这一版的“风险和许可”还没看过（插件有这些东西才算）。 */
+export function riskUnseen(settings: Settings | null | undefined, manifest: PluginManifest): boolean {
+  return hasRiskNotes(manifest) && (configOf(settings, manifest.id).riskSeen ?? 0) < RISK_REVISION;
+}
+
+/** 有风险的数据开关里现在有开着的（插件也开着）：第一次打开插件页、第一次打开这样的开关时弹“风险和许可”。 */
+export function riskyOn(settings: Settings | null | undefined, manifest: PluginManifest): boolean {
+  return manifest.sources.some((s) => s.risk && sourceEnabled(settings, manifest, s.id));
+}
+
+/** 记下看过这一版的“风险和许可”（弹出来就记；只是提示，不动任何开关）。 */
+export async function markRiskSeen(id: string): Promise<void> {
+  settingsStore.set(await updateSettings({ plugins: { [id]: { riskSeen: RISK_REVISION } } }));
+}
+
 /** 文案键里的插件 id、开关 id：连字符换成下划线（`voice-input` → `voice_input`）。 */
 function keyPart(id: string): string {
   return id.replace(/[^A-Za-z0-9_]/g, "_");
@@ -213,6 +250,9 @@ export const sourceRisk = (m: PluginManifest, s: PluginSourceSpec) => (s.risk ? 
 export const pushTitle = (id: string, push: { id: string; title: string }) => pluginText(id, `push_${keyPart(push.id)}_title`, push.title);
 export const pushWhen = (m: PluginManifest, p: PluginPushSpec) => pluginText(m.id, `push_${keyPart(p.id)}_when`, p.when);
 export const pushWhat = (m: PluginManifest, p: PluginPushSpec) => pluginText(m.id, `push_${keyPart(p.id)}_what`, p.what);
+/** 许可和出处的标题、正文：插件的文案 `plugin_<id>_notice_<条目>_title / _body`，没有时用清单里的中文。 */
+export const noticeTitle = (m: PluginManifest, n: PluginNoticeSpec) => pluginText(m.id, `notice_${keyPart(n.id)}_title`, n.title);
+export const noticeBody = (m: PluginManifest, n: PluginNoticeSpec) => pluginText(m.id, `notice_${keyPart(n.id)}_body`, n.body);
 
 /** 左侧栏里插件页面的 id。 */
 export function pluginPageId(id: string): `plugin:${string}` {

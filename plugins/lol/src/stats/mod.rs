@@ -30,6 +30,8 @@ const TTL_LATEST: Duration = Duration::from_secs(6 * 3600);
 const TTL_NICKNAMES: Duration = Duration::from_secs(24 * 3600);
 /// OP.GG：和 OP.GG 说好的 24 小时（issue #26）。
 const TTL_OPGG: Duration = Duration::from_secs(24 * 3600);
+/// OP.GG：和 OP.GG 说好的最多同时 2 个请求（issue #26；ADR 043 D9 要真的做到，不只是注释）。
+pub const OPGG_CONCURRENCY: usize = 2;
 const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// 拿到的数据和它是不是新的（网络失败时用了磁盘上旧的）。
@@ -45,6 +47,8 @@ pub struct Stats {
     dir: PathBuf,
     /// OP.GG 的 MCP 连接：第一次调用时连上，之后的调用复用同一个会话；断了下次再连。
     opgg: tokio::sync::Mutex<Option<Arc<kotone_mcp::McpClient>>>,
+    /// 同时最多 [`OPGG_CONCURRENCY`] 个 OP.GG 请求（握手也算一个）；多的排队等。
+    opgg_slots: tokio::sync::Semaphore,
     opgg_endpoint: String,
     memory: Mutex<HashMap<String, (SystemTime, Value)>>,
     aramhex: Mutex<Option<(SystemTime, Arc<aramhex::Dataset>)>>,
@@ -78,6 +82,7 @@ impl Stats {
             http,
             dir,
             opgg: tokio::sync::Mutex::new(None),
+            opgg_slots: tokio::sync::Semaphore::new(OPGG_CONCURRENCY),
             opgg_endpoint: opgg::ENDPOINT.to_string(),
             memory: Mutex::new(HashMap::new()),
             aramhex: Mutex::new(None),
@@ -354,7 +359,7 @@ impl Stats {
         serde_json::from_slice(&bytes).map_err(|e| e.to_string())
     }
 
-    // ---------- OP.GG（默认关，见 [`opgg`]） ----------
+    // ---------- OP.GG（默认开，见 [`opgg`]） ----------
 
     /// 调一次 OP.GG 的工具，结果（文字）在磁盘上存 24 小时。`version`：Kotone 的版本（写进 `client_app`）。
     pub async fn opgg(
@@ -397,12 +402,18 @@ impl Stats {
     }
 
     /// 调一次 OP.GG 的工具（经 `kotone-mcp`，复用会话）。会话没了、连接断了，就丢掉这个连接，下次重新连。
+    /// 同时最多 [`OPGG_CONCURRENCY`] 个（第三个等前面的完了再发）。
     async fn opgg_call(
         &self,
         tool: &str,
         arguments: Value,
         version: &str,
     ) -> Result<String, String> {
+        let _slot = self
+            .opgg_slots
+            .acquire()
+            .await
+            .map_err(|_| "OP.GG 的请求排队出错".to_string())?;
         let client = {
             let mut slot = self.opgg.lock().await;
             match slot.as_ref() {
@@ -630,7 +641,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 真调 OP.GG：一个工具（查一个英雄），两次调用，第二次复用第一次的会话。OP.GG 回复 issue #26 前开关默认关，
+    /// issue #26 答应的“最多 2 个并发”（ADR 043 D9）：同时发 5 个不同的请求，服务器那边同一时刻最多 2 个在处理。
+    #[tokio::test]
+    async fn opgg_runs_at_most_two_requests_at_once() {
+        use kotone_mcp::testing::{handler, text_reply, TestServer};
+        use serde_json::json;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NOW: AtomicUsize = AtomicUsize::new(0);
+        static MOST: AtomicUsize = AtomicUsize::new(0);
+        let server = TestServer::start(
+            json!([{"name": "lol_get_champion_analysis", "inputSchema": {"type": "object"}}]),
+            json!([]),
+            handler(|_, args| async move {
+                let now = NOW.fetch_add(1, Ordering::SeqCst) + 1;
+                MOST.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                NOW.fetch_sub(1, Ordering::SeqCst);
+                text_reply(&format!(
+                    "class {} {{}}",
+                    args["champion"].as_str().unwrap_or("")
+                ))
+            }),
+        )
+        .await;
+        let dir = std::env::temp_dir().join(format!("kotone-lol-opgg-two-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stats = Stats::new(dir.clone()).with_opgg_endpoint(server.url());
+        let call = |champion: &'static str| {
+            let stats = &stats;
+            async move {
+                stats
+                    .opgg(
+                        "lol_get_champion_analysis",
+                        json!({"champion": champion, "position": "top"}),
+                        "0.2.0",
+                    )
+                    .await
+            }
+        };
+        let (a, b, c, d, e) = tokio::join!(call("A"), call("B"), call("C"), call("D"), call("E"));
+        let results = [a, b, c, d, e];
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(server.log().calls.len(), 5);
+        let most = MOST.load(Ordering::SeqCst);
+        assert!(
+            (1..=OPGG_CONCURRENCY).contains(&most),
+            "同时最多 {OPGG_CONCURRENCY} 个，实际 {most}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 真调 OP.GG：一个工具（查一个英雄），两次调用，第二次复用第一次的会话。要连外网、会真的请求 OP.GG，
     /// 这个测试只在验收时手动跑：`cargo test -p kotone-plugin-lol opgg_real -- --ignored --nocapture`。
     #[tokio::test]
     #[ignore = "连真的 OP.GG，手动跑"]

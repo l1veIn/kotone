@@ -1,6 +1,7 @@
 <script lang="ts">
   // “操作客户端”的偏好（ADR 038 第 3.5 步，照 LeagueAkari）：自动接受对局、自动选 / 禁英雄（按排好的顺序）。
-  // 数据开关 `control` 关着（默认）时只写一句“先打开上面的开关”；开关、说明和风险提示在 PluginSwitches 里。
+  // 数据开关 `control` 关着（默认）时只写一句“先打开上面的开关”；开关和说明在 PluginSwitches 里，风险提示在插件的
+  // “风险和许可”弹窗里（ADR 043 D8：第一次打开它时弹一次）。
   // 偏好存在设置 plugins.lol.settings，改了马上生效（后端每 2 秒看一次客户端）。
   import { onMount } from "svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";

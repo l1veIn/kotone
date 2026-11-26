@@ -24,14 +24,14 @@
   --lol-bg: var(--color-background-primary, light-dark(#ffffff, #16171b));        /* 页面底 */
   --lol-bg-2: var(--color-background-secondary, light-dark(#f6f6f3, #1e1f24));    /* 区块、表头、输入框 */
   --lol-bg-3: var(--color-background-tertiary, light-dark(#ecece8, #2a2b31));     /* 小标签、空格子、图片占位 */
-  --lol-text: var(--color-text-primary, light-dark(#1c1d21, #ecedef));            /* 正文、墨线（突破口的圈） */
+  --lol-text: var(--color-text-primary, light-dark(#1c1d21, #ecedef));            /* 正文、墨线 */
   --lol-text-2: var(--color-text-secondary, light-dark(#5b5e66, #a3a6ae));        /* 次要：玩家名、段位字 */
   --lol-text-3: var(--color-text-tertiary, light-dark(#73767e, #868990));         /* 最弱：表头、出处、时间 */
   --lol-line: var(--color-border-primary, light-dark(#e3e3de, #2c2d33));          /* 行间细线、区块边框 */
   --lol-line-2: var(--color-border-secondary, light-dark(#cfcfc8, #3b3c43));      /* 输入框、按钮边框 */
   --lol-ring: var(--color-ring-primary, light-dark(#2f66d9, #6ea2ff));            /* 键盘焦点 */
   --lol-hover: light-dark(rgb(0 0 0 / 0.035), rgb(255 255 255 / 0.045));          /* 可点的行悬停 */
-  --lol-ink-fill: light-dark(#1c1d21, #ecedef);   /* 主按钮、“突破口”小牌的底（墨） */
+  --lol-ink-fill: light-dark(#1c1d21, #ecedef);   /* 主按钮、“刚结束”小牌的底（墨） */
   --lol-ink-on: light-dark(#ffffff, #16171b);     /* 墨底上的字 */
 
   /* ---------- 意思：App 自己的 ---------- */

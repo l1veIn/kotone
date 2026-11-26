@@ -1,8 +1,10 @@
-//! OP.GG 官方 MCP（`https://mcp-api.op.gg/mcp`，全球数据和对线指南）：英雄联盟插件的数据开关 `opgg`，**默认关**。
+//! OP.GG 官方 MCP（`https://mcp-api.op.gg/mcp`，全球数据和对线指南）：英雄联盟插件的数据开关 `opgg`，**默认开**
+//! （ADR 043 D9，玩家 2026-11-26 决定：“直接用”，不再等 issue 的回复）。
 //!
-//! 2026-11-24 替玩家在 opgginc/opgg-mcp 提了 issue #26 问能不能用（照 Glyph 的 #17）：说好的用法是
-//! 按需请求（打开英雄页、她问的时候，不批量抓、不查召唤师）、最多 2 个并发、磁盘缓存 24 小时、
-//! `client_app` 写 `kotone`、页面上放 OP.GG 的标志和链接、她用的时候说出处。OP.GG 回复同意前开关保持默认关。
+//! 2026-11-24 替玩家在 opgginc/opgg-mcp 提了 issue #26 问能不能用（照 Glyph 的 #17），里面答应的用法照旧：
+//! 按需请求（页面上把来源换成 OP.GG、她问的时候，不批量抓、不查召唤师）、最多 2 个并发（[`super::OPGG_CONCURRENCY`]，
+//! 真的限住了）、磁盘缓存 24 小时、`client_app` 写 `kotone`、页面上放 OP.GG 的标志和链接（App 的来源标签）、
+//! 她用的时候说出处。
 //!
 //! 协议：MCP Streamable HTTP，经本体的 MCP 客户端 `kotone-mcp`（MCP 方案 4.7：OP.GG 是第一个用户）。
 //! 第一次调用时握手一次（`initialize` → `notifications/initialized`），之后的调用复用这个会话，一次调用一个请求。

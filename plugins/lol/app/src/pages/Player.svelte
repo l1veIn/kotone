@@ -202,7 +202,7 @@
       {:else if loading}
         <div class="skel-head" aria-busy="true" aria-label={m.plugin_lol_loading()}><span class="ci round s56"></span><span class="skel" style:width="160px"></span></div>
       {/if}
-      <Footer data={m.plugin_lol_foot_client()} onLink={session.openLink} />
+      <Footer sources={[{ id: "client" }]} onLink={session.openLink} />
     </main>
   </div>
 {:else}
@@ -235,7 +235,7 @@
           </div>
         {/each}
       </div>
-      <Footer data="" card extra={player.games.length > CARD_GAMES ? m.plugin_lol_card_more({ count: player.games.length - CARD_GAMES }) : ""} onLink={session.openLink} />
+      <Footer card sources={[{ id: "client" }]} extra={player.games.length > CARD_GAMES ? m.plugin_lol_card_more({ count: player.games.length - CARD_GAMES }) : ""} onLink={session.openLink} />
     {:else if error}
       <p class="card-line danger" role="alert">{m.plugin_lol_failed({ error })}</p>
     {:else if status}

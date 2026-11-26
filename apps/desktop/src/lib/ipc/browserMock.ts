@@ -431,6 +431,7 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 export async function getSettings(): Promise<Settings> {
   initMockRuntime();
   applyElevationSeed();
+  applyRiskSeed();
   if (!mock.settings.ui.sidebar) {
     const sidebar = loadMockSidebar();
     if (sidebar) mock.settings.ui.sidebar = sidebar;
@@ -867,6 +868,19 @@ function applyElevationSeed() {
   if (elevationSeedApplied) return;
   elevationSeedApplied = true;
   Object.assign(mock.settings, elevationSeed().settings ?? {});
+}
+
+/**
+ * 插件的“风险和许可”弹窗（ADR 043 D8）：预览里默认当作英雄联盟的看过了（别的测试打开英雄联盟的页面、打开有风险的开关时
+ * 不被弹窗挡住）；`?mockRisk=unseen` 是从没看过（第一次打开插件页、第一次打开有风险的开关时弹）。
+ */
+let riskSeedApplied = false;
+function applyRiskSeed() {
+  if (riskSeedApplied) return;
+  riskSeedApplied = true;
+  if (mockQuery("mockRisk") === "unseen") return;
+  const plugins = (mock.settings.plugins ??= {});
+  plugins.lol = { ...plugins.lol, riskSeen: plugins.lol?.riskSeen ?? 1 };
 }
 
 /** 游戏兼容状态：自身/游戏提权状态 + 激活 profile 的独占全屏状态 */

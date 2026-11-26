@@ -33,7 +33,7 @@ use crate::client::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
 use crate::pages;
 use crate::tools::{
     TOOL_CHAMPION, TOOL_CHAMPIONS, TOOL_CLIENT, TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT,
-    TOOL_SHOUT, TOOL_SPELL, TOOL_TIER,
+    TOOL_SHOUT, TOOL_SOURCE, TOOL_SPELL, TOOL_TIER,
 };
 use crate::LolPlugin;
 
@@ -41,6 +41,9 @@ use crate::LolPlugin;
 mod auto_cards;
 /// 选人阶段的“这局”（调研 G1）。
 mod champ_select;
+/// 隐藏了身份的人、电脑（ADR 043 D9）：名单、合并、局内接口补电脑、页面和给她的字。
+#[cfg(test)]
+mod identity_tests;
 /// 一键喊话（ADR 041 第 3 期，`lol.shout`）。
 mod shout;
 
@@ -87,6 +90,8 @@ struct Member {
     position: String,
     /// 选人时选好了没有（别的阶段都是锁了）。
     pick: pages::Pick,
+    /// 看得到是谁没有（ADR 043 D9）：只查 `Known` 的；隐藏了身份的真人、电脑照样列出来，只显示英雄。
+    identity: text::Identity,
 }
 
 #[derive(Default)]
@@ -281,6 +286,8 @@ impl LolPlugin {
             }
             live = poll_live().await;
             if let Some((raw, game)) = &live {
+                // 局内接口的 isBot：客户端没标的电脑在这里补上（ADR 043 D9）
+                self.mark_live_bots(game);
                 self.push_live_events(host.as_ref(), raw, game);
             }
         } else if in_game_phase(&previous) {
@@ -437,7 +444,7 @@ impl LolPlugin {
             return;
         }
         let found = members(session);
-        let missing: Vec<String> = {
+        let (missing, hidden, bots) = {
             let mut s = self.state();
             let fresh = s.current.as_ref().map(|m| m.game_id) != Some(game_id);
             if fresh {
@@ -454,30 +461,32 @@ impl LolPlugin {
             }
             let m = s.current.as_mut().unwrap();
             m.started = true;
-            // 选人时看不到名字的人（对面、排位里的队友）没有 puuid：进了加载按 gameflow 的名单重来；查过的战绩接着用
-            m.members.retain(|x| !x.puuid.is_empty());
-            // 英雄可能晚一点才填上（加载界面前后），每轮都按最新的
-            for member in &found {
-                match m.members.iter_mut().find(|x| x.puuid == member.puuid) {
-                    Some(x) => *x = member.clone(),
-                    None => m.members.push(member.clone()),
-                }
-            }
-            let missing: Vec<String> = found
-                .iter()
-                .map(|x| x.puuid.clone())
-                .filter(|p| !m.histories.contains_key(p) && !m.pending.contains(p))
-                .collect();
-            // 先记成“在查”，免得下一轮重复查
-            m.pending.extend(missing.iter().cloned());
-            missing
+            let count = |identity| found.iter().filter(|x| x.identity == identity).count();
+            let (hidden, bots) = (count(text::Identity::Hidden), count(text::Identity::Bot));
+            (merge_session(m, found), hidden, bots)
         };
         if missing.is_empty() {
             return;
         }
-        let _ = self.my_puuid(lcu).await;
-        log::log(&format!("lol: 这局开始查 {} 个人的战绩", missing.len()));
+        let me = self.my_puuid(lcu).await.unwrap_or_default();
+        let mine = if missing.contains(&me) {
+            "（含你自己）"
+        } else {
+            ""
+        };
+        log::log(&format!(
+            "lol: 这局开始查 {} 人的战绩{mine}；隐藏了身份的 {hidden} 人、电脑 {bots} 个不查",
+            missing.len()
+        ));
         tokio::spawn(prefetch(self.state.clone(), lcu.clone(), game_id, missing));
+    }
+
+    /// 局内接口说是电脑的（`isBot`），而客户端没给 puuid、我们当成“隐藏了身份”的人：改成电脑（按队伍和英雄对上）。
+    fn mark_live_bots(&self, game: &LiveGame) {
+        let data = self.loaded_data();
+        if let Some(m) = self.state().current.as_mut() {
+            mark_bots(&mut m.members, game, data.as_deref());
+        }
     }
 
     /// 选人（调研 G1）：双方的英雄、我方的分路和召唤师技能、备选席；我方看得到名字的人马上开始查战绩
@@ -514,6 +523,7 @@ impl LolPlugin {
             let missing: Vec<String> = m
                 .members
                 .iter()
+                .filter(|x| x.identity == text::Identity::Known)
                 .map(|x| x.puuid.clone())
                 .filter(|p| !p.is_empty() && !m.histories.contains_key(p) && !m.pending.contains(p))
                 .collect();
@@ -523,8 +533,17 @@ impl LolPlugin {
         if missing.is_empty() {
             return;
         }
-        let _ = self.my_puuid(lcu).await;
-        log::log(&format!("lol: 选人时开始查 {} 个队友的战绩", missing.len()));
+        // 我方看得到名字的人，自己也在里面（以前写成“N 个队友”，把自己也算进去了）
+        let me = self.my_puuid(lcu).await.unwrap_or_default();
+        let mine = if missing.contains(&me) {
+            "（含你自己）"
+        } else {
+            ""
+        };
+        log::log(&format!(
+            "lol: 选人时开始查我方 {} 人的战绩{mine}",
+            missing.len()
+        ));
         tokio::spawn(prefetch(self.state.clone(), lcu.clone(), game_id, missing));
     }
 
@@ -564,7 +583,28 @@ async fn load_data(lcu: &Lcu) -> Option<GameData> {
     (!data.is_empty()).then_some(data)
 }
 
-/// `gameflow/session` → 这局的人（局内时两边都有）。
+/// 客户端说这个人是电脑（gameflow / 选人 session 里的 `botDifficulty`、`isBot`、`playerType`）。没有这些标记的
+/// 都当真人：没有 puuid 的真人是隐藏了身份（ADR 043 D9，2026-11-26 那一把海斗里我方两个人就是这样被当成电脑漏掉的）。
+pub(crate) fn flagged_bot(m: &Value) -> bool {
+    let difficulty = m["botDifficulty"].as_str().unwrap_or("").trim();
+    m["isBot"].as_bool() == Some(true)
+        || (!difficulty.is_empty() && !difficulty.eq_ignore_ascii_case("NONE"))
+        || m["playerType"]
+            .as_str()
+            .is_some_and(|t| t.trim().eq_ignore_ascii_case("BOT"))
+}
+
+/// 客户端给的 puuid；空的、全是 0 的（LeagueAkari 的 `EMPTY_PUUID`）算没有。
+pub(crate) fn real_puuid(m: &Value) -> String {
+    let puuid = m["puuid"].as_str().unwrap_or("").trim();
+    if puuid.chars().all(|c| c == '0' || c == '-') {
+        String::new()
+    } else {
+        puuid.to_string()
+    }
+}
+
+/// `gameflow/session` → 这局的人（局内时两边都有）。没有 puuid 的真人（隐藏了身份）和电脑也在里面，不查。
 fn members(session: &Value) -> Vec<Member> {
     let data = &session["gameData"];
     let selections: Vec<&Value> = data["playerChampionSelections"]
@@ -574,13 +614,17 @@ fn members(session: &Value) -> Vec<Member> {
     let mut out = Vec::new();
     for (team, key) in [(1u8, "teamOne"), (2u8, "teamTwo")] {
         for m in data[key].as_array().into_iter().flatten() {
-            let puuid = m["puuid"].as_str().unwrap_or("").to_string();
-            if puuid.is_empty() {
-                continue; // 电脑
-            }
+            let puuid = real_puuid(m);
+            let identity = if flagged_bot(m) {
+                text::Identity::Bot
+            } else if puuid.is_empty() {
+                text::Identity::Hidden
+            } else {
+                text::Identity::Known
+            };
             let internal = m["summonerInternalName"].as_str().unwrap_or("");
             let selection = selections.iter().find(|x| {
-                x["puuid"].as_str() == Some(puuid.as_str())
+                (!puuid.is_empty() && x["puuid"].as_str() == Some(puuid.as_str()))
                     || (!internal.is_empty()
                         && x["summonerInternalName"].as_str() == Some(internal))
             });
@@ -603,12 +647,77 @@ fn members(session: &Value) -> Vec<Member> {
                 } else {
                     position.to_ascii_uppercase()
                 },
-                puuid,
+                // 电脑的 puuid 不查（有的模式里电脑也带一个）
+                puuid: if identity == text::Identity::Bot {
+                    String::new()
+                } else {
+                    puuid
+                },
                 pick: pages::Pick::Locked,
+                identity,
             });
         }
     }
     out
+}
+
+/// 进了加载以后每一轮把 gameflow 的名单 `found` 合进这局（[`LolPlugin::on_session`]），返回要开始查的 puuid（已经记成“在查”）。
+/// 顺序跟着 gameflow；英雄可能晚一点才填上（加载界面前后），每轮都按最新的；之前有、这一轮没出现的查得到的人留着
+/// （查过的战绩接着用）。选人时看不到名字的人（对面、排位里的队友）按 gameflow 重来；局内接口补上的“电脑”留着。
+fn merge_session(m: &mut Match, found: Vec<Member>) -> Vec<String> {
+    let old = std::mem::take(&mut m.members);
+    let mut next = found;
+    for member in next.iter_mut() {
+        let was_bot = old.iter().any(|x| {
+            x.identity == text::Identity::Bot
+                && x.team == member.team
+                && x.champion_id == member.champion_id
+        });
+        if member.identity == text::Identity::Hidden && was_bot {
+            member.identity = text::Identity::Bot;
+        }
+    }
+    for x in old {
+        if x.identity == text::Identity::Known
+            && !x.puuid.is_empty()
+            && !next.iter().any(|n| n.puuid == x.puuid)
+        {
+            next.push(x);
+        }
+    }
+    m.members = next;
+    let missing: Vec<String> = m
+        .members
+        .iter()
+        .filter(|x| x.identity == text::Identity::Known)
+        .map(|x| x.puuid.clone())
+        .filter(|p| !p.is_empty() && !m.histories.contains_key(p) && !m.pending.contains(p))
+        .collect();
+    // 先记成“在查”，免得下一轮重复查
+    m.pending.extend(missing.iter().cloned());
+    missing
+}
+
+/// 局内接口的 `isBot`（[`LivePlayer::bot`]）：没有 puuid 的人在局内接口里是电脑，就改成电脑。按队伍（teamOne = ORDER）
+/// 和英雄（英文 id）对上；对不上的不动。
+fn mark_bots(members: &mut [Member], game: &LiveGame, data: Option<&GameData>) {
+    let Some(data) = data else { return };
+    for member in members
+        .iter_mut()
+        .filter(|x| x.identity == text::Identity::Hidden)
+    {
+        let side = if member.team == 1 { "ORDER" } else { "CHAOS" };
+        let Some(alias) = data.champion(member.champion_id).map(|c| c.alias.as_str()) else {
+            continue;
+        };
+        if game
+            .players
+            .iter()
+            .any(|p| p.bot && p.team == side && p.alias.eq_ignore_ascii_case(alias))
+        {
+            member.identity = text::Identity::Bot;
+        }
+    }
 }
 
 /// 测试用的客户端开着就当它在（pid 0）；否则找 `LeagueClientUx.exe`。
@@ -788,6 +897,8 @@ impl LolPlugin {
             TOOL_CHAMPIONS => return Ok(self.champions_tool(host.as_ref()).await),
             TOOL_CHAMPION => return Ok(self.champion_tool(host.as_ref(), arguments).await),
             TOOL_TIER => return Ok(self.tier_tool(host.as_ref(), arguments).await),
+            // 来源标签选的数据源（ADR 043 D8）：只记设置，不要客户端
+            TOOL_SOURCE => return Ok(crate::stats_tools::source_tool(host.as_ref(), arguments)),
             // 海克斯三选一要的本地文字识别模型（下载 / 不用）：不要客户端
             crate::tools::TOOL_AUGMENT_OCR => {
                 return Ok(self.augment_ocr_tool(host, arguments).await)
@@ -1038,7 +1149,7 @@ impl LolPlugin {
         let my_team = m
             .members
             .iter()
-            .find(|x| x.puuid == me)
+            .find(|x| !me.is_empty() && x.puuid == me)
             .map(|x| x.team)
             .unwrap_or(1);
         let players: Vec<ScoutPlayer> = m
@@ -1062,12 +1173,13 @@ impl LolPlugin {
                     champion_id: x.champion_id,
                     name,
                     ally: x.team == my_team,
-                    me: x.puuid == me,
+                    me: !me.is_empty() && x.puuid == me,
                     party: x.party,
                     history,
                     profile_icon_id: x.profile_icon_id,
                     spells: x.spells,
                     position: x.position.clone(),
+                    identity: x.identity,
                 }
             })
             .collect();

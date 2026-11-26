@@ -95,7 +95,7 @@ function champSelect({ ranked: isRanked }) {
     summary: null,
     recent: [],
     tags: [],
-    weak: null,
+    identity: "name_hidden",
     pending: false,
     party: null,
     ranked: { solo: null, flex: null },

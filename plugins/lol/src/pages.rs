@@ -1,8 +1,8 @@
 //! 页面的数据（ADR 038 D5 `structuredContent`）：这局、战绩、单局详情。她拿到的是 [`crate::client::text`]
 //! 写的几行字；页面拿到的是这里的结构化数据，聊天卡片是它的快照。数字和她说的同一份（[`scout::summarize`]）。
 //!
-//! 照 LeagueAkari 的页面：这局 10 个人（段位、近况、标签、隐藏战绩、开黑、突破口）；点一个人看他最近的战绩；
-//! 点一局看 10 个人的 KDA、伤害、经济、装备。
+//! 照 LeagueAkari 的页面：这局 10 个人（段位、近况、标签、隐藏战绩、开黑；隐藏了身份的人、电脑只有英雄）；
+//! 点一个人看他最近的战绩；点一局看 10 个人的 KDA、伤害、经济、装备。只给事实，不评价人（ADR 043 D2）。
 //!
 //! **图**（ADR 039 D6，调研 G0.1）：数据里只放 id 和客户端的资源路径（`icon`、`profileIcon`、`crest`……，
 //! 例如 `/lol-game-data/assets/v1/champion-icons/103.png`），不放完整网址、不放图片本身。页面自己决定从哪取：
@@ -260,7 +260,7 @@ fn tags_json(s: &Summary, random_pick: bool) -> Vec<Value> {
         .collect()
 }
 
-/// 这局（`lol.scout`）：两边各 5 个人、开黑、突破口。`puuids` 和 `players` 一一对应。不带阶段（见 [`match_page_in`]）。
+/// 这局（`lol.scout`）：两边各 5 个人、开黑。`puuids` 和 `players` 一一对应。不带阶段（见 [`match_page_in`]）。
 pub fn match_page(
     players: &[ScoutPlayer],
     puuids: &[String],
@@ -302,18 +302,12 @@ pub fn match_page_in(
                 .map(|h| scout::summarize(&h.games, p.champion_id, queue_id))
         })
         .collect();
-    let enemies: Vec<(usize, &Summary)> = players
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.ally)
-        .filter_map(|(i, _)| summaries[i].as_ref().map(|s| (i, s)))
-        .collect();
-    let spots = scout::weak_spots(&enemies, random_pick);
+    // 还在查：查得到的人（不是隐藏了身份、电脑、选人时看不到名字的）、有 puuid、战绩还没回来
+    let pending = |i: usize| players[i].pending() && puuids.get(i).is_some_and(|p| !p.is_empty());
     let person = |i: usize| {
         let p = &players[i];
         let h = p.history.as_ref();
         let s = summaries[i].as_ref().filter(|s| s.games > 0);
-        let spot = spots.iter().find(|w| w.index == i);
         let icon_id = p.profile_icon_id.or(h.and_then(|h| h.profile_icon_id));
         json!({
             "puuid": puuids.get(i).cloned().unwrap_or_default(),
@@ -329,8 +323,10 @@ pub fn match_page_in(
             "me": p.me,
             "ally": p.ally,
             "party": p.party,
-            // 没有 puuid 的（选人时的对面、排位里看不到名字的队友）不查，也不算“还在查”
-            "pending": h.is_none() && puuids.get(i).is_some_and(|p| !p.is_empty()),
+            // 没有 puuid 的（隐藏了身份、电脑、选人时的对面、排位里看不到名字的队友）不查，也不算“还在查”
+            "pending": pending(i),
+            // known / hidden（隐藏了身份）/ name_hidden（选人时看不到名字）/ bot（电脑），ADR 043 D9
+            "identity": p.identity.as_str(),
             "hidden": h.is_some_and(PlayerHistory::hidden),
             "rank": h.and_then(|h| h.rank.clone()),
             "error": h.and_then(|h| h.error.clone()),
@@ -345,7 +341,6 @@ pub fn match_page_in(
                 "deaths": g.deaths,
                 "assists": g.assists,
             })).collect::<Vec<_>>()).unwrap_or_default(),
-            "weak": spot.map(|w| json!(w.reasons)),
             "pick": stage.picks.get(i).copied().unwrap_or_default().as_str(),
         })
     };
@@ -362,11 +357,7 @@ pub fn match_page_in(
         "random": random_pick,
         "allies": team(true),
         "enemies": team(false),
-        "waiting": players
-            .iter()
-            .enumerate()
-            .filter(|(i, p)| p.history.is_none() && puuids.get(*i).is_some_and(|p| !p.is_empty()))
-            .count(),
+        "waiting": (0..players.len()).filter(|i| pending(*i)).count(),
         "phase": stage.phase.map(MatchPhase::as_str),
         "phaseSince": stage.since_ms,
         "namesHidden": stage.names_hidden,
@@ -624,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn match_page_splits_teams_and_marks_weak_spots() {
+    fn match_page_splits_teams_and_states_facts_only() {
         let data = crate::client::gamedata::tests::sample();
         let mut players = Vec::new();
         let mut puuids = Vec::new();
@@ -662,9 +653,9 @@ mod tests {
         assert_eq!(v["waiting"], 1);
         assert_eq!(v["allies"][0]["me"], true);
         assert_eq!(v["enemies"][0]["puuid"], "puuid-5");
-        assert!(v["enemies"][0]["weak"]
-            .as_array()
-            .is_some_and(|r| !r.is_empty()));
+        // ADR 043 D2：没有“突破口”（weak）了；连败照样是标签（事实）
+        assert!(v["enemies"][0].get("weak").is_none());
+        assert_eq!(v["enemies"][0]["identity"], "known");
         assert_eq!(v["enemies"][4]["pending"], true);
         assert_eq!(v["enemies"][0]["recent"].as_array().unwrap().len(), 10);
         // 标签带种类，字和给她的一样；没带阶段时阶段是 null、都算锁了
@@ -719,8 +710,12 @@ mod tests {
         // 没有 puuid 的人（选人时的对面、看不到名字的队友）不查，也不算“还在查”
         let mut anonymous = players.clone();
         anonymous[9].history = None;
+        // 隐藏了身份（ADR 043 D9）：照样一行，只有英雄，不算“还在查”
+        anonymous[8].history = None;
+        anonymous[8].identity = crate::client::text::Identity::Hidden;
         let mut ids = puuids.clone();
         ids[9] = String::new();
+        ids[8] = String::new();
         let v = match_page_in(
             &anonymous,
             &ids,
@@ -732,6 +727,9 @@ mod tests {
             &stage,
         );
         assert_eq!(v["enemies"][4]["pending"], false);
+        assert_eq!(v["enemies"][3]["pending"], false);
+        assert_eq!(v["enemies"][3]["identity"], "hidden");
+        assert_eq!(v["enemies"].as_array().unwrap().len(), 5);
         assert_eq!(v["waiting"], 0);
 
         // 结算：结果
@@ -796,7 +794,8 @@ mod tests {
         );
     }
 
-    /// 给琴音的文字：同一份录到的样子（带页面才用的字段）→ 一字不差的那几行（2026-11-25 加页面字段前录的）。
+    /// 给琴音的文字：同一份录到的样子（带页面才用的字段）→ 一字不差的那几行（2026-11-25 加页面字段前录的；
+    /// 2026-11-26 照 ADR 043 D2 去掉了最后那行“突破口”，别的一字没改）。
     fn text_for_her() -> String {
         use crate::client::history::{self as h, tests as ht};
         let data = crate::client::gamedata::tests::sample();
@@ -846,6 +845,7 @@ mod tests {
                 profile_icon_id: Some(29),
                 spells: [4, 32],
                 position: "MIDDLE".into(),
+                identity: crate::client::text::Identity::Known,
             }
         };
         let good: Vec<Value> = (0..10)
@@ -880,7 +880,6 @@ mod tests {
             "- 称号 丙 · 「丙的主人」 · 单双排 黄金 2 · 近 10 局 6 胜 4 负 · 海克斯大乱斗 10 局 6 胜，分均伤害 1600 · KDA 6.0，场均死 3.0",
             "- 称号 丁 · 「丁的主人」 · 单双排 黄金 2 · 隐藏战绩 · 近 10 局 4 胜 6 负 · 海克斯大乱斗 10 局 4 胜，分均伤害 1600 · KDA 0.7，场均死 9.0 · 这个英雄 10 局 4 胜 · 6 连败",
             "开黑：我方 甲 + 乙",
-            "突破口（对面，按数据）：丁（隐藏战绩）——最近 10 局只赢了 4 局、KDA 0.7（对面平均 3.3）、场均死 9.0 次、6 连败",
             "---",
             "每人最近 20 局（全部模式；“单双排”是和这局同一个模式的）：",
             "对面：",
