@@ -78,7 +78,8 @@ fn single_instance_window() -> (String, String) {
     )
 }
 
-/// 自启动提权（§10 R-1、ADR 044 D1）：已经用现在的说法问过、设置开启且当前未提权时，runas 重启自身并立即退出。
+/// 自启动提权（§10 R-1、ADR 044 D1）：已经用现在的说法问过、设置开启、当前未提权且不是后台启动（`--background`）时，
+/// runas 重启自身并立即退出。
 /// 还没问过（`adminPromptRevision` 旧）时不重开：窗口里先说明一句（`AdminExplainDialog`），玩家点「好」再弹 UAC。
 ///
 /// 必须在 Tauri Builder 初始化之前执行：单实例插件在插件初始化阶段创建
@@ -117,11 +118,13 @@ pub(crate) fn auto_elevate_before_tauri_init() {
             std::process::exit(0);
         }
     }
+    // 后台启动（--background）不弹 UAC：安全桌面会把玩家从全屏游戏里拽出来（ADR 043 D6 同一条规矩）
     if !elevation::should_auto_elevate(
         settings.run_as_admin_on_start,
         settings.admin_prompt_revision,
         elevated,
         elevation::retry_marker_present(),
+        has_background_flag(std::env::args()),
     ) {
         return;
     }
@@ -180,7 +183,30 @@ pub(crate) fn create_startup_windows(app: &tauri::AppHandle, companion_enabled: 
 
 #[cfg(test)]
 mod startup_options_tests {
-    use super::{parse_onboarding_launch_mode, OnboardingLaunchMode};
+    use super::{has_background_flag, parse_onboarding_launch_mode, OnboardingLaunchMode};
+    use kotone_platform_windows::elevation::{should_auto_elevate, ADMIN_PROMPT_REVISION};
+
+    /// 后台启动（外部 Agent、`kotone-cli app launch`）不弹 UAC；正常打开、开机自启（Run 键没有参数）照旧。
+    #[test]
+    fn background_launches_never_auto_elevate() {
+        let decide = |args: &[&str]| {
+            should_auto_elevate(
+                true,
+                ADMIN_PROMPT_REVISION,
+                false,
+                false,
+                has_background_flag(args.iter().copied()),
+            )
+        };
+        assert!(!decide(&["kotone.exe", "--background"]));
+        assert!(!decide(&[
+            "kotone.exe",
+            "--onboarding=never",
+            "--background"
+        ]));
+        assert!(decide(&["kotone.exe"]), "开机自启 / 双击图标");
+        assert!(decide(&["kotone.exe", "--onboarding=always"]));
+    }
 
     /// 自己转交给管理员身份的实例时照抄了单实例插件的名字和格式：identifier 改了、插件升级了都要回来核对。
     #[test]

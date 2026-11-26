@@ -130,3 +130,5 @@ Kotone 以管理员身份运行时，她跑的命令、第三方 MCP 服务器�
 5. 管理员身份运行时英雄联盟客户端和游戏在前面按呼叫键（Ctrl+\`）能接通；语音输入热键、停下热键、快捷指令、往游戏里打字都能用（讨论记录第十一节那条复测）。
 6. 管理员身份运行过一次以后，把开关关掉、以普通权限打开：设置、聊天记录、模型都还在、能改；外部 Agent（`kotone.exe tools call app.status`、`kotone.exe mcp`）普通权限连管理员身份的 Kotone 连得上。
 7. 已知的代价照 ADR：管理员身份时从资源管理器往 Kotone 窗口拖文件会被挡；外部 Agent 用 `kotone-cli app launch` 起 Kotone 时也会弹 UAC（要玩家点）。
+
+**补：后台启动不弹 UAC**（2026-11-26，主会话定的）：带 `--background` 的启动（外部 Agent、`kotone-cli app launch` 默认就是）不自动以管理员身份重开：UAC 会切到安全桌面，把玩家从全屏游戏里拽出来，和 ADR 043 D6“游戏里不抢焦点”同一条规矩。正常打开、开机自启（Run 键不带参数）照旧重开。后台起来的 Kotone 是普通权限，走“UAC 点了否”那条路：管理员身份的游戏到前面时说一次哪些用不了。`elevation::should_auto_elevate` 多了“是不是后台启动”这一项（真值表里后台启动一律不重开），`startup.rs` 用 `has_background_flag` 传进去，单元测试 `background_launches_never_auto_elevate`。`kotone-cli app launch` 只有 `--foreground` 时才会在 kotone.exe 正常退出后接着等它以管理员身份重开的那份；`--background` 退出了就照以前报“启动后退出”。玩家在后台起来的那份窗口里点「好」/「以管理员身份重开」时，重开的那份去掉 `--background`，窗口照样显示出来。

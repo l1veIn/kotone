@@ -55,16 +55,21 @@ pub const ADMIN_PROMPT_REVISION: u32 = 1;
 /// - 没问过（`prompt_revision` 比 [`ADMIN_PROMPT_REVISION`] 小：新装的、以前点过“不再提示”的、以前就开着的）：
 ///   先不重开，窗口里先说明原因，玩家点「好」再弹 UAC（ADR 044 D1）。
 /// - 防循环：用户在 UAC 弹窗点「否」后子进程仍未提权，但 retry_marker_present = true，本次放弃重试。
+/// - 后台启动（`--background`：外部 Agent、`kotone-cli app launch`）不重开：UAC 会切到安全桌面，把玩家从全屏游戏里
+///   拽出来（和 ADR 043 D6“游戏里不抢焦点”同一条规矩）。照“UAC 点了否”那样以普通权限运行。
+///   正常打开和开机自启（Run 键不带 `--background`）照旧重开。
 pub fn should_auto_elevate(
     run_as_admin_on_start: bool,
     prompt_revision: u32,
     elevated: bool,
     retry_marker_present: bool,
+    background_launch: bool,
 ) -> bool {
     prompt_revision >= ADMIN_PROMPT_REVISION
         && run_as_admin_on_start
         && !elevated
         && !retry_marker_present
+        && !background_launch
 }
 
 /// 完整性级别：普通权限（Medium）。
@@ -345,10 +350,11 @@ mod win {
     /// extra_args 追加在现有参数之后（自动提权路径用来传防循环标记）。
     /// 成功仅表示新进程已拉起；当前进程是否退出由调用方决定。
     pub fn restart_with_extra_args(extra_args: &[&str]) -> Result<(), String> {
-        // 现有参数剔除旧的防循环标记（避免标记逐次堆积），再按需追加
+        // 现有参数剔除旧的防循环标记（避免标记逐次堆积），再按需追加。
+        // 也去掉 --background：后台启动的那份不自动提权（ADR 044），玩家在窗口里点了重开，重开的那份要显示窗口
         let mut args: Vec<String> = std::env::args()
             .skip(1)
-            .filter(|a| a != super::ELEVATED_RETRY_ARG)
+            .filter(|a| a != super::ELEVATED_RETRY_ARG && a != "--background")
             .collect();
         args.extend(extra_args.iter().map(|s| s.to_string()));
         shell_execute_runas(&super::build_params(&args))
@@ -564,22 +570,34 @@ mod tests {
     #[test]
     fn should_auto_elevate_truth_table() {
         let asked = ADMIN_PROMPT_REVISION;
-        // 问过 + 开启 + 未提权 + 无标记 → 发起 runas（包括开机自启）
-        assert!(should_auto_elevate(true, asked, false, false));
+        // 问过 + 开启 + 未提权 + 无标记 + 不是后台启动 → 发起 runas（包括开机自启）
+        assert!(should_auto_elevate(true, asked, false, false, false));
         // 以后的版本也算问过
-        assert!(should_auto_elevate(true, asked + 1, false, false));
+        assert!(should_auto_elevate(true, asked + 1, false, false, false));
         // 未开启（玩家点了「先不用」或在设置里关了）→ 不动
-        assert!(!should_auto_elevate(false, asked, false, false));
+        assert!(!should_auto_elevate(false, asked, false, false, false));
         // 已提权 → 不再 runas（正常 runas 成功后的子进程路径）
-        assert!(!should_auto_elevate(true, asked, true, false));
-        assert!(!should_auto_elevate(true, asked, true, true));
+        assert!(!should_auto_elevate(true, asked, true, false, false));
+        assert!(!should_auto_elevate(true, asked, true, true, false));
         // 防循环：runas 子进程仍未提权（用户取消 UAC）→ 本次会话放弃
-        assert!(!should_auto_elevate(true, asked, false, true));
+        assert!(!should_auto_elevate(true, asked, false, true, false));
+        // 后台启动（--background）：不管别的怎样都不弹 UAC
+        for setting in [true, false] {
+            for revision in [0, asked] {
+                for marker in [true, false] {
+                    assert!(!should_auto_elevate(setting, revision, false, marker, true));
+                }
+            }
+        }
         // 没用现在的说法问过（新装的 0、以前点过“不再提示”的、以前就开着的）→ 先不重开，窗口里先说明
         for setting in [true, false] {
             for elevated in [true, false] {
                 for marker in [true, false] {
-                    assert!(!should_auto_elevate(setting, 0, elevated, marker));
+                    for background in [true, false] {
+                        assert!(!should_auto_elevate(
+                            setting, 0, elevated, marker, background
+                        ));
+                    }
                 }
             }
         }
