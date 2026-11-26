@@ -334,7 +334,7 @@ impl LolPlugin {
     }
 
     /// 这个英雄最常走的路（五路强度榜里选用率最高的那一路）。
-    async fn main_lane(&self, host: &dyn Host, id: i64) -> Option<&'static str> {
+    pub(crate) async fn main_lane(&self, host: &dyn Host, id: i64) -> Option<&'static str> {
         let mut best: Option<(&'static str, f64)> = None;
         for lane in qq101::LANES {
             if let Ok(list) = self.stats_for(host).tier_list(lane).await {

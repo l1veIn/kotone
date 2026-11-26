@@ -3,18 +3,21 @@
   // 之后在 App 里自己换页：顶栏的分页（这局 · 战绩 · 英雄 · 强度榜）、点一个人看战绩、点一局看单局详情、点一个英雄看
   // 英雄页。在 Kotone 的插件页里和在 Claude 这类宿主里都是同一套导航（插件的设置是宿主的页面）。
   // 显示方式（inline 聊天卡片 / fullscreen 插件页）跟着宿主上下文变（docs/design/lol-app.md 第一节 2）。
-  // 选英雄、文字识别模型这两页只在推送的卡片里出现（ADR 043 D7），不在顶栏的分页里。
+  // 选英雄、文字识别模型、今天的状态、海克斯三选一、对面的装备这几页只在推送的卡片里出现（ADR 043 D7、B 轮），不在顶栏的分页里。
   import { onMount } from "svelte";
   import type { PageId } from "./components/TopBar.svelte";
   import { connect, currentPage, displayOf, type DisplayMode, type Session } from "./host";
   import { m } from "./i18n.svelte";
   import AugmentOcr from "./pages/AugmentOcr.svelte";
+  import AugmentPick from "./pages/AugmentPick.svelte";
   import ChampSelect from "./pages/ChampSelect.svelte";
   import Champion from "./pages/Champion.svelte";
+  import EnemyBuild from "./pages/EnemyBuild.svelte";
   import Game from "./pages/Game.svelte";
   import Match from "./pages/Match.svelte";
   import Player from "./pages/Player.svelte";
   import Tier from "./pages/Tier.svelte";
+  import Today from "./pages/Today.svelte";
 
   interface View {
     page: PageId;
@@ -23,7 +26,7 @@
     key: number;
   }
 
-  const PAGES: PageId[] = ["match", "player", "game", "champion", "tier", "champ-select", "augment-ocr"];
+  const PAGES: PageId[] = ["match", "player", "game", "champion", "tier", "champ-select", "augment-ocr", "today", "augment-pick", "enemy-build"];
   const first = currentPage();
 
   let session = $state<Session | null>(null);
@@ -77,6 +80,12 @@
       <ChampSelect {session} {initial} {display} />
     {:else if view.page === "augment-ocr"}
       <AugmentOcr {session} {initial} {display} />
+    {:else if view.page === "augment-pick"}
+      <AugmentPick {session} {initial} {display} />
+    {:else if view.page === "enemy-build"}
+      <EnemyBuild {session} {initial} {display} />
+    {:else if view.page === "today"}
+      <Today {session} {initial} {display} onTab={tab} />
     {:else}
       <Tier {session} {initial} {display} args={view.args} onTab={tab} onChampion={champion} />
     {/if}

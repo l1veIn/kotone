@@ -5,7 +5,7 @@
 //!
 //! 只有解析（纯函数，有单测）；请求和缓存在 [`super`]。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const BASE: &str = "https://mlol.qt.qq.com";
@@ -126,7 +126,7 @@ pub fn parse_versions(v: &Value) -> Vec<(i64, String)> {
 }
 
 /// 强度榜的一行。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TierRow {
     pub rank: Option<i64>,
@@ -167,7 +167,7 @@ pub fn parse_tier_list(v: &Value) -> (String, Vec<TierRow>) {
 }
 
 /// 对位：这个英雄对某个英雄的胜率。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Matchup {
     pub champion_id: i64,

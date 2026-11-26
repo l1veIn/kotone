@@ -114,6 +114,11 @@ export const PAGE_TIER = "ui://kotone/lol/tier";
  * 问要不要下载海克斯三选一要的本地文字识别模型。 */
 export const PAGE_CHAMP_SELECT = "ui://kotone/lol/champ-select";
 export const PAGE_AUGMENT_OCR = "ui://kotone/lol/augment-ocr";
+/** 海斗三选一的卡片（ADR 043 D7 的 2026-11-26 晚修订）、你阵亡时对面的装备（B 轮），和后端 plugins/lol/src/pushes.rs 一致。 */
+export const PAGE_AUGMENT_PICK = "ui://kotone/lol/augment-pick";
+export const PAGE_ENEMY_BUILD = "ui://kotone/lol/enemy-build";
+/** 只在推送里出现：进房间或排队时的“今天的状态”（ADR 043 B 轮，和后端 plugins/lol/src/pages.rs 的 PAGE_TODAY 一致）。 */
+export const PAGE_TODAY = "ui://kotone/lol/today";
 
 /** 统计里的英雄（没有英文 id）。 */
 export interface StatChampion { id: number; label: string; short: string }

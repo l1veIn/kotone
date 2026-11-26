@@ -1,11 +1,17 @@
-//! 英雄联盟的两条卡片推送（ADR 039 D3、ADR 043 D3：清单 `[[pushes]]` 的 `opening` 和 `summary`；时机照调研
+//! 英雄联盟的三条卡片推送（ADR 039 D3、ADR 043 D3：清单 `[[pushes]]` 的 `opening`、`summary` 和 `today`；时机照调研
 //! `docs/research/2026-11-25-lol-app-parity.md` 第五节、设计文档 `docs/design/lol-app.md` 第四节）。一局最多两张，不叫模型：
 //!
 //! - **开局战绩**：进加载（游戏开始、局内接口还没有游戏时间）以后，10 个人的战绩都查完就发；进加载 20 秒还没查完
 //!   也发（卡片和那句话里写“还在查 N 人”）。页面是“这局”（`ui://kotone/lol/match`），数据和 `lol.scout` 的一样；
 //!   给琴音的那句只写事实（连胜连败、这个英雄几局、开黑、隐藏了身份的人），不评价人（ADR 043 D2）。
 //! - **这局总结**：从对局里进了结算（`WaitingForStats` / `PreEndOfGame` / `EndOfGame`）就去读这局的详情，拿到就发；
-//!   读不到每 5 秒再试，60 秒还没有就不发（调研 G29）。页面是“单局详情”（`ui://kotone/lol/game`，带 `justEnded`）。
+//!   读不到每 5 秒再试，60 秒还没有就不发（调研 G29）。页面是“单局详情”（`ui://kotone/lol/game`，带 `justEnded`）；
+//!   海斗、斗魂竞技场的详情里有每个人的海克斯（`playerAugment1`–`6`），卡片上一人一行列出对面的（也能看我方的），
+//!   没有海克斯的模式不显示（ADR 043 B 轮第 3 条）。
+//! - **今天的状态**（[`today`]）：进房间或排队（`Lobby` / `Matchmaking` / `ReadyCheck`）时，用我自己最近 20 局的战绩
+//!   发一张：今天几胜几负、现在几连胜 / 连败、今天输了 2 局以上的英雄。一天一个 key（`today:<本地日期>`），打完一局
+//!   回到房间时同一张原地更新、让悬浮窗再弹一次；今天还没打过不发。不给琴音留话：这张卡片一天里一直在变，
+//!   留一句很快就过时了，她要今天的战绩时自己查（`lol.player`）。
 //! - 不发：选人、对局中；训练模式、自定义对局（队列 ≤ 0）、观战（这局里没有自己）；Kotone 开的时候已经在对局里了
 //!   （没看到加载）不发开局战绩；重开局（提前投降）不发这局总结；重连、刷新不重发（这里记着，宿主也按 key 去重）。
 //! - 开关在插件页「设置 → 推送」，每条一个（宿主管，关了 `Host::push` 回 `Off`）；同一个 key 再推一次宿主当成更新，
@@ -20,11 +26,15 @@ use kotone_plugin_api::{Host, Push, PushCard, PushOutcome};
 use serde_json::{json, Value};
 
 use super::MatchView;
+use crate::client::history;
 use crate::client::http::paths;
 use crate::client::scout::{self, Summary};
 use crate::client::text::{Identity, ScoutPlayer};
 use crate::pages;
 use crate::LolPlugin;
+
+/// 今天的状态（进房间或排队时推）：只用我自己的战绩算，纯函数和页面数据在这里。
+pub(crate) mod today;
 
 /// 进加载多久还没查完也发开局战绩。
 const OPENING_WAIT: Duration = Duration::from_secs(20);
@@ -49,6 +59,8 @@ pub(crate) struct CardState {
     opened: HashSet<i64>,
     /// 这局总结已经排上（或这局不发）的对局。
     summarized: HashSet<i64>,
+    /// 最近一局打完的（不算自定义、训练、观战）：回到房间推今天的状态时，等它出现在战绩里再算。
+    ended: Option<i64>,
 }
 
 impl CardState {
@@ -268,6 +280,10 @@ impl LolPlugin {
         {
             self.summary_card(host);
         }
+        // 进房间或排队（从别的阶段进来：打完一局回来、Kotone 刚连上客户端）：今天的状态
+        if today::lobby_phase(phase) && !today::lobby_phase(previous) {
+            self.today_card(host);
+        }
     }
 
     fn opening_card(&self, host: &dyn Host, live_ready: bool) {
@@ -356,6 +372,7 @@ impl LolPlugin {
                 ));
                 return;
             }
+            s.cards.ended = Some(game_id);
             (game_id, lcu, me)
         };
         let data = self.loaded_data();
@@ -421,24 +438,201 @@ impl LolPlugin {
             report(TITLE_SUMMARY, result);
         }));
     }
+
+    /// 进房间或排队：推（或原地更新）今天的状态。读我自己最近 20 局；刚打完一局时等它出现在战绩里（每 5 秒看一次，
+    /// 最多 60 秒，到了照样用读到的发）。今天还没打过不发；推送关着时连战绩都不读。
+    fn today_card(&self, host: &Arc<dyn Host>) {
+        if !host.push_enabled(today::PUSH_TODAY) {
+            return;
+        }
+        let (lcu, me, ended) = {
+            let s = self.state();
+            let Some(c) = s.client.as_ref() else { return };
+            (c.lcu.clone(), c.me.clone(), s.cards.ended)
+        };
+        let task_host = host.clone();
+        let state = self.state.clone();
+        host.spawn(Box::pin(async move {
+            let me = match me {
+                Some(me) => me,
+                None => {
+                    let read = lcu.get(paths::ME).await.ok();
+                    let Some(me) = read
+                        .as_ref()
+                        .and_then(|v| v["puuid"].as_str())
+                        .filter(|p| !p.is_empty())
+                        .map(str::to_string)
+                    else {
+                        log::log("lol: 读不到自己是谁，不发今天的状态");
+                        return;
+                    };
+                    if let Some(c) = state.lock().unwrap().client.as_mut() {
+                        c.me = Some(me.clone());
+                    }
+                    me
+                }
+            };
+            let deadline = Instant::now() + SUMMARY_WAIT;
+            let list = loop {
+                let late = Instant::now() >= deadline;
+                match lcu.get(&paths::matches(&me, today::GAMES)).await {
+                    // 刚打完的那一局已经在战绩里了（或者这次没有刚打完的）
+                    Ok(list)
+                        if late
+                            || !matches!(ended, Some(id) if !today::listed_ids(&list).contains(&id)) =>
+                    {
+                        break list
+                    }
+                    Err(error) if late => {
+                        log::log(&format!("lol: 读不到自己的战绩，不发今天的状态：{error}"));
+                        return;
+                    }
+                    _ => {}
+                }
+                tokio::time::sleep(SUMMARY_RETRY).await;
+            };
+            // 英雄的名字、模式的名字要客户端的资料（刚连上时还在后台读，最多等 10 秒，读不到就用 id）
+            let mut data = state.lock().unwrap().data.clone();
+            for _ in 0..10 {
+                if data.is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                data = state.lock().unwrap().data.clone();
+            }
+            let date = today::local_date(crate::pushes::now_ms());
+            let Some(push) = today_push(&list, &date, today::local_date, data.as_deref()) else {
+                log::log("lol: 今天还没打过，不发今天的状态");
+                return;
+            };
+            report(today::TITLE_TODAY, task_host.push(push));
+        }));
+    }
+}
+
+/// 今天的状态那条推送：`list` 是我的战绩列表（客户端的原样）。今天还没打过时 None。一天一个 key，
+/// 同一天再推就是更新（内容一样宿主什么都不做）；更新时让悬浮窗再弹一次（它上面已经有这一局的两张卡片了）。
+/// 不给琴音留话（见模块说明）。
+pub(crate) fn today_push(
+    list: &Value,
+    date: &str,
+    date_of: impl Fn(i64) -> String,
+    data: Option<&crate::client::GameData>,
+) -> Option<Push> {
+    let games = history::parse_match_list(list);
+    let todays = today::today_games(&games, date, date_of);
+    if todays.is_empty() {
+        return None;
+    }
+    // 读到的最近 20 局全是今天的：今天可能还有更早的
+    let capped =
+        todays.len() == games.len() && today::listed_ids(list).len() >= today::GAMES as usize;
+    Some(Push {
+        trigger: today::PUSH_TODAY.into(),
+        key: format!("today:{date}"),
+        card: Some(PushCard {
+            title: today::TITLE_TODAY.into(),
+            uri: pages::PAGE_TODAY.into(),
+            params: Value::Null,
+            data: today::today_page(date, &todays, capped, data),
+        }),
+        alert: true,
+        ..Push::default()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// ADR 043 D4：推的两条都在清单 `[[pushes]]` 里（宿主不收没声明的），样子是卡片，要“读客户端数据”，页面是清单里的。
+    /// ADR 043 D4：推的三条都在清单 `[[pushes]]` 里（宿主不收没声明的），样子是卡片，要“读客户端数据”，页面是清单里的。
     #[test]
-    fn both_pushes_are_declared_in_the_manifest() {
+    fn the_card_pushes_are_declared_in_the_manifest() {
         let m = crate::manifest();
-        for (id, title) in [(PUSH_OPENING, TITLE_OPENING), (PUSH_SUMMARY, TITLE_SUMMARY)] {
+        for (id, title) in [
+            (PUSH_OPENING, TITLE_OPENING),
+            (PUSH_SUMMARY, TITLE_SUMMARY),
+            (today::PUSH_TODAY, today::TITLE_TODAY),
+        ] {
             let spec = m.push_spec(id).expect(id);
             assert_eq!(spec.title, title);
             assert_eq!(spec.forms, [kotone_plugin_api::PushForm::Card]);
             assert_eq!(spec.needs, ["client"]);
             assert!(spec.enabled_by_default);
         }
-        assert!(m.page(pages::PAGE_MATCH).is_some() && m.page(pages::PAGE_GAME).is_some());
+        for page in [pages::PAGE_MATCH, pages::PAGE_GAME, pages::PAGE_TODAY] {
+            assert!(
+                m.page(page).is_some_and(|p| p.needs == ["client"]),
+                "{page}"
+            );
+        }
+    }
+
+    /// 战绩列表（客户端的原样，新的在前）：`(id, 开局时间, 英雄, 赢没赢)`；每局 20 分钟。
+    fn match_list(games: &[(i64, i64, i64, bool)]) -> Value {
+        json!({"games": {"games": games.iter().map(|(id, at, champion, win)| json!({
+            "gameId": id, "queueId": 2400, "gameMode": "KIWI", "gameType": "MATCHED_GAME",
+            "gameCreation": at, "gameDuration": 1200,
+            "participants": [{"championId": champion, "stats": {"win": win, "kills": 4, "deaths": 2, "assists": 9}}],
+        })).collect::<Vec<_>>()}})
+    }
+
+    /// 日期按 UTC（测试不依赖本机时区；分界的细节见 `today::tests`）。
+    fn utc(ms: i64) -> String {
+        if ms >= 86_400_000 {
+            "2026-11-26".into()
+        } else {
+            "2026-11-25".into()
+        }
+    }
+
+    /// 今天的状态：一天一个 key、卡片、不给她留话、更新时再弹；同样的战绩推出来一模一样（宿主当成“没变”），
+    /// 多打一局内容才变、key 不变（原地更新）；今天还没打过不推；最近 20 局全是今天的时标出来。
+    #[test]
+    fn the_today_push_is_one_card_per_day_updated_in_place() {
+        let day = 86_400_000;
+        let list = match_list(&[
+            (3, day + 7_200_000, 157, false),
+            (2, day + 3_600_000, 157, false),
+            (1, day - 3_600_000, 103, true),
+        ]);
+        let push = today_push(&list, "2026-11-26", utc, None).expect("今天打过");
+        assert_eq!(push.trigger, "today");
+        assert_eq!(push.key, "today:2026-11-26");
+        assert!(push.note.is_empty(), "不给她留话");
+        assert!(push.alert && push.line.is_none() && push.voice.is_empty());
+        push.check(crate::manifest()).unwrap();
+        let card = push.card.as_ref().unwrap();
+        assert_eq!(card.uri, pages::PAGE_TODAY);
+        assert_eq!(card.title, "今天的状态");
+        assert_eq!(card.data["games"], 2, "昨天那一局不算");
+        assert_eq!(card.data["streak"], -2);
+        assert_eq!(card.data["lostOften"][0]["champion"]["id"], 157);
+        assert_eq!(card.data["capped"], false);
+        // 同样的战绩：一模一样
+        assert_eq!(
+            today_push(&list, "2026-11-26", utc, None).unwrap().card,
+            push.card
+        );
+        // 又打了一局：同一个 key，内容变了
+        let more = match_list(&[
+            (4, day + 9_000_000, 103, true),
+            (3, day + 7_200_000, 157, false),
+            (2, day + 3_600_000, 157, false),
+        ]);
+        let next = today_push(&more, "2026-11-26", utc, None).unwrap();
+        assert_eq!(next.key, push.key);
+        assert_ne!(next.card, push.card);
+        assert_eq!(next.card.as_ref().unwrap().data["streak"], 1);
+        // 第二天还没打：不推
+        assert!(today_push(&list, "2026-11-27", utc, None).is_none());
+        assert!(today_push(&json!({}), "2026-11-26", utc, None).is_none());
+        // 20 局全是今天的：只看了最近 20 局
+        let busy: Vec<(i64, i64, i64, bool)> = (0..20)
+            .map(|i| (100 - i, day + 3_000_000 - i * 60_000, 22, i % 2 == 0))
+            .collect();
+        let capped = today_push(&match_list(&busy), "2026-11-26", utc, None).unwrap();
+        assert_eq!(capped.card.unwrap().data["capped"], true);
     }
     use crate::client::history::{GameRecord, PlayerHistory};
 

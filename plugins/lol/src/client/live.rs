@@ -36,6 +36,10 @@ pub struct LivePlayer {
     pub spell_keys: [String; 2],
     pub items: Vec<LiveItem>,
     pub bot: bool,
+    /// 峡谷里的分路（`TOP` / `JUNGLE` / `MIDDLE` / `BOTTOM` / `UTILITY`）；大乱斗、海斗是 `NONE` 或空。
+    pub position: String,
+    /// `summonerName` 原样（隐藏了身份的人这里是英雄的称号）：只用来在两份数据之间认出同一个人（[`Self::key`]）。
+    pub summoner: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,6 +151,17 @@ impl LivePlayer {
     pub fn hidden_identity(&self) -> bool {
         !self.bot && self.name.trim().is_empty()
     }
+
+    /// 在前后两份局内数据里认出同一个人用的 key（不看英雄：佛耶戈附身时 `rawChampionName` 会变；不看顺序：
+    /// 2026-11-26 录的那把海斗里 `allPlayers` 的顺序变过）。有名字时是 `riotId`；隐藏了身份的人（`riotId` 是 `#`）
+    /// 用队伍 + `summonerName`（录的样子是英雄的称号）。
+    pub fn key(&self) -> String {
+        if self.name.trim().is_empty() {
+            format!("{}/{}", self.team, self.summoner)
+        } else {
+            self.riot_id.clone()
+        }
+    }
 }
 
 pub fn alias_from_raw(raw: &str) -> String {
@@ -211,6 +226,8 @@ fn player(p: &Value) -> LivePlayer {
             })
             .unwrap_or_default(),
         bot: p.get("isBot").and_then(Value::as_bool).unwrap_or(false),
+        position: s(p, "position"),
+        summoner: s(p, "summonerName"),
     }
 }
 

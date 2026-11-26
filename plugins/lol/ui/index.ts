@@ -2,7 +2,7 @@
 // 以及按 `ui://` 地址的页面。宿主在 apps/desktop/src/lib/pluginUi.ts 里登记。
 // 页面都是插件的 MCP App（ADR 039 D5，plugins/lol/app 打成的独立 HTML）：插件页、右侧栏是 fullscreen，聊天卡片是 inline，
 // 在 Kotone 和 Claude 这类宿主里是同一个 App。设置（数据开关、操作客户端）还是宿主里的 Svelte。
-// 原来的两个覆盖层（选英雄、海克斯评分）改成了推送（ADR 043 D7）：选英雄是一张卡片（App 的一页），三选一是一行字。
+// 原来的两个覆盖层（选英雄、海克斯评分）改成了推送（ADR 043 D7）：选英雄、海克斯三选一都是一张卡片（App 的一页）。
 import { Swords } from "@lucide/svelte";
 import type { PluginUi } from "$lib/pluginUi";
 import { sourceEnabled } from "$lib/plugins";
@@ -11,7 +11,8 @@ import LolPage from "./LolPage.svelte";
 import LolSettings from "./LolSettings.svelte";
 import GameSection from "./GameSection.svelte";
 import {
-  PAGE_AUGMENT_OCR, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_GAME, PAGE_MATCH, PAGE_PLAYER, PAGE_TIER,
+  PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_ENEMY_BUILD, PAGE_GAME, PAGE_MATCH, PAGE_PLAYER,
+  PAGE_TIER, PAGE_TODAY,
 } from "./types";
 
 const ui: PluginUi = {
@@ -31,6 +32,9 @@ const ui: PluginUi = {
     // 只在推送里出现的两张卡片（ADR 043 D7）
     [PAGE_CHAMP_SELECT]: { app: true, title: () => m.plugin_lol_page_champ_select() },
     [PAGE_AUGMENT_OCR]: { app: true, title: () => m.plugin_lol_page_augment_ocr() },
+    [PAGE_TODAY]: { app: true, title: () => m.plugin_lol_page_today() },
+    [PAGE_AUGMENT_PICK]: { app: true, title: () => m.plugin_lol_page_augment_pick() },
+    [PAGE_ENEMY_BUILD]: { app: true, title: () => m.plugin_lol_page_enemy_build() },
   },
   toolLabels: {
     "lol.match": () => m.plugin_lol_tool_match(),
@@ -43,6 +47,7 @@ const ui: PluginUi = {
     "lol.client": () => m.plugin_lol_tool_client(),
     "lol.champions": () => m.plugin_lol_tool_champions(),
     "lol.augment_ocr": () => m.plugin_lol_tool_augment_ocr(),
+    "lol.import": () => m.plugin_lol_tool_import(),
   },
 };
 

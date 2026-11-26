@@ -142,4 +142,44 @@ export function sampleGame(gameId: number): GameData {
     ],
   };
 }
+/** 今天的状态（推送 `today` 的数据，页面 `ui://kotone/lol/today`，后端 plugins/lol/src/watcher/auto_cards/today.rs）：
+ * 今天 5 局 2 胜 3 负，现在 2 连败；亚索今天 3 局 1 胜 2 负。`games` = 6 是又打了一局（赢了）以后（原地更新的测试）。 */
+export function sampleToday(games = 5, date = "2026-11-26") {
+  // 新的在前；5 局时没有最前面那一局（拉克丝，赢）
+  const all: [number, boolean][] = [[99, true], [157, false], [103, false], [157, true], [22, true], [157, false]];
+  const list = all.slice(all.length - Math.min(games, all.length));
+  const champion = (id: number) => CHAMPIONS.find((c) => c.id === id)!;
+  const wins = list.filter(([, w]) => w).length;
+  const first = list[0]?.[1];
+  const run = list.findIndex(([, w]) => w !== first);
+  const n = run < 0 ? list.length : run;
+  const yasuo = list.filter(([id]) => id === 157);
+  const yasuoWins = yasuo.filter(([, w]) => w).length;
+  return {
+    date, games: list.length, wins, losses: list.length - wins, streak: list.length ? (first ? n : -n) : 0, capped: false, limit: 20,
+    lostAtLeast: 2,
+    lostOften: yasuo.length - yasuoWins >= 2 ? [{ champion: champion(157), games: yasuo.length, wins: yasuoWins, losses: yasuo.length - yasuoWins }] : [],
+    modes: [{ queueId: 2400, queue: QUEUE, games: list.length - 1, wins: Math.max(0, wins - 1) }, { queueId: 420, queue: "单双排", games: 1, wins: 1 }],
+    recent: list.map(([id, win], i) => ({ gameId: 9_200_000 - i, win, championId: id, kills: win ? 9 : 2, deaths: win ? 3 : 8, assists: 11 })),
+  };
+}
+
+/** 海斗的“这局总结”（推送 `summary` 的数据）：我是我方第一个（`me`、`ally`），每个人 4 个海克斯（名字照客户端的写法，
+ * 有长有短）。 */
+export function sampleSummary(gameId = 9_000_001) {
+  const game = sampleGame(gameId);
+  const pool = [
+    { id: 1018, name: "巨像的勇气", rarity: "kPrismatic", icon: "" }, { id: 1353, name: "坦克引擎", rarity: "kGold", icon: "" },
+    { id: 1136, name: "扇巴掌", rarity: "kSilver", icon: "" }, { id: 3078, name: "鼓声暴起 低音轰鸣", rarity: "kGold", icon: "" },
+    { id: 1048, name: "珠光护手", rarity: "kPrismatic", icon: "" }, { id: 2100, name: "急速之追求", rarity: "kGold", icon: "" },
+    { id: 1112, name: "终极不可阻挡", rarity: "kSilver", icon: "" }, { id: 3086, name: "小蜜蜂！！！", rarity: "kGold", icon: "" },
+  ];
+  return {
+    ...game, justEnded: true,
+    teams: game.teams.map((t, ti) => ({
+      ...t, ally: ti === 0,
+      players: t.players.map((p, i) => ({ ...p, me: ti === 0 && i === 0, augments: [0, 1, 2, 3].map((k) => pool[(i + ti * 3 + k * 2) % pool.length]) })),
+    })),
+  };
+}
 // i18n-ignore-end

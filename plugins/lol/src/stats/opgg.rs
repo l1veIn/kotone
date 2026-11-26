@@ -49,6 +49,82 @@ pub fn position(lane: &str) -> &'static str {
     }
 }
 
+/// 对线指南（只有 OP.GG 有，ADR 043 D8“101 没有的用 OP.GG”）：选人卡片锁定以后的“对线”那块。
+pub const LANE_MATCHUP_TOOL: &str = "lol_get_lane_matchup_guide";
+
+/// `lol_get_lane_matchup_guide` 的参数（`champion_key` 过的英文 id、OP.GG 的分路）。
+pub fn lane_matchup_arguments(my_champion: &str, opponent: &str, position: &str) -> Value {
+    json!({"position": position, "my_champion": my_champion, "opponent_champion": opponent, "lang": "zh_CN"})
+}
+
+/// 对线指南里的几条事实（OP.GG 的原话，插件不加判断）：谁对线占优、谁单杀占优（`me` / `opponent`）、
+/// 建议的打法（OP.GG 的词：`even` 等）、对这个对手的提示（OP.GG 给的原文，常常是英文）。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaneMatchup {
+    pub lane_advantage: Option<&'static str>,
+    pub solo_kill_advantage: Option<&'static str>,
+    pub play_style: Option<String>,
+    pub tip: Option<String>,
+}
+
+impl LaneMatchup {
+    pub fn is_empty(&self) -> bool {
+        self.lane_advantage.is_none()
+            && self.solo_kill_advantage.is_none()
+            && self.play_style.is_none()
+            && self.tip.is_none()
+    }
+}
+
+/// 读 `lol_get_lane_matchup_guide` 回的文字（2026-11-26 实测是一段 JSON：`my_champion` / `opponent_champion` 是
+/// 中文称号，`data.lane_advantage_champion` 等写的也是称号）。读不懂时 None。
+pub fn parse_lane_matchup(text: &str) -> Option<LaneMatchup> {
+    let v: Value = serde_json::from_str(text.trim()).ok()?;
+    let name = |key: &str| {
+        v.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string()
+    };
+    let (me, opponent) = (name("my_champion"), name("opponent_champion"));
+    let data = v.get("data")?;
+    let side = |key: &str| -> Option<&'static str> {
+        let who = data.get(key)?.as_str()?.trim();
+        if who.is_empty() {
+            None
+        } else if who == me {
+            Some("me")
+        } else if who == opponent {
+            Some("opponent")
+        } else {
+            None
+        }
+    };
+    let text_of = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    let tip = text_of("opponent_champion_tip").map(|t| {
+        // 太长的截一下（卡片很窄）；不截半个字
+        let mut out: String = t.chars().take(400).collect();
+        if t.chars().count() > 400 {
+            out.push('…');
+        }
+        out
+    });
+    Some(LaneMatchup {
+        lane_advantage: side("lane_advantage_champion"),
+        solo_kill_advantage: side("lane_solo_kill_advantage_champion"),
+        play_style: text_of("recommended_play_style"),
+        tip,
+    })
+}
+
 /// 连 OP.GG 的配置：`clientInfo` 写 `kotone` 和 Kotone 的版本。
 pub fn config(endpoint: &str, version: &str) -> ServerConfig {
     ServerConfig::http(endpoint)
@@ -149,5 +225,32 @@ mod tests {
         assert_eq!(describe(&McpError::Http(502)), "OP.GG 返回 502 Bad Gateway");
         assert!(describe(&McpError::Connect("dns".into())).starts_with("连不上 OP.GG："));
         assert!(should_reconnect(&McpError::Closed));
+    }
+
+    /// 对线指南（照 2026-11-26 真调的一次：亚索对劫，中路）：谁占优写成 me / opponent，提示原样留着，读不懂的是 None。
+    #[test]
+    fn lane_matchup_facts() {
+        let text = json!({
+            "lang": "zh_CN", "position": "mid", "my_champion": "疾风剑豪", "opponent_champion": "影流之主",
+            "data": {
+                "summary": {"id": 157},
+                "opponent_champion_tip": "Do not stand in range of Zed's Living Shadow (W)!",
+                "lane_solo_kill_advantage_champion": "影流之主",
+                "lane_advantage_champion": "疾风剑豪",
+                "recommended_play_style": "even"
+            }
+        })
+        .to_string();
+        let m = parse_lane_matchup(&text).unwrap();
+        assert_eq!(m.lane_advantage, Some("me"));
+        assert_eq!(m.solo_kill_advantage, Some("opponent"));
+        assert_eq!(m.play_style.as_deref(), Some("even"));
+        assert!(m.tip.unwrap().starts_with("Do not stand"));
+        assert!(parse_lane_matchup("class X {}").is_none());
+        let empty = parse_lane_matchup(&json!({"data": {}}).to_string()).unwrap();
+        assert!(empty.is_empty());
+        let args = lane_matchup_arguments("YASUO", "ZED", "mid");
+        assert_eq!(args["opponent_champion"], "ZED");
+        assert_eq!(args["lang"], "zh_CN");
     }
 }

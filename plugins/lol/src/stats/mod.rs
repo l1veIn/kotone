@@ -267,6 +267,25 @@ impl Stats {
         })
     }
 
+    /// 一个英雄在某一路的克制（`_confront`，难打 / 好打各 5 个和胜率）：选人卡片的禁用建议、英雄池用（和
+    /// [`Stats::champion`] 是同一个地址，缓存共用）。
+    pub async fn matchups(
+        &self,
+        champion: i64,
+        lane: &str,
+    ) -> Result<(Vec<qq101::Matchup>, Vec<qq101::Matchup>), String> {
+        let patch = self.patch().await?;
+        let url = Self::rift_url(
+            &format!("{}_confront", qq101::RIFT),
+            &patch,
+            lane,
+            Some(champion),
+            "",
+        );
+        let v = self.json(&url, TTL_101).await?;
+        Ok(qq101::parse_matchups(&v.value))
+    }
+
     /// 海斗的英雄榜（往前找最近有数据的一天，最多 7 天）。`today`：`YYYYMMDD` 的日期，往前数。
     pub async fn mayhem_champions(
         &self,
@@ -327,9 +346,20 @@ impl Stats {
         for name in ["heroes.json", "augments.json", "hero_augments.json"] {
             files.push(self.aramhex_file(&latest, name).await?);
         }
-        let dataset = Arc::new(aramhex::Dataset::from_json(
-            &latest, &files[0], &files[1], &files[2],
-        ));
+        let mut dataset = aramhex::Dataset::from_json(&latest, &files[0], &files[1], &files[2]);
+        // 海斗出装和召唤师技能（可选的两个文件，16.22 起有；没列出、取不到时照旧只有海克斯）：选人卡片和一键导入用
+        let mut optional = Vec::new();
+        for name in ["core_builds.json", "hero_spells.json"] {
+            optional.push(if latest.files.contains_key(name) {
+                self.aramhex_file(&latest, name)
+                    .await
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            });
+        }
+        dataset.add_builds(&optional[0], &optional[1]);
+        let dataset = Arc::new(dataset);
         if dataset.is_empty() {
             return Err("aramhex-data 的数据是空的".into());
         }

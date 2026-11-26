@@ -21,7 +21,8 @@ import {
   findSampleChampion, sampleChampionList, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift,
 } from "./lolStatsMock";
 import {
-  PAGE_AUGMENT_OCR, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_GAME, PAGE_MATCH, PAGE_PLAYER, PAGE_TIER,
+  PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_ENEMY_BUILD, PAGE_GAME, PAGE_MATCH,
+  PAGE_PLAYER, PAGE_TIER, PAGE_TODAY,
 } from "$plugins/lol/ui/types";
 
 const lol: PluginManifest = {
@@ -74,6 +75,11 @@ const lol: PluginManifest = {
     // 只在推送里出现的两张卡片（ADR 043 D7）
     { uri: PAGE_CHAMP_SELECT, title: lolZh.plugin_lol_page_champ_select, needs: ["stats"] },
     { uri: PAGE_AUGMENT_OCR, title: lolZh.plugin_lol_page_augment_ocr, needs: ["stats"] },
+    // 进房间或排队时的“今天的状态”（ADR 043 B 轮）
+    { uri: PAGE_TODAY, title: lolZh.plugin_lol_page_today, needs: ["client"] },
+    // 海斗三选一的卡片（ADR 043 D7 的 2026-11-26 晚修订）、你阵亡时对面的装备（B 轮）
+    { uri: PAGE_AUGMENT_PICK, title: lolZh.plugin_lol_page_augment_pick, needs: ["stats"] },
+    { uri: PAGE_ENEMY_BUILD, title: lolZh.plugin_lol_page_enemy_build, needs: ["client"] },
     { uri: "ui://kotone/lol/settings", title: lolZh.plugin_lol_tab_settings, needs: [] },
   ],
   agent: { overview: "", rule: "" },
@@ -93,9 +99,17 @@ const lol: PluginManifest = {
   pushes: ([
     ["opening", ["card"], "normal", ["client"]],
     ["summary", ["card"], "normal", ["client"]],
+    ["today", ["card"], "normal", ["client"]],
     ["champ-select", ["card"], "normal", ["client", "stats"]],
-    ["augment-pick", ["line", "voice", "card"], "high", ["stats"]],
-  ] as [string, ("card" | "line" | "voice")[], "high" | "normal", string[]][]).map(([id, forms, priority, needs]) => ({
+    ["augment-pick", ["card", "voice", "line"], "high", ["stats"]],
+    // 对局中的提醒（ADR 043 B 轮第 2 条）
+    ["enemy-ult", ["voice", "line"], "normal", ["client"]],
+    ["enemy-item", ["voice", "line"], "low", ["client"]],
+    ["spell-ready", ["voice", "line"], "normal", ["client"]],
+    ["objective", ["voice", "line"], "normal", ["client"]],
+    ["enemies-down", ["voice", "line"], "high", ["client"]],
+    ["my-death", ["card"], "normal", ["client"]],
+  ] as [string, ("card" | "line" | "voice")[], "high" | "normal" | "low", string[]][]).map(([id, forms, priority, needs]) => ({
     id,
     title: (lolZh as Record<string, string>)[`plugin_lol_push_${id.replace(/-/g, "_")}_title`],
     when: (lolZh as Record<string, string>)[`plugin_lol_push_${id.replace(/-/g, "_")}_when`],
@@ -109,6 +123,7 @@ const lol: PluginManifest = {
   events: ([
     ["first_blood", true], ["dragon_kill", true], ["herald_kill", true], ["baron_kill", true], ["turret_killed", true],
     ["inhib_killed", true], ["ace", true], ["multikill", true], ["my_death", false], ["my_respawn", false],
+    ["level", true], ["item", true],
   ] as [string, boolean][]).map(([name, team]) => ({
     type: `lol.${name}`,
     label: (lolZh as Record<string, string>)[`plugin_lol_event_${name}`],
@@ -205,6 +220,8 @@ const TOOLS: Record<string, MockTool[]> = {
     // 来源标签换来源（ADR 043 D8）：只给页面，写 plugins.lol.settings.sourceFor
     { name: "lol.source", needs: [], visibility: ["app"], page: null },
     { name: "lol.augment_ocr", needs: ["stats"], visibility: ["app"], page: PAGE_AUGMENT_OCR },
+    // 选人卡片上的一键导入（ADR 043 B 轮）：只给页面，要“操作客户端”（默认关）
+    { name: "lol.import", needs: ["client", "control"], visibility: ["app"], page: null },
   ],
   "game-voice": [
     { name: "voice_chat.status", needs: [], visibility: BOTH, page: "ui://kotone/game-voice/home" },
@@ -320,6 +337,18 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
       const card = state === "declined" ? { state } : { state, model: "PP-OCRv5 mobile", sizeMb: state === "ask" ? 21 : 0 };
       return { content: { status: "ok", text: state }, structuredContent: card, ui: { uri: PAGE_AUGMENT_OCR } };
     }
+    case "lol.import": {
+      // 预览里没有客户端：照真的回答写了什么（符文页新建、出装方案写好、召唤师技能换好）
+      // i18n-ignore-start：示例数据
+      const name = "Kotone 亚索 中路";
+      // i18n-ignore-end
+      return { content: {
+        status: "ok", text: "dev:web", champion: 157, name,
+        runes: { result: "created", name },
+        items: { result: "written", name, blocks: 5 },
+        spells: { result: "written", spells: [4, 14] },
+      } };
+    }
     case "lol.client":
       // 预览里没有客户端：照真的回答“现在不在这个阶段”
       return { content: { status: "not_now", text: "dev:web" } };
@@ -383,7 +412,8 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
  * `plugin_apps::tests::app_pages_agree_with_the_frontend` 报错。 */
 const APP_PAGES: Record<string, string> = {
   [PAGE_MATCH]: "client", [PAGE_PLAYER]: "client", [PAGE_GAME]: "client", [PAGE_CHAMPION]: "stats", [PAGE_TIER]: "stats",
-  [PAGE_CHAMP_SELECT]: "stats", [PAGE_AUGMENT_OCR]: "stats",
+  [PAGE_CHAMP_SELECT]: "stats", [PAGE_AUGMENT_OCR]: "stats", [PAGE_TODAY]: "client",
+  [PAGE_AUGMENT_PICK]: "stats", [PAGE_ENEMY_BUILD]: "client",
 };
 /** 预览里代理路径的“密钥”（真的是每次启动随机的 64 位十六进制）。 */
 const MOCK_KEY = "0000feed";

@@ -208,6 +208,18 @@ impl Lcu {
         }
     }
 
+    /// 写：只给“操作客户端”的一键导入用（符文页、出装方案，[`crate::client::loadout`]）。
+    pub async fn put(&self, path: &str, body: &Value) -> Result<Value, LolError> {
+        get_json(
+            self.http
+                .put(format!("{}{path}", self.base))
+                .header("Authorization", &self.authorization)
+                .header("Accept", "application/json")
+                .json(body),
+        )
+        .await
+    }
+
     /// 写：只给“操作客户端”用（选 / 禁英雄的动作）。
     pub async fn patch(&self, path: &str, body: &Value) -> Result<Value, LolError> {
         get_json(

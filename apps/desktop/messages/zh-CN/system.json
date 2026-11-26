@@ -450,7 +450,7 @@
   "system_plugins_risk_later": "以后在插件的「设置」里点“风险和许可”还能再看。",
   "system_plugins_risk_ok": "知道了",
   "system_plugin_pushes_title": "推送",
-  "system_plugin_pushes_desc": "插件在游戏里的这些时候自己发给你，不叫{companion}、不花钱，全都记进聊天。每条可以单独关，内容不能改；想换说法或时机，自己建一个自动化（自动化能订阅同样的事件）。",
+  "system_plugin_pushes_desc": "插件在游戏里的这些时候自己发给你，不叫{companion}、不花对话的钱，全都记进聊天。每条可以单独关，内容不能改；想换说法或时机，自己建一个自动化（自动化能订阅同样的事件）。",
   "system_plugin_push_when": "时机：{when}",
   "system_plugin_push_what": "做什么：{what}",
   "system_plugin_push_form_card": "卡片",

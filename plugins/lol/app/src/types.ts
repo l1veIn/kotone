@@ -383,3 +383,26 @@ export function isTierData(value: unknown): value is TierData {
   const v = value as { mode?: unknown; lanes?: unknown; rows?: unknown } | null;
   return (v?.mode === "rift" && typeof v.lanes === "object" && v.lanes !== null) || (v?.mode === "mayhem" && Array.isArray(v.rows));
 }
+
+// ---------- 今天的状态（推送 `today`，plugins/lol/src/watcher/auto_cards/today.rs 的 today_page） ----------
+
+/** 进房间或排队时的“今天的状态”：只用我自己的战绩。`streak` 正数连胜、负数连败（只数今天的）；`lostOften` 是今天输了
+ * `lostAtLeast` 局以上的英雄；`recent` 是今天每一局（新的在前）；`capped`：读到的最近 `limit` 局全是今天的。 */
+export interface TodayData {
+  date: string;
+  games: number;
+  wins: number;
+  losses: number;
+  streak: number;
+  capped: boolean;
+  limit: number;
+  lostAtLeast: number;
+  lostOften: { champion: Champion; games: number; wins: number; losses: number }[];
+  modes: { queueId: number; queue: string; games: number; wins: number }[];
+  recent: RecentGame[];
+}
+
+export function isTodayData(value: unknown): value is TodayData {
+  const v = value as Partial<TodayData> | null;
+  return !!v && typeof v.date === "string" && typeof v.games === "number" && Array.isArray(v.recent);
+}

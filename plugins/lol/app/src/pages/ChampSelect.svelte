@@ -1,9 +1,10 @@
 <script lang="ts" module>
   import type { SourceId } from "../types";
+  import type { BansBlock, CompBlock, MatchupBlock, MineBlock, PoolBlock, Stage } from "./champ-select/types";
 
   /** 评级（照 AramHex：按国服胜率排名，前 10% S、30% A、60% B、85% C、其余 D；plugins/lol/src/pushes/rules.rs）。 */
   export type Grade = "S" | "A" | "B" | "C" | "D";
-  export interface SelectChampion { id: number; short: string; icon?: string }
+  import type { SelectChampion } from "./champ-select/types";
   /** 选英雄卡片的数据（推送 `champ-select`，后端 plugins/lol/src/pushes/champ_select.rs）。海斗：`rank` 是只按胜率排的名次
    * （共 `total` 个），`grade` 由它换算；备选席按胜率从高到低，`better` 是胜率比我现在的英雄高，`best` 是其中最高的。
    * 峡谷：`lane` + `tier`（腾讯 101 的强度）。`ended`：选英雄结束了（最后推的那一次）。 */
@@ -15,6 +16,15 @@
     /** 数据从哪来（来源标签，ADR 043 D8）：现在两种都是腾讯 101 的榜。 */
     source: SourceId;
     ended?: boolean;
+    /** B 轮（ADR 043）：峡谷选人到哪一步、随着进度长出来的几块（没有的是 null），海斗只有 `mine`。 */
+    stage?: Stage | null;
+    bans?: BansBlock | null;
+    comp?: CompBlock | null;
+    pool?: PoolBlock | null;
+    matchup?: MatchupBlock | null;
+    mine?: MineBlock | null;
+    /** “操作客户端”开着没有（一键导入的按钮）。 */
+    control?: boolean;
   }
   export function isChampSelect(value: unknown): value is ChampSelectData {
     return !!value && typeof value === "object" && Array.isArray((value as ChampSelectData).team) && Array.isArray((value as ChampSelectData).bench);
@@ -31,6 +41,8 @@
   import { onMount } from "svelte";
   import ChampIcon from "../components/ChampIcon.svelte";
   import SourceTag from "../components/SourceTag.svelte";
+  import Draft from "./champ-select/Draft.svelte";
+  import Mine from "./champ-select/Mine.svelte";
   import type { DisplayMode, Session, ToolResult } from "../host";
   import { m } from "../i18n.svelte";
 
@@ -65,17 +77,32 @@
 
   const rate = (value: number | null | undefined) =>
     typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
+  function stageName(stage: Stage): string {
+    switch (stage) {
+      case "planning":
+        return m.plugin_lol_cs_stage_planning();
+      case "banning":
+        return m.plugin_lol_cs_stage_banning();
+      case "picking":
+        return m.plugin_lol_cs_stage_picking();
+      case "locked":
+        return m.plugin_lol_cs_stage_locked();
+      default:
+        return m.plugin_lol_cs_stage_waiting();
+    }
+  }
   const extra = (row: ChampSelectData["team"][number]) =>
     row.tier ? [row.lane, row.tier].filter(Boolean).join(" ")
     : row.rank && panel?.total ? m.plugin_lol_champ_select_rank({ rank: row.rank, total: panel.total }) : "";
 </script>
 
-<div class="app" data-testid="lol-app-champ-select" data-mode={panel?.mode ?? ""} data-ended={panel?.ended ? "true" : "false"}>
+<div class="app" data-testid="lol-app-champ-select" data-mode={panel?.mode ?? ""} data-ended={panel?.ended ? "true" : "false"} data-stage={panel?.stage ?? ""}>
   {#if panel}
     <div class="sel" class:full>
       <div class="card-head">
         <span class="t">{m.plugin_lol_page_champ_select()}</span>
         <span class="sub">{panel.ended ? m.plugin_lol_champ_select_ended() : mayhem ? m.plugin_lol_champ_select_team_mayhem() : m.plugin_lol_champ_select_team_rift()}</span>
+        {#if panel.stage && !panel.ended}<span class="chip stage" data-testid="lol-cs-stage">{stageName(panel.stage)}</span>{/if}
       </div>
       <div class="rows" data-testid="lol-champ-select-team">
         {#each panel.team as row, i (i)}
@@ -104,6 +131,11 @@
         </div>
       {/if}
       <div class="card-foot"><SourceTag id={SOURCES.includes(panel.source) ? panel.source : "qq101"} onLink={session.openLink} /></div>
+      <!-- B 轮的几块：这一步要紧的在前（禁用 / 英雄池 / 对线，一次只有一块），再是我的英雄和一键导入，阵容的数最后
+           （小窗只有屏幕高的 40%，一键导入不压到最底下） -->
+      <Draft bans={panel.bans} pool={panel.pool} matchup={panel.matchup} onLink={session.openLink} />
+      {#if panel.mine}<Mine mine={panel.mine} control={panel.control === true} ended={panel.ended === true} {session} />{/if}
+      <Draft comp={panel.comp} onLink={session.openLink} />
     </div>
   {:else if loaded}
     {#if full}
@@ -221,6 +253,9 @@
   }
   .card-foot {
     padding-top: 8px;
+  }
+  .stage {
+    margin-left: auto;
   }
   @container (max-width: 400px) {
     .row {

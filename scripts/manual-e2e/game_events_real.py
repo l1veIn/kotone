@@ -22,6 +22,11 @@ G6. (ADR 043 D7) champion select → the champ-select card (push `champ-select`,
     card is marked over and a short note for her is appended. The fake client reports the Mayhem queue (2400; so the
     opening / summary cards and, with no local OCR model in the isolated home, the “文字识别模型” question card are
     pushed too); the Mayhem table comes from Tencent 101 (network). Pushes don't pop the floating window (popup off).
+G7. (ADR 043 B round, in-game alerts) at 30 s the enemy Ashe and Jax go from level 5 to 6: Ashe (a global ultimate,
+    “寒冰”) → the push `enemy-ult` (“对面寒冰 6 级了”, voice + line) is in the chat, and `lol.level` events are in
+    game.state's recent events;
+G8. at 34 s the enemy Jax finishes Guardian Angel → the push `enemy-item` (“对面贾克斯出了复活甲”) is in the chat and a
+    `lol.item` event (completed item) is in game.state's recent events. The floating window stays off (bubble off).
 usage: python -X utf8 -I scripts/manual-e2e/game_events_real.py [--probe DIR] [--gamedata DIR]
 """
 import json
@@ -45,6 +50,9 @@ check = bt.check
 
 TIMELINE = [(0, "Lobby"), (8, "ChampSelect"), (16, "InProgress"), (60, "EndOfGame"), (70, "Lobby")]
 LIVE_FROM, LIVE_UNTIL, DRAGON_AT = 22, 60, 40
+# 对局中的提醒（ADR 043 B 轮）：对面都从 5 级升到 6 级的时刻（对面寒冰是全图大招）；对面贾克斯出复活甲的时刻
+LEVEL_AT, ITEM_AT = 30, 34
+GUARDIAN_ANGEL = 3026
 # 选英雄里重随（我和备选席第一个换英雄）的时刻；海斗的队列（选英雄卡片按海斗的胜率表画）
 REROLL_AT, MAYHEM_QUEUE = 12, 2400
 
@@ -105,6 +113,17 @@ class Timeline(lt.Recording):
         if t >= DRAGON_AT:
             events.append({"EventID": 1000, "EventName": "DragonKill", "EventTime": DRAGON_AT - LIVE_FROM,
                            "DragonType": "Fire", "Stolen": "False", "KillerName": self.enemy_name})
+        # 对局中的提醒：对面寒冰、贾克斯 5 → 6 级（只动两个人：game.state 只给最近 8 件事，G4 还要看到拿龙）；
+        # 对面贾克斯出了复活甲
+        mine = next((p["team"] for p in data["allPlayers"]
+                     if p.get("riotId") == data["activePlayer"].get("riotId")), "ORDER")
+        for p in data["allPlayers"]:
+            if p["team"] == mine or not p["rawChampionName"].endswith(("_Ashe", "_Jax")):
+                continue
+            p["level"] = 6 if t >= LEVEL_AT else 5
+            if p["rawChampionName"].endswith("_Jax") and t >= ITEM_AT:
+                p["items"] = p.get("items", []) + [{"itemID": GUARDIAN_ANGEL, "displayName": "守护天使", "count": 1,
+                                                    "slot": 1, "price": 3200}]
         return data
 
 
@@ -129,6 +148,13 @@ def champ_select_cards():
     cid_ = bt.state().get("current") or ""
     msgs = bt.conversation(cid_).get("messages", []) if cid_ else []
     return [m["push"] for m in msgs if m.get("role") == "notice" and (m.get("push") or {}).get("trigger") == "champ-select"]
+
+
+def pushes_of(trigger):
+    """当前对话里某一条推送的 Notice（`push`）。"""
+    cid_ = bt.state().get("current") or ""
+    msgs = bt.conversation(cid_).get("messages", []) if cid_ else []
+    return [m["push"] for m in msgs if m.get("role") == "notice" and (m.get("push") or {}).get("trigger") == trigger]
 
 
 def my_row(push):
@@ -236,6 +262,23 @@ def main():
               json.dumps(run, ensure_ascii=False)[:200] if run else "no run")
         recent = [e["type"] for e in ((game_state().get("playing") or [{}])[0].get("recent") or [])]
         check("G4: game.state lists recent events", "lol.dragon_kill" in recent and "game.phase_changed" in recent, str(recent))
+
+        # 对局中的提醒（ADR 043 B 轮）：对面寒冰到 6 级、对面贾克斯出了复活甲；等级、装备两类事件
+        ult = bt.wait_until(lambda: (pushes_of("enemy-ult") or [None])[0], 20, 1)
+        check("G7: level 6 → the push 对面寒冰 6 级了 (voice + line) is in the chat",
+              ult and "寒冰" in (ult.get("said") or "") and (ult.get("line") or {}).get("cells"),
+              json.dumps(ult, ensure_ascii=False)[:300] if ult else [l for l in log_text().splitlines() if "push:" in l][-5:])
+        item = bt.wait_until(lambda: (pushes_of("enemy-item") or [None])[0], 20, 1)
+        check("G8: Guardian Angel → the push 对面贾克斯出了复活甲 is in the chat",
+              item and "复活甲" in (item.get("said") or "") and (item.get("line") or {}).get("cells"),
+              json.dumps(item, ensure_ascii=False)[:300] if item else [l for l in log_text().splitlines() if "push:" in l][-5:])
+        events = (game_state().get("playing") or [{}])[0].get("recent") or []
+        levels = [e for e in events if e.get("type") == "lol.level"]
+        items = [e for e in events if e.get("type") == "lol.item"]
+        check("G7: lol.level events (enemies reaching 6) are in game.state", levels, json.dumps(events, ensure_ascii=False)[:400])
+        check("G8: a lol.item event (Guardian Angel, completed) is in game.state",
+              any(GUARDIAN_ANGEL == (e.get("data") or {}).get("itemId") for e in items), json.dumps(items, ensure_ascii=False)[:300])
+        print(f"   alerts: {ult and ult.get('said')} / {item and item.get('said')}; {len(levels)} level events, {len(items)} item events")
 
         ended = bt.wait_until(lambda: "game.match_ended" in log_text() or "recap: lol" in log_text(), 40, 1)
         check("G5: EndOfGame → game.match_ended", ended, "")

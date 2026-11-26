@@ -156,6 +156,10 @@ pub struct GameData {
     pub items: HashMap<i64, String>,
     /// 装备图标的客户端路径（`items.json` 的 `iconPath`）。
     pub item_icons: HashMap<i64, String>,
+    /// 装备的总价（`items.json` 的 `priceTotal`，金币）：阵亡时那张卡片按它算对面每个人身上的装备值多少钱。
+    pub item_prices: HashMap<i64, i64>,
+    /// 成装：不再合成别的装备（`to` 是空的）、总价 [`COMPLETED_PRICE`] 以上（`lol.item` 事件只报这些）。
+    pub completed_items: HashSet<i64>,
     pub augments: HashMap<i64, Augment>,
     /// 符文、符文系（[`GameData::add_perks`]；客户端读不到时空）。
     pub perks: HashMap<i64, Perk>,
@@ -180,6 +184,9 @@ fn i(v: &Value, key: &str) -> i64 {
 fn list(v: &Value) -> &[Value] {
     v.as_array().map(Vec::as_slice).unwrap_or(&[])
 }
+
+/// 成装的最低总价（金币）：鞋子、小件、消耗品都在这下面。
+pub const COMPLETED_PRICE: i64 = 2000;
 
 impl GameData {
     /// 五个文件的 JSON（缺哪个就传 `Value::Null`）。
@@ -225,6 +232,19 @@ impl GameData {
                 .iter()
                 .map(|x| (i(x, "id"), s(x, "iconPath")))
                 .filter(|(_, icon)| !icon.is_empty())
+                .collect(),
+            item_prices: list(items)
+                .iter()
+                .map(|x| (i(x, "id"), i(x, "priceTotal")))
+                .filter(|(_, price)| *price > 0)
+                .collect(),
+            completed_items: list(items)
+                .iter()
+                .filter(|x| {
+                    i(x, "priceTotal") >= COMPLETED_PRICE
+                        && list(x.get("to").unwrap_or(&Value::Null)).is_empty()
+                })
+                .map(|x| i(x, "id"))
                 .collect(),
             augments: list(augments)
                 .iter()

@@ -5,8 +5,8 @@
 //! - 几个页面共用一个打包：[`resource`] 在 `<head>` 里插一行 `<meta name="kotone:page" content="<页面>">`，
 //!   App 启动时按它选页面。
 //! - 做成 App 的页面列在 [`APP_PAGES`]：这局、战绩、单局详情、英雄、强度榜，每一页都能单独打开（聊天卡片、
-//!   推送的卡片、`ui.open`、外部宿主的 `resources/read`），打开以后在 App 里自己导航；还有两张只在推送里出现的卡片
-//!   （ADR 043 D7）：选英雄（原来的选英雄覆盖层）、问要不要下载本地文字识别模型。设置页是宿主的 Svelte 页面，不是 App。宿主的 `ui/index.ts`（`app: true`）和浏览器预览的模拟（`pluginsMock.ts`）要和这里一致，
+//!   推送的卡片、`ui.open`、外部宿主的 `resources/read`），打开以后在 App 里自己导航；还有几张只在推送里出现的卡片
+//!   （ADR 043 D7）：选英雄（原来的选英雄覆盖层）、问要不要下载本地文字识别模型、进房间时的今天的状态（B 轮）、海斗三选一、你阵亡时对面的装备（B 轮）。设置页是宿主的 Svelte 页面，不是 App。宿主的 `ui/index.ts`（`app: true`）和浏览器预览的模拟（`pluginsMock.ts`）要和这里一致，
 //!   桌面端的测试 `plugin_apps::tests::app_pages_agree_with_the_frontend` 管着。
 //! - 每一页要的数据开关照清单 `pages` 的 `needs`（这局、战绩、单局详情要“读客户端数据”，英雄、强度榜要
 //!   “用网上的统计”），宿主读资源前查（`plugin_apps::read`）。
@@ -17,8 +17,8 @@
 
 use kotone_plugin_api::{Csp, Resource};
 
-use crate::pages::{PAGE_GAME, PAGE_MATCH, PAGE_PLAYER};
-use crate::pushes::{PAGE_AUGMENT_OCR, PAGE_CHAMP_SELECT};
+use crate::pages::{PAGE_GAME, PAGE_MATCH, PAGE_PLAYER, PAGE_TODAY};
+use crate::pushes::{PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_ENEMY_BUILD};
 use crate::stats_tools::{PAGE_CHAMPION, PAGE_TIER};
 
 include!(concat!(env!("OUT_DIR"), "/app_bundle.rs"));
@@ -36,6 +36,9 @@ pub const APP_PAGES: &[&str] = &[
     PAGE_TIER,
     PAGE_CHAMP_SELECT,
     PAGE_AUGMENT_OCR,
+    PAGE_TODAY,
+    PAGE_AUGMENT_PICK,
+    PAGE_ENEMY_BUILD,
 ];
 
 /// CommunityDragon：客户端资源的公开镜像（英雄头像、图标），客户端没开或在别的宿主里时用。
@@ -104,6 +107,9 @@ mod tests {
             (PAGE_TIER, "tier"),
             (PAGE_CHAMP_SELECT, "champ-select"),
             (PAGE_AUGMENT_OCR, "augment-ocr"),
+            (PAGE_TODAY, "today"),
+            (PAGE_AUGMENT_PICK, "augment-pick"),
+            (PAGE_ENEMY_BUILD, "enemy-build"),
         ] {
             let r = resource(uri).expect("是 App");
             crate::manifest().check_resource(&r).unwrap();

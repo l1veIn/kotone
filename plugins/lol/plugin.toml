@@ -33,7 +33,7 @@ risk = "OP.GG 还没回复同意 Kotone 用它的数据（github.com/opgginc/opg
 [[sources]]
 id = "control"
 name = "操作客户端"
-description = "照 LeagueAkari 操作英雄联盟客户端：自动接受对局、按你排好的顺序自动选 / 禁英雄；你说了才让她替你接受对局、选或禁某个英雄。读和写都只走客户端自己的本机接口，不读游戏内存、不注入。要“读客户端数据”也开着。"
+description = "照 LeagueAkari 操作英雄联盟客户端：自动接受对局、按你排好的顺序自动选 / 禁英雄；你说了才让她替你接受对局、选或禁某个英雄；选英雄卡片上点“一键导入”才写符文页、出装方案和召唤师技能。读和写都只走客户端自己的本机接口，不读游戏内存、不注入。要“读客户端数据”也开着。"
 enabled_by_default = false
 risk = "外服有人用了自动接受、自动选英雄后被永久封号（LeagueAkari 的 github.com/LeagueAkari/LeagueAkari/issues/523），国服也可能违反腾讯的用户协议。默认关，打开就是你自己决定承担这个风险。"
 
@@ -106,6 +106,23 @@ uri = "ui://kotone/lol/augment-ocr"
 title = "文字识别模型"
 needs = ["stats"]
 
+# 只在推送里出现：进房间或排队时的“今天的状态”（ADR 043 B 轮第 3 条，只用自己的战绩）
+[[pages]]
+uri = "ui://kotone/lol/today"
+title = "今天的状态"
+needs = ["client"]
+
+# 只在推送里出现：海斗三选一的卡片（ADR 043 D7 的 2026-11-26 晚修订）、你阵亡时对面的装备（B 轮）
+[[pages]]
+uri = "ui://kotone/lol/augment-pick"
+title = "海克斯三选一"
+needs = ["stats"]
+
+[[pages]]
+uri = "ui://kotone/lol/enemy-build"
+title = "对面的装备"
+needs = ["client"]
+
 [[pages]]
 uri = "ui://kotone/lol/settings"
 title = "设置"
@@ -163,7 +180,16 @@ needs = ["client"]
 id = "summary"
 title = "这局总结"
 when = "结算、拿到这局的结果"
-what = "发一张这局总结的卡片（单局详情），给她留一句很短的说明"
+what = "发一张这局总结的卡片（单局详情；海斗、斗魂竞技场还列出对面每个人的海克斯），给她留一句很短的说明"
+forms = ["card"]
+needs = ["client"]
+
+# 进房间或排队时（ADR 043 B 轮第 3 条）：只用自己的战绩，只说事实；不给她留话（一天里一直在变，留一句很快就过时了）
+[[pushes]]
+id = "today"
+title = "今天的状态"
+when = "进房间或排队时（今天打过才有）"
+what = "发一张卡片：今天几胜几负、现在几连胜 / 连败、今天输了 2 局以上的英雄；一天一张，打完一局回到房间时原地更新"
 forms = ["card"]
 needs = ["client"]
 
@@ -172,7 +198,7 @@ needs = ["client"]
 id = "champ-select"
 title = "选英雄"
 when = "选英雄时，开始和每次换英雄、重随"
-what = "发一张卡片：海斗是我方 5 人的评级和胜率、备选席里比你现在高的，峡谷是每个人这个位置的强度；同一次选英雄原地更新，结束时给她留一句很短的说明"
+what = "发一张卡片：峡谷是每个人这个位置的强度，预选后可以禁的、阵容的数、轮到你时你的英雄池、锁定后的对线，和你这个英雄的符文、出装、加点、召唤师技能（能一键导入）；海斗是我方 5 人的评级和胜率、备选席里比你现在高的、你这个英雄最好的海克斯和出装；同一次选英雄原地更新，结束时给她留一句很短的说明"
 forms = ["card"]
 needs = ["client", "stats"]
 
@@ -180,12 +206,61 @@ needs = ["client", "stats"]
 id = "augment-pick"
 title = "海克斯三选一"
 when = "海斗对局里三选一出现、每次刷新"
-what = "一行三格，左 / 中 / 右各一个判断：首选 / 可选 / 可刷新（照 AramHex 的规则）；卡片刚出现、最好的那张变了时她说一句“中间那个”。要用本地文字识别：没装时问一句要不要下载"
-forms = ["line", "voice", "card"]
-# 那一行在悬浮窗里一直留到三张卡片没了（Host::push_done），不是几秒就收起
-until_done = true
+what = "发一张卡片，三张从左到右各一个判断：首选 / 可选 / 可刷新（照 AramHex 的规则），刷新了原地更新；卡片刚出现、最好的那张变了时她说一句“中间那个”。要用本地文字识别：没装时问一句要不要下载，用不了时一行说清楚原因"
+forms = ["card", "voice", "line"]
 priority = "high"
 needs = ["stats"]
+
+# 对局中的提醒（ADR 043 B 轮第 2 条）：都从局内接口来，只说事实、说法固定；谁先说、20 秒冷却由宿主管
+[[pushes]]
+id = "enemy-ult"
+title = "对面到 6 级"
+when = "对面全图或远距离大招的英雄（卡牌、梦魇、潘森、慎、死歌、寒冰、EZ……）、峡谷里你的对线对手到 6 级"
+what = "她说一句“对面卡牌 6 级了”，显示一行"
+forms = ["voice", "line"]
+needs = ["client"]
+
+[[pushes]]
+id = "enemy-item"
+title = "对面的关键装备"
+when = "对面出了复活甲、中娅沙漏、水银、女妖面纱；你玩回血的英雄时对面出了重伤装备"
+what = "她说一句“对面亚索出了复活甲”，显示一行"
+forms = ["voice", "line"]
+priority = "low"
+needs = ["client"]
+
+[[pushes]]
+id = "spell-ready"
+title = "技能转好了"
+when = "你或她记下的召唤师技能转好了（对局里说“对面中单闪了”她就会记）"
+what = "她说一句“中单闪现好了”，显示一行"
+forms = ["voice", "line"]
+needs = ["client"]
+
+[[pushes]]
+id = "objective"
+title = "资源快刷了"
+when = "峡谷里小龙、远古龙、虚空巢虫、峡谷先锋、大龙刷新前 30 秒（照这个赛季的刷新时间）"
+what = "她说一句“30 秒后小龙刷新”，显示一行"
+forms = ["voice", "line"]
+needs = ["client"]
+
+[[pushes]]
+id = "enemies-down"
+title = "对面阵亡"
+when = "对面同时死了 3 个以上"
+what = "她说一句“对面死了 3 个，最快 18 秒复活”，显示一行"
+forms = ["voice", "line"]
+priority = "high"
+needs = ["client"]
+
+[[pushes]]
+id = "my-death"
+title = "你阵亡时"
+when = "你阵亡时"
+what = "发一张卡片：对面每个人的等级、KDA、装备（按装备总价排），上次你阵亡以后新出的标出来；一局一张，每次阵亡原地更新"
+forms = ["card"]
+needs = ["client"]
 
 # 游戏中心的事（ADR 036 D4）：lol 适配器报给游戏中心的局内事件，自动化按它们触发、保存时按这里校验，
 # game.state 和自动化编辑里的选择也从这里来。都来自局内接口（事件列表和玩家列表），要“读客户端数据”开着。
@@ -257,6 +332,27 @@ data.respawnSeconds = "多少秒后复活"
 type = "lol.my_respawn"
 label = "我复活了"
 needs = ["client"]
+
+# 等级、装备（ADR 043 B 轮）：局内接口的事件列表里没有，插件比前后两份局内数据得出。只报对面和自己：等级是自己每升一级、
+# 对面到 6 / 11 / 16 级；装备是成装（不再合成别的、总价 2000 以上），同一个人同一件只报一次
+[[events]]
+type = "lol.level"
+label = "升级了"
+needs = ["client"]
+data.team = "哪一边：ally（我方，只有自己）/ enemy（对面）"
+data.champion = "英雄"
+data.level = "现在几级"
+data.me = "是不是自己"
+
+[[events]]
+type = "lol.item"
+label = "出了一件成装"
+needs = ["client"]
+data.team = "哪一边：ally（我方，只有自己）/ enemy（对面）"
+data.champion = "英雄"
+data.itemId = "装备 id（局内接口原样，海斗的装备前面多两位）"
+data.item = "装备的名字"
+data.me = "是不是自己"
 
 [agent]
 overview = "英雄联盟里查这局玩家的战绩、查任何人的战绩、记对面交的召唤师技能，查英雄的强度、克制、出装和海斗海克斯"

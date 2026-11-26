@@ -193,11 +193,16 @@ export function sampleTierMayhem(): TierMayhem {
  * 评级和插件（plugins/lol/src/pushes/champ_select.rs、pushes/rules.rs）算出来的一样：海斗榜 172 个英雄，前 10% S、30% A、60% B、85% C。
  * `me`：我现在是谁（重随以后换了：测试看卡片原地更新）。 */
 // i18n-ignore-start：示例数据
-export function sampleChampSelect(mode: "mayhem" | "rift" = "mayhem", me = "艾瑞莉娅", ended = false) {
+export function sampleChampSelect(
+  mode: "mayhem" | "rift" = "mayhem", me = "艾瑞莉娅", ended = false,
+  /** B 轮（ADR 043）：峡谷选人到哪一步（卡片长出对应的几块）、“操作客户端”开没开；不给时和 A 轮一样只有我方那几行。 */
+  options: { stage?: "planning" | "banning" | "waiting" | "picking" | "locked"; control?: boolean; mine?: boolean } = {},
+) {
   const champ = (id: number, short: string) => ({ id, short, icon: `/lol-game-data/assets/v1/champion-icons/${id}.png` });
+  const blocks = sampleChampSelectBlocks(mode, options, champ);
   if (mode === "rift") {
     return {
-      mode: "rift", source: "qq101", ended, bench: [],
+      mode: "rift", source: "qq101", ended, bench: [], ...blocks,
       team: [
         { champion: champ(157, "亚索"), me: false, lane: "中路", tier: "T1", winRate: 0.5023 },
         { champion: champ(39, me), me: true, lane: "上路", tier: "T0", winRate: 0.5231 },
@@ -211,7 +216,7 @@ export function sampleChampSelect(mode: "mayhem" | "rift" = "mayhem", me = "艾�
     ? { champion: champ(39, "艾瑞莉娅"), me: true, winRate: 0.5212, rank: 31, grade: "A" }
     : { champion: champ(901, me), me: true, winRate: 0.5302, rank: 6, grade: "S" };
   return {
-    mode: "mayhem", source: "qq101", total: 172, ended,
+    mode: "mayhem", source: "qq101", total: 172, ended, ...blocks,
     team: [
       mine,
       { champion: champ(223, "塔姆"), me: false, winRate: 0.5384, rank: 1, grade: "S" },
@@ -236,3 +241,100 @@ export function sampleChampSelect(mode: "mayhem" | "rift" = "mayhem", me = "艾�
   };
   // i18n-ignore-end
 }
+
+/** 选英雄卡片 B 轮的几块（后端 plugins/lol/src/pushes/champ_select.rs）：峡谷照选人的进度长（预选 / 禁用 → 可以禁的；
+ * 轮到你 → 英雄池；锁定 → 对线），我方 3 个人选了就有阵容，有英雄就有“我的英雄”；海斗只有“我的英雄”（aramhex-data）。 */
+// i18n-ignore-start：示例数据
+function sampleChampSelectBlocks(
+  mode: "mayhem" | "rift",
+  options: { stage?: "planning" | "banning" | "waiting" | "picking" | "locked"; control?: boolean; mine?: boolean },
+  champ: (id: number, short: string) => { id: number; short: string; icon: string },
+) {
+  const stage = options.stage;
+  if (!stage && !options.mine) return {};
+  const item = (id: number, name: string) => ({ id, name, icon: `/lol-game-data/assets/v1/items/${id}.png` });
+  const spell = (id: number, name: string) => ({ id, name, icon: "" });
+  const rune = (id: number, name: string) => ({ id, name, icon: "" });
+  const control = options.control === true;
+  if (mode === "mayhem") {
+    return {
+      control,
+      mine: {
+        champion: champ(39, "艾瑞莉娅"), lane: null, locked: true, source: "aramhex", patch: "16.23",
+        runes: null, skills: null,
+        augments: [
+          { id: 1001, name: "泰坦的坚决", rarity: "kPrismatic", icon: "", delta: 4.2, games: 3000 },
+          { id: 1002, name: "尖端发明家", rarity: "kGold", icon: "", delta: 2.8, games: 1800 },
+          { id: 1003, name: "恶魔之舞", rarity: "kSilver", icon: "", delta: 1.1, games: 900 },
+        ],
+        items: [
+          { kind: "core", items: [item(3153, "破败王者之刃"), item(6333, "死亡之舞"), item(2517, "破舰者")], winRate: 0.5727, pickRate: 0.0296 },
+          { kind: "core", items: [item(3153, "破败王者之刃"), item(3078, "三相之力"), item(6333, "死亡之舞")], winRate: 0.5214, pickRate: 0.0339 },
+        ],
+        spells: [spell(4, "闪现"), spell(32, "标记")], spellsWinRate: 0.5101,
+        importable: { runes: false, items: true, spells: true },
+      },
+    };
+  }
+  const locked = stage === "locked";
+  const out: Record<string, unknown> = {
+    stage: stage ?? "waiting", control, bans: null, pool: null, matchup: null,
+    mine: {
+      champion: champ(39, "艾瑞莉娅"), lane: "上路", locked, source: "qq101", patch: "16.23",
+      runes: {
+        styles: [rune(8000, "精密"), rune(8400, "坚决")],
+        perks: [rune(8010, "征服者"), rune(9111, "凯旋"), rune(9104, "传说：欢欣"), rune(8299, "最后的抵抗"),
+          rune(8444, "复苏"), rune(8473, "骸骨镀层"), rune(5005, "攻击速度"), rune(5008, "适应之力"), rune(5001, "生命值")],
+        winRate: 0.4758, pickRate: 0.4527,
+      },
+      items: [
+        { kind: "starting", items: [item(1055, "多兰之刃"), item(2003, "生命药水")], winRate: 0.5127, pickRate: 0.8044 },
+        { kind: "boots", items: [item(3047, "铁板靴"), item(3111, "水银之靴")], winRate: null, pickRate: null },
+        { kind: "core", items: [item(3153, "破败王者之刃"), item(6672, "海妖杀手"), item(6333, "死亡之舞")], winRate: 0.5806, pickRate: 0.181 },
+        { kind: "late", items: [item(3026, "守护天使"), item(3143, "兰顿之兆"), item(3053, "斯特拉克的挑战护手")], winRate: null, pickRate: null },
+      ],
+      skills: { priority: ["Q", "E", "W"], order: ["Q", "E", "W", "Q", "Q", "R"] },
+      spells: [spell(4, "闪现"), spell(12, "传送")], spellsWinRate: 0.5053,
+      augments: [],
+      importable: { runes: true, items: true, spells: true },
+    },
+    comp: {
+      source: "client",
+      ally: { count: 4, physical: 4, magic: 0, mixed: 0, frontline: 0, cc: 1, melee: 3, ranged: 1, flags: ["all_physical", "no_frontline"] },
+      enemy: stage === "picking" || locked
+        ? { count: 3, physical: 1, magic: 2, mixed: 0, frontline: 1, cc: 2, melee: 1, ranged: 2, flags: [] }
+        : null,
+    },
+  };
+  if (stage === "planning" || stage === "banning") {
+    out.bans = {
+      lane: "上路", against: champ(39, "艾瑞莉娅"), source: "qq101",
+      list: [
+        { champion: champ(266, "亚托克斯"), reason: "counter", winRate: 0.4461 },
+        { champion: champ(58, "雷克顿"), reason: "counter", winRate: 0.4552 },
+        { champion: champ(62, "孙悟空"), reason: "counter", winRate: 0.4612 },
+        { champion: champ(875, "瑟提"), reason: "strong", tier: "T0", winRate: 0.5281, banRate: 0.21 },
+        { champion: champ(86, "盖伦"), reason: "strong", tier: "T1", winRate: 0.5162, banRate: 0.08 },
+      ],
+    };
+  }
+  if (stage === "picking") {
+    out.pool = {
+      lane: "上路", source: "qq101", against: [champ(266, "亚托克斯"), champ(103, "阿狸"), champ(222, "金克丝")],
+      list: [
+        { champion: champ(86, "盖伦"), games: 6, wins: 4, good: [{ champion: champ(266, "亚托克斯"), winRate: 0.5381 }], bad: [], tier: "T1", winRate: 0.5162 },
+        { champion: champ(39, "艾瑞莉娅"), games: 9, wins: 5, good: [], bad: [{ champion: champ(266, "亚托克斯"), winRate: 0.4455 }], tier: "T1", winRate: 0.5023 },
+        { champion: champ(122, "德莱厄斯"), games: 3, wins: 1, good: [], bad: [], tier: "T2", winRate: 0.4987 },
+      ],
+    };
+  }
+  if (locked) {
+    out.matchup = {
+      me: champ(39, "艾瑞莉娅"), opponent: champ(266, "亚托克斯"), lane: "上路", guessed: true,
+      laneAdvantage: "opponent", soloKillAdvantage: "me", playStyle: "even",
+      tip: "Dodge Darkin Blade (Q) sweet spots and fight when his Q is on cooldown.", source: "opgg", url: "https://op.gg",
+    };
+  }
+  return out;
+}
+// i18n-ignore-end

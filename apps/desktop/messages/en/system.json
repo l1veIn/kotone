@@ -450,7 +450,7 @@
   "system_plugins_risk_later": "You can see this again any time from \"Risks and licenses\" in the plugin's Settings.",
   "system_plugins_risk_ok": "Got it",
   "system_plugin_pushes_title": "Pushes",
-  "system_plugin_pushes_desc": "The plugin sends you these by itself at these moments in a game. {companion} isn't asked and nothing is spent, and every one is recorded in the chat. Each can be turned off on its own; the content can't be changed. To change the wording or the timing, make your own automation (automations can listen to the same events).",
+  "system_plugin_pushes_desc": "The plugin sends you these by itself at these moments in a game. {companion} isn't asked and no chat tokens are spent, and every one is recorded in the chat. Each can be turned off on its own; the content can't be changed. To change the wording or the timing, make your own automation (automations can listen to the same events).",
   "system_plugin_push_when": "When: {when}",
   "system_plugin_push_what": "What: {what}",
   "system_plugin_push_form_card": "Card",

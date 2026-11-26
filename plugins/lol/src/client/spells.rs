@@ -96,6 +96,11 @@ impl SpellTracker {
     pub fn is_empty(&self) -> bool {
         self.uses.is_empty()
     }
+
+    /// 记下的全部（对局中的提醒看哪个转好了）。
+    pub fn all(&self) -> &[SpellUse] {
+        &self.uses
+    }
 }
 
 /// 聊天里的叫法：闪现说“闪”，其余照原名。

@@ -20,12 +20,14 @@ use crate::client::GameData;
 pub const PAGE_MATCH: &str = "ui://kotone/lol/match";
 pub const PAGE_PLAYER: &str = "ui://kotone/lol/player";
 pub const PAGE_GAME: &str = "ui://kotone/lol/game";
+/// 今天的状态（只在推送里出现的卡片：进房间或排队时，`watcher/auto_cards/today.rs`）。
+pub const PAGE_TODAY: &str = "ui://kotone/lol/today";
 pub const PAGE_SETTINGS: &str = "ui://kotone/lol/settings";
 
 /// 页面里每个人最多带几局近况（这局页面上一排小格子）。
 const RECENT: usize = 10;
 
-fn champion(data: Option<&GameData>, id: i64) -> Value {
+pub(crate) fn champion(data: Option<&GameData>, id: i64) -> Value {
     let icon = assets::champion_icon(id);
     match data.and_then(|d| d.champion(id)) {
         Some(c) => {
@@ -139,7 +141,7 @@ fn ranks(h: Option<&PlayerHistory>) -> Value {
     })
 }
 
-fn queue(data: Option<&GameData>, id: i64, mode: &str) -> String {
+pub(crate) fn queue(data: Option<&GameData>, id: i64, mode: &str) -> String {
     data.and_then(|d| d.queue_name(id))
         .map(str::to_string)
         .unwrap_or_else(|| crate::client::text::mode_name(mode).to_string())
@@ -1119,5 +1121,163 @@ mod tests {
         assert_eq!(v["teams"][1]["ally"], true);
         assert_eq!(v["teams"][1]["players"][0]["me"], true);
         assert_eq!(v["teams"][0]["ally"], false);
+    }
+
+    /// 客户端的海克斯资料（`cherry-augments.json` 的字段）：录的那一把里对面用到的几个，名字、稀有度、图标照录的。
+    fn augment_data() -> GameData {
+        let rows = [
+            (
+                1018,
+                "巨像的勇气",
+                "kPrismatic",
+                "Cherry/Augments/Icons/CourageOfTheColossus_small.png",
+            ),
+            (
+                1353,
+                "坦克引擎",
+                "kGold",
+                "Cherry/Augments/Icons/Tank_Engine_Small.png",
+            ),
+            (
+                1136,
+                "扇巴掌",
+                "kSilver",
+                "Cherry/Augments/Icons/SlapAround_small.png",
+            ),
+            (
+                1301,
+                "神圣干预",
+                "kGold",
+                "Cherry/Augments/Icons/SlowActingPainkillers_small.png",
+            ),
+            (
+                3078,
+                "鼓声暴起 低音轰鸣",
+                "kGold",
+                "Kiwi/Augments/Icons/TheBoomAndTheBass_small.png",
+            ),
+        ];
+        let augments: Vec<Value> = rows
+            .iter()
+            .map(|(id, name, rarity, icon)| {
+                json!({"id": id, "nameTRA": name, "rarity": rarity,
+                       "augmentSmallIconPath": format!("/lol-game-data/assets/ASSETS/UX/{icon}")})
+            })
+            .collect();
+        GameData::from_json(
+            &Value::Null,
+            &Value::Null,
+            &Value::Null,
+            &Value::Array(augments),
+            &Value::Null,
+        )
+    }
+
+    /// 海斗、斗魂竞技场的单局详情里每个人都带海克斯（ADR 043 B 轮第 3 条：这局总结上列出对面每个人的）。字段和 id 照
+    /// `target/lol-probe/20261123-210745` 录的那一把海斗（`stats.playerAugment1`–`6`，没选的格子是 0；名字换成编的）：
+    /// 按选的顺序、空格不列，名字 / 稀有度 / 图标来自客户端的资料；资料里没有的照样列出 id。峡谷的详情没有这几个字段：空的。
+    #[test]
+    fn mayhem_details_carry_every_players_augments_in_pick_order() {
+        let stats = |win: bool, augments: [i64; 6]| {
+            let mut st = json!({"win": win, "kills": 3, "deaths": 4, "assists": 20});
+            for (n, a) in augments.iter().enumerate() {
+                st[format!("playerAugment{}", n + 1)] = json!(a);
+            }
+            st["playerSubteamId"] = json!(0);
+            st
+        };
+        let detail = json!({
+            "gameId": 7, "queueId": 2400, "gameMode": "KIWI", "gameDuration": 1014, "gameCreation": 5,
+            "participantIdentities": [
+                {"participantId": 1, "player": {"gameName": "我", "tagLine": "1", "puuid": "me"}},
+                {"participantId": 6, "player": {"gameName": "对手甲", "tagLine": "2", "puuid": "e1"}},
+                {"participantId": 7, "player": {"gameName": "对手乙", "tagLine": "3", "puuid": "e2"}}
+            ],
+            "participants": [
+                {"participantId": 1, "teamId": 100, "championId": 68, "stats": stats(true, [1156, 2132, 1318, 1180, 0, 0])},
+                {"participantId": 6, "teamId": 200, "championId": 412, "stats": stats(false, [1018, 1353, 1136, 1301, 0, 0])},
+                {"participantId": 7, "teamId": 200, "championId": 432, "stats": stats(false, [1058, 3086, 1087, 3078, 0, 0])}
+            ]
+        });
+        let data = augment_data();
+        let v = game_page_for(&detail, Some(&data), Some("me")).unwrap();
+        let enemies = &v["teams"][1];
+        assert_eq!(enemies["ally"], false);
+        let first = enemies["players"][0]["augments"].as_array().unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|a| a["id"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            [1018, 1353, 1136, 1301],
+            "按选的顺序，0 不列"
+        );
+        assert_eq!(first[0]["name"], "巨像的勇气");
+        assert_eq!(first[0]["rarity"], "kPrismatic");
+        assert_eq!(
+            first[0]["icon"],
+            "/lol-game-data/assets/ASSETS/UX/Cherry/Augments/Icons/CourageOfTheColossus_small.png"
+        );
+        assert!(crate::client::assets::normalize(first[0]["icon"].as_str().unwrap()).is_ok());
+        let second = enemies["players"][1]["augments"].as_array().unwrap();
+        assert_eq!(second.len(), 4);
+        assert_eq!(second[3]["name"], "鼓声暴起 低音轰鸣");
+        // 资料里没有的（这份测试资料只放了几个）：照样列出 id，名字空，页面显示 id
+        assert_eq!(second[0]["id"], 1058);
+        assert_eq!(second[0]["name"], "");
+        // 我方（我）也有
+        assert_eq!(
+            v["teams"][0]["players"][0]["augments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        // 峡谷：没有海克斯
+        let rift = json!({"gameId": 8, "queueId": 420, "gameMode": "CLASSIC", "gameDuration": 1800,
+            "participants": [{"participantId": 1, "teamId": 100, "championId": 157, "stats": {"win": true, "perk0": 8010}}]});
+        let v = game_page_for(&rift, Some(&data), None).unwrap();
+        assert_eq!(v["teams"][0]["players"][0]["augments"], json!([]));
+    }
+
+    /// 本机有录的那一把（`target/lol-probe/20261123-210745`，开发机上才有，CI 跳过）：两边 10 个人每人 4 个海克斯，
+    /// 名字都从录的客户端资料里查得到。
+    #[test]
+    fn the_recorded_mayhem_detail_has_four_named_augments_per_player() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/lol-probe");
+        let read = |p: &str| {
+            std::fs::read_to_string(root.join(p))
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        };
+        let (Some(detail), Some(augments)) = (
+            read("20261123-210745/lcu-game-detail.json"),
+            read("gamedata/cherry-augments.json"),
+        ) else {
+            return;
+        };
+        let data = GameData::from_json(
+            &Value::Null,
+            &Value::Null,
+            &Value::Null,
+            &augments,
+            &Value::Null,
+        );
+        let v = game_page(&detail, Some(&data)).unwrap();
+        let players: Vec<&Value> = v["teams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|t| t["players"].as_array().unwrap())
+            .collect();
+        assert_eq!(players.len(), 10);
+        for p in players {
+            let list = p["augments"].as_array().unwrap();
+            assert_eq!(list.len(), 4, "{}", p["champion"]["id"]);
+            assert!(
+                list.iter().all(|a| !a["name"].as_str().unwrap().is_empty()),
+                "{list:?}"
+            );
+        }
     }
 }

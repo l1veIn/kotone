@@ -903,6 +903,10 @@ impl LolPlugin {
             crate::tools::TOOL_AUGMENT_OCR => {
                 return Ok(self.augment_ocr_tool(host, arguments).await)
             }
+            // 选人卡片上的一键导入（ADR 043 B 轮）：自己查“操作客户端”和“读客户端数据”
+            crate::tools::TOOL_IMPORT => {
+                return Ok(self.import_tool(host.as_ref(), arguments).await)
+            }
             _ => {}
         }
         if !enabled(host.as_ref()) {
@@ -1263,6 +1267,11 @@ impl LolPlugin {
     }
 
     /// 这局的对局 id（不在对局里时 None）。
+    /// 记下的召唤师技能（`lol.spell`，你或她说了才记）：对局中的提醒看哪个转好了（ADR 043 B 轮）。
+    pub(crate) fn spell_uses(&self) -> Vec<SpellUse> {
+        self.state().tracker.all().to_vec()
+    }
+
     pub(crate) fn current_game_id(&self) -> Option<i64> {
         self.state().current.as_ref().map(|m| m.game_id)
     }

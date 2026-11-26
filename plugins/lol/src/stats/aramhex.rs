@@ -101,6 +101,30 @@ pub struct Cell {
     pub wins: i64,
 }
 
+/// 海斗的一套核心三件（`core_builds.json`：先后做出的前三件传说装备，已按推荐顺序排好，每个英雄最多 3 套）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreBuild {
+    pub items: Vec<i64>,
+    pub games: i64,
+    pub wins: i64,
+    /// 胜率（0..1，文件里的 `win`）。
+    pub win_rate: f64,
+    /// 选用率（0..1，文件里的 `pick`）。
+    pub pick_rate: f64,
+}
+
+/// 海斗的一组召唤师技能（`hero_spells.json`：键是按数字排好的 `a+b`）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpellPair {
+    pub spells: [i64; 2],
+    pub games: i64,
+    pub wins: i64,
+    pub win_rate: f64,
+    pub low_sample: bool,
+}
+
 /// 读好的一份数据。
 #[derive(Debug, Clone, Default)]
 pub struct Dataset {
@@ -110,6 +134,10 @@ pub struct Dataset {
     pub heroes: HashMap<i64, Hero>,
     pub augments: HashMap<i64, Augment>,
     pub cells: HashMap<i64, HashMap<i64, Cell>>,
+    /// 海斗出装（`core_builds.json`，可选文件：16.22 起才有；没有时空，[`Dataset::add_builds`]）。
+    pub core_builds: HashMap<i64, Vec<CoreBuild>>,
+    /// 海斗的召唤师技能（`hero_spells.json`，可选文件）。
+    pub spells: HashMap<i64, Vec<SpellPair>>,
 }
 
 fn i(v: &Value, key: &str) -> i64 {
@@ -182,7 +210,82 @@ impl Dataset {
                     ))
                 })
                 .collect(),
+            core_builds: HashMap::new(),
+            spells: HashMap::new(),
         }
+    }
+
+    /// 加上两个可选文件：`core_builds.json`（英雄 → `[{items, games, wins, win, pick}]`）和 `hero_spells.json`
+    /// （英雄 → `{"4+32": {games, wins, win_rate, low_sample}}`）。读不懂的跳过；缺的文件传 `Value::Null`。
+    /// 照 aramhex-data 的 AGENTS.md（“文件格式”一节）。选人卡片的海斗出装和一键导入用（ADR 043 B 轮）。
+    pub fn add_builds(&mut self, core_builds: &Value, spells: &Value) {
+        let obj = |v: &Value| v.as_object().cloned().unwrap_or_default();
+        self.core_builds = obj(core_builds)
+            .iter()
+            .filter_map(|(k, list)| {
+                let builds: Vec<CoreBuild> = list
+                    .as_array()?
+                    .iter()
+                    .filter_map(|b| {
+                        let items: Vec<i64> = b
+                            .get("items")?
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| match x {
+                                Value::String(s) => s.parse().ok(),
+                                other => other.as_i64(),
+                            })
+                            .filter(|x: &i64| *x > 0)
+                            .collect();
+                        (!items.is_empty()).then(|| CoreBuild {
+                            items,
+                            games: i(b, "games"),
+                            wins: i(b, "wins"),
+                            win_rate: f(b, "win"),
+                            pick_rate: f(b, "pick"),
+                        })
+                    })
+                    .collect();
+                (!builds.is_empty()).then(|| (id(k).unwrap_or(0), builds))
+            })
+            .filter(|(k, _)| *k > 0)
+            .collect();
+        self.spells = obj(spells)
+            .iter()
+            .filter_map(|(k, row)| {
+                let mut pairs: Vec<SpellPair> = row
+                    .as_object()?
+                    .iter()
+                    .filter_map(|(pair, c)| {
+                        let (a, b) = pair.split_once('+')?;
+                        let (mut a, mut b): (i64, i64) =
+                            (a.trim().parse().ok()?, b.trim().parse().ok()?);
+                        // 闪现（4）放前面（和 101 的一样，照 Akari）
+                        if b == 4 && a != 4 {
+                            std::mem::swap(&mut a, &mut b);
+                        }
+                        Some(SpellPair {
+                            spells: [a, b],
+                            games: i(c, "games"),
+                            wins: i(c, "wins"),
+                            win_rate: f(c, "win_rate"),
+                            low_sample: c
+                                .get("low_sample")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        })
+                    })
+                    .collect();
+                // 用的人最多的在前（固定规则：照选用的局数排，一样多时照编号）
+                pairs.sort_by(|x, y| y.games.cmp(&x.games).then(x.spells.cmp(&y.spells)));
+                Some((id(k)?, pairs)).filter(|(_, p)| !p.is_empty())
+            })
+            .collect();
+    }
+
+    /// 这个英雄海斗里用得最多的召唤师技能（闪现放前面）；没有数据时 None。
+    pub fn top_spells(&self, hero: i64) -> Option<&SpellPair> {
+        self.spells.get(&hero)?.first()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -326,5 +429,46 @@ mod tests {
         assert_eq!(d.best_for(39, 5, 100).len(), 1);
         assert_eq!(d.augment_by_name("泰坦的 坚决"), Some(1001));
         assert!(attribution(&d).contains("CC BY-NC 4.0"));
+        assert!(
+            d.core_builds.is_empty() && d.spells.is_empty(),
+            "两个可选文件没加时是空的"
+        );
+    }
+
+    /// 海斗出装和召唤师技能（照 2026-11-26 的 `patches/16.23/normal` 里艾瑞莉娅那几行的样子）：核心三件照文件的顺序，
+    /// 召唤师技能按局数排、用得最多的在前；读不懂的跳过。
+    #[test]
+    fn core_builds_and_spells_for_mayhem() {
+        let mut d = Dataset::from_json(&latest(), &json!({}), &json!({}), &json!({}));
+        d.add_builds(
+            &json!({
+                "39": [
+                    {"games": 33719, "items": ["3153", "6333", "2517"], "ordered": true, "pick": 0.0296, "win": 0.5727, "wins": 19313},
+                    {"games": 38698, "items": ["3153", "3078", "6333"], "ordered": true, "pick": 0.0339, "win": 0.5214, "wins": 20178},
+                    {"games": 1, "items": [], "win": 0.5}
+                ],
+                "x": [{"items": ["1"]}],
+                "157": "坏的"
+            }),
+            &json!({
+                "39": {
+                    "1+4": {"games": 339, "low_sample": true, "win_rate": 0.4719, "wins": 160},
+                    "4+32": {"games": 52000, "low_sample": false, "win_rate": 0.5101, "wins": 26525},
+                    "14+4": {"games": 9000, "low_sample": false, "win_rate": 0.49, "wins": 4410},
+                    "坏": {"games": 1}
+                }
+            }),
+        );
+        let builds = &d.core_builds[&39];
+        assert_eq!(builds.len(), 2, "没装备的那一条跳过");
+        assert_eq!(builds[0].items, [3153, 6333, 2517]);
+        assert!((builds[0].win_rate - 0.5727).abs() < 1e-9);
+        assert_eq!(d.core_builds.len(), 1, "id 不是数字的、不是列表的跳过");
+        let top = d.top_spells(39).unwrap();
+        assert_eq!(top.spells, [4, 32]);
+        assert_eq!(top.games, 52000);
+        assert_eq!(d.spells[&39].len(), 3);
+        assert_eq!(d.spells[&39][2].spells, [4, 1], "闪现放前面");
+        assert!(d.top_spells(157).is_none());
     }
 }

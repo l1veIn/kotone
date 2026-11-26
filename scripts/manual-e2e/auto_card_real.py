@@ -11,15 +11,19 @@ pops up (ADR 043 D6: the message pop-up merged into it; in normal use it is excl
 
 Checks:
 C0. typed “你好，一句话就行” (agent_send = typed in the chat page) → one real model turn: the conversation the cards go to;
-C1. champion select → no auto card;
-C2. loading → one “开局战绩” card (ui://kotone/lol/match, key opening:<gameId>) at the end of that conversation, followed by
-    the note for her (source auto-card, untrusted data attachment); the messages before it are byte-identical (prefix);
+C1. champion select → no 开局战绩 yet; the only cards are the champ-select card (ADR 043 D7: pushed during champ select)
+    and, in Mayhem with no local OCR model in the isolated home, the “文字识别模型” question card;
+C2. loading → one “开局战绩” card (ui://kotone/lol/match, key opening:<gameId>) in that conversation, followed by
+    the note for her (source auto-card, untrusted data attachment); the messages before the first push are
+    byte-identical (prefix);
 C3. the floating window pops up (visible, topmost, WS_EX_NOACTIVATE) and the foreground window did not change;
     a screenshot of just that window goes to target/plugin-shots/round7/message-popup-real.png. If Windows reports a
     fullscreen app in front (the pop-up is then skipped by design) this is reported, not failed;
 C4. EndOfGame → one “这局总结” card (ui://kotone/lol/game, justEnded) within 60 s;
-C5. back in the lobby: still exactly two cards (no repeats);
-C6. usage.jsonl: posting the cards added no entries at all (no model call, nothing spent);
+C5. back in the lobby: no repeats — one card per key, exactly one 开局战绩 and one 这局总结 (B round: also the
+    champ-select card, the OCR question, the in-game alerts' lines);
+C6. usage.jsonl: posting the pushes made no model call; the only entries are her voice reading the voice pushes'
+    fixed short sentences (kind tts — B round's in-game alerts: “对面寒冰 6 级了”), whose cost is printed;
 C7. typed “刚才英雄联盟发来的卡片说了什么？一句话” → her next turn (one more model call) answers from the notes.
 usage: python -X utf8 -I scripts/manual-e2e/auto_card_real.py [--probe DIR] [--gamedata DIR]
 """
@@ -147,18 +151,24 @@ def main():
         print(f"   foreground before the match: {describe(foreground)} (Kotone pid {app.pid})")
         lt.REC.t0 = time.time()
         bt.wait_until(lambda: ge.lol_phase() == "pre_match", 20, 1)
-        time.sleep(4)
+        # 选英雄卡片要先取腾讯 101 / aramhex 的数据（第一次 4–6 秒，网络）：等它来，最多到选人结束
+        bt.wait_until(lambda: any(c["card"]["key"].startswith("champ-select:") for _, c in cards_in(main_id)[1])
+                      or ge.lol_phase() != "pre_match", 10, 0.5)
         _, picked = cards_in(main_id)
-        check("C1: champion select → no auto card", not picked and "push: lol" not in log_text(), str(picked)[:200])
+        keys = [c["card"]["key"] for _, c in picked]
+        check("C1: champion select → only the champ-select card (and the OCR question), no 开局战绩 yet",
+              any(k.startswith("champ-select:") for k in keys)
+              and all(k.startswith("champ-select:") or k == "augment-ocr" for k in keys), keys)
 
         def opening():
             msgs, cards = cards_in(main_id)
-            return (msgs, cards) if cards else None
+            found = [(i, c) for i, c in cards if c["card"]["key"].startswith("opening:")]
+            return (msgs, cards, found[0]) if found else None
         got = bt.wait_until(opening, 40, 1)
-        check("C2: loading → an auto card in the conversation", got, log_text()[-600:])
+        check("C2: loading → the 开局战绩 push in the conversation", got, log_text()[-600:])
         if got:
-            msgs, cards = got
-            index, card = cards[0]
+            msgs, cards, (index, card) = got
+            first_push = min(i for i, _ in cards)
             info = card["card"]
             check("C2: it is 开局战绩 on ui://kotone/lol/match from lol",
                   info.get("plugin") == "lol" and info.get("title") == "开局战绩"
@@ -169,9 +179,9 @@ def main():
                   note.get("role") == "user" and note.get("source") == "auto-card" and note.get("attachments"),
                   json.dumps(note, ensure_ascii=False)[:300])
             print(f"   note: {json.dumps(note.get('attachments'), ensure_ascii=False)[:300]}")
-            check("C2: the messages before it are unchanged (prefix)",
+            check("C2: the messages before the first push are unchanged (prefix)",
                   json.dumps(msgs[:len(before)], ensure_ascii=False) == json.dumps(before, ensure_ascii=False)
-                  and index == len(before), f"{index} vs {len(before)}")
+                  and first_push == len(before), f"{first_push} vs {len(before)}")
 
         # C3：悬浮窗弹出来（原来的消息提示）
         shown = bt.wait_until(lambda: (lambda w: w if w and w[1] else None)(popup_window()), 10, 0.5)
@@ -205,12 +215,19 @@ def main():
             print(f"   summary note: {json.dumps(bt.conversation(main_id)['messages'][-1].get('attachments'), ensure_ascii=False)[:300]}")
         bt.wait_until(lambda: ge.lol_phase() == "menu", 30, 1)
         time.sleep(4)
-        _, cards = cards_in(main_id)
-        check("C5: exactly two cards in the match", len(cards) == 2, [c["card"]["key"] for _, c in cards])
+        msgs, cards = cards_in(main_id)
+        keys = [c["card"]["key"] for _, c in cards]
+        check("C5: no repeats: one card per key, one 开局战绩 and one 这局总结",
+              len(keys) == len(set(keys)) and sum(k.startswith("opening:") for k in keys) == 1
+              and sum(k.startswith("summary:") for k in keys) == 1, keys)
         first_card = min((c["atMs"] for _, c in cards), default=0)
         late = [e for e in bt.ledger() if first_card and e.get("atMs", 0) >= first_card]
-        check("C6: posting the cards made no model call or anything else billed (usage.jsonl unchanged)",
-              ledger_count() == spent and not late, f"{spent} → {ledger_count()}; after the first card: {late}")
+        voiced = [m["push"].get("said") for m in msgs if m.get("role") == "notice" and (m.get("push") or {}).get("said")]
+        tts = [e for e in late if e.get("kind") == "tts"]
+        check("C6: posting the pushes made no model call (the only entries are her voice reading the voice pushes)",
+              len(late) == len(tts) and len(tts) <= len(voiced), f"{spent} → {ledger_count()}; after the first card: {late}")
+        print(f"   voice pushes said: {voiced}; tts entries {len(tts)}, "
+              f"cost {sum(e.get('cost', 0) for e in tts):.4f} {tts[0].get('currency', '') if tts else ''}")
 
         # C7：她下一轮看得到
         ask = "刚才英雄联盟发来的卡片说了什么？一句话"

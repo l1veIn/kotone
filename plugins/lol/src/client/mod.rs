@@ -12,6 +12,7 @@
 //!
 //! [`assets`]：页面要的图（素材层，ADR 039 D6）：磁盘缓存 → 客户端 → CommunityDragon，只放行三个前缀下的图片。
 //! [`abilities`]：英雄技能的名字和图标路径（英雄页加点那块）：客户端 → 磁盘缓存 → CommunityDragon 的英雄资料。
+//! [`loadout`]：一键导入（“操作客户端”开着时）：经客户端的本机接口写符文页、出装方案、召唤师技能。
 
 pub mod abilities;
 pub mod assets;
@@ -21,6 +22,7 @@ pub mod gamedata;
 pub mod history;
 pub mod http;
 pub mod live;
+pub mod loadout;
 pub mod scout;
 pub mod spells;
 pub mod text;

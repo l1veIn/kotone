@@ -1,12 +1,15 @@
 <script lang="ts">
   // 单局详情（`ui://kotone/lol/game`，`lol.game` 的页面，只给页面用；docs/design/lol-app.md 第三节 3，调研 G29、G34）。
   // 全屏：标题行（刚结束的小牌、胜利 / 失败、模式、时长、开局时间）；两队各一块（我方 / 对面，看别人的对局时是胜方 / 负方、
-  // 灰边条），表头有击杀、伤害合计；每人一行 44 px（有海克斯 52 px）：英雄（右下英雄等级）· 技能 · 符文 · 名字（点开看战绩）·
-  // KDA · 伤害条（按这一局最高伤害）· 承伤 · 经济 · 补刀 · 装备 6 + 1（下面一排海克斯）。我那一行淡蓝底 + “我”。
-  // 卡片（inline）“这局总结”（自动卡片、`justEnded`）：我这一局的数 + 两队每人一格（头像、K/D/A、伤害短条）。
+  // 灰边条），表头有击杀、伤害合计；每人一行 44 px：英雄（右下英雄等级）· 技能 · 符文 · 名字（点开看战绩）·
+  // KDA · 伤害条（按这一局最高伤害）· 承伤 · 经济 · 补刀 · 装备 6 + 1。我那一行淡蓝底 + “我”。海斗、斗魂竞技场每队下面
+  // 一块“海克斯”：一人一行，图标 + 名字（AugmentRows，ADR 043 B 轮第 3 条）。
+  // 卡片（inline）“这局总结”（推送、`justEnded`）：我这一局的数 + 两队每人一格（头像、K/D/A、伤害短条）；有海克斯的模式
+  // 再加一块“海克斯”，先显示对面每个人的，点“我方”换成我方的（讨论记录第二节：“再加一行对面每个人的海克斯”）。
   // 只写算出来的事实（“全队第 1”），不评价人。
   import { onMount } from "svelte";
   import Augment from "../components/Augment.svelte";
+  import AugmentRows from "./game/AugmentRows.svelte";
   import ChampIcon from "../components/ChampIcon.svelte";
   import Footer from "../components/Footer.svelte";
   import Icon from "../components/Icon.svelte";
@@ -96,6 +99,12 @@
   /** 刚结束：数据里写着（自动卡片），或者从“这局”结算的“看这局详情”点进来。 */
   const justEnded = $derived(!!game?.justEnded || args.justEnded === true);
   const minutes = $derived(Math.max(1, (game?.durationS ?? 60) / 60));
+  const hasAugments = (t: GameTeam) => t.players.some((p) => p.augments.length > 0);
+  /** 有海克斯的队（对面在前）；没有海克斯的模式是空的，整块不显示。 */
+  const augTeams = $derived([...teams.filter((t) => t !== mine), ...(mine ? [mine] : [])].filter(hasAugments));
+  /** 卡片里“海克斯”那块显示哪一队（默认对面）。 */
+  let augTeamId = $state<number | null>(null);
+  const augShown = $derived(augTeams.find((t) => t.teamId === augTeamId) ?? augTeams[0] ?? null);
 
   const side = (t: GameTeam) => (!mine ? "neutral" : t === mine ? "ally" : "enemy");
   const teamName = (t: GameTeam) =>
@@ -144,7 +153,7 @@
             {#each t.players as p, i (p.puuid || i)}
               {@const k = kdaOf(p.kills, p.deaths, p.assists)}
               {@const [nm, tag] = splitRiotId(p.riotId)}
-              <div class="grid row stripe" class:me={p.me} class:augs={p.augments.length > 0} data-testid="lol-game-player"
+              <div class="grid row stripe" class:me={p.me} data-testid="lol-game-player"
                 title={m.plugin_lol_game_more({ taken: num(p.taken), gold: num(p.gold), cs: p.cs })}>
                 <span class="pics">
                   <ChampIcon id={p.champion.id} icon={p.champion.icon} name={p.champion.short} size={32} level={p.level} />
@@ -164,10 +173,15 @@
                 <span class="r num muted xcol">{p.cs}</span>
                 <span class="gear">
                   <Items items={p.items} size={20} />
-                  {#if p.augments.length}<span class="aug-row">{#each p.augments as a (a.id)}<Augment augment={a} size={18} />{/each}</span>{/if}
                 </span>
               </div>
             {/each}
+            {#if hasAugments(t)}
+              <div class="team-augs">
+                <p class="aug-t">{m.plugin_lol_augments_title()}</p>
+                <AugmentRows players={t.players} side={side(t)} />
+              </div>
+            {/if}
           </section>
         {/each}
       {:else if loading}
@@ -219,6 +233,22 @@
           </span>
         </div>
       {/each}
+      {#if augShown}
+        <div class="card-augs" data-testid="lol-card-augments" data-side={side(augShown)}>
+          <div class="aug-head">
+            <span class="aug-t">{m.plugin_lol_augments_title()}</span>
+            {#if augTeams.length > 1}
+              <span class="seg" role="group" aria-label={m.plugin_lol_augments_title()}>
+                {#each augTeams as t (t.teamId)}
+                  <button type="button" aria-pressed={t === augShown} data-testid="lol-card-augments-side" data-side={side(t)}
+                    onclick={() => (augTeamId = t.teamId)}>{teamName(t)}</button>
+                {/each}
+              </span>
+            {/if}
+          </div>
+          <AugmentRows players={augShown.players} side={side(augShown)} />
+        </div>
+      {/if}
       <Footer card sources={[{ id: "client" }]} onLink={session.openLink} />
     {:else if error}
       <p class="card-line danger" role="alert">{m.plugin_lol_failed({ error })}</p>
@@ -299,9 +329,6 @@
     min-height: var(--lol-row-list);
     padding-top: 4px;
     padding-bottom: 4px;
-  }
-  .row.augs {
-    min-height: 52px;
   }
   .row + .row {
     border-top: 1px solid var(--lol-line);
@@ -388,9 +415,34 @@
     display: grid;
     gap: 2px;
   }
-  .aug-row {
+  /* 海克斯（全屏每队下面、卡片最后一块） */
+  .team-augs {
+    padding: 4px 0 6px;
+    border-top: 1px solid var(--lol-line);
+  }
+  .aug-t {
+    margin: 0;
+    font-size: var(--lol-fs-xs);
+    font-weight: var(--lol-fw-medium);
+    color: var(--lol-text-2);
+  }
+  .team-augs .aug-t {
+    padding: 2px 12px 2px 14px;
+  }
+  .card-augs {
+    margin-top: 2px;
+    padding-top: 4px;
+    box-shadow: inset 0 1px 0 var(--lol-line);
+  }
+  .aug-head {
     display: flex;
-    gap: 2px;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 0 12px;
+  }
+  .aug-head .seg {
+    margin-left: auto;
   }
   .wide {
     display: contents;

@@ -26,6 +26,8 @@ pub const TOOL_SHOUT: &str = "lol.shout";
 pub const TOOL_SOURCE: &str = "lol.source";
 /// 只给页面用：海克斯三选一要的本地文字识别模型，卡片上的“下载 / 不用”（ADR 043 D7）。
 pub const TOOL_AUGMENT_OCR: &str = "lol.augment_ocr";
+/// 只给页面用：选人卡片上的“一键导入”（符文页、出装方案、召唤师技能；要“操作客户端”开着，ADR 043 B 轮）。
+pub const TOOL_IMPORT: &str = "lol.import";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -169,6 +171,14 @@ source 是来源。存在插件设置里，下次打开页面、她查的时候�
         .needs(&["stats"])
         .app_only()
         .page(crate::pushes::PAGE_AUGMENT_OCR),
+        ToolSpec::new(
+            TOOL_IMPORT,
+            "一键导入（选人卡片上的按钮）：把选人卡片上“我的英雄”那份——峡谷是腾讯 101 这一路的符文、出装、召唤师技能，海斗是 aramhex-data 的核心三件和召唤师技能（没有符文）——经客户端的本机接口写进去：符文页（改上次导入的那页，没有就新建，满了换掉当前页）、这个英雄的出装方案、召唤师技能（闪现照你原来放的那边）。只在选英雄时、“操作客户端”开着时；返回每一样写成了什么。",
+            json!({"type": "object", "additionalProperties": false, "properties": {}}),
+        )
+        .needs(&["client", "control"])
+        .side_effects(&["controls-game-client"])
+        .app_only(),
     ]
 }
 
@@ -219,7 +229,8 @@ mod tests {
                 TOOL_SHOUT,
                 TOOL_CHAMPIONS,
                 TOOL_SOURCE,
-                TOOL_AUGMENT_OCR
+                TOOL_AUGMENT_OCR,
+                TOOL_IMPORT
             ]
         );
         for s in &specs {
@@ -227,7 +238,7 @@ mod tests {
             assert_eq!(s.for_app(), s.name != TOOL_SHOUT, "{}", s.name);
             let needs: &[&str] = match s.name.as_str() {
                 TOOL_CHAMPION | TOOL_TIER | TOOL_AUGMENT_OCR => &["stats"],
-                TOOL_CLIENT => &["client", "control"],
+                TOOL_CLIENT | TOOL_IMPORT => &["client", "control"],
                 TOOL_CHAMPIONS | TOOL_SOURCE => &[],
                 _ => &["client"],
             };
@@ -235,7 +246,12 @@ mod tests {
             // 读到别人写的字的都按不可信数据
             let trusted = matches!(
                 s.name.as_str(),
-                TOOL_CLIENT | TOOL_CHAMPIONS | TOOL_SHOUT | TOOL_SOURCE | TOOL_AUGMENT_OCR
+                TOOL_CLIENT
+                    | TOOL_CHAMPIONS
+                    | TOOL_SHOUT
+                    | TOOL_SOURCE
+                    | TOOL_AUGMENT_OCR
+                    | TOOL_IMPORT
             );
             assert_eq!(s.untrusted, !trusted, "{}", s.name);
         }
@@ -249,7 +265,7 @@ mod tests {
         for s in specs.iter().filter(|s| {
             !matches!(
                 s.name.as_str(),
-                TOOL_GAME | TOOL_CHAMPIONS | TOOL_SOURCE | TOOL_AUGMENT_OCR
+                TOOL_GAME | TOOL_CHAMPIONS | TOOL_SOURCE | TOOL_AUGMENT_OCR | TOOL_IMPORT
             )
         }) {
             assert!(s.instant && s.for_model(), "{}", s.name);
@@ -266,6 +282,10 @@ mod tests {
         let ocr = specs.iter().find(|s| s.name == TOOL_AUGMENT_OCR).unwrap();
         assert!(!ocr.for_model() && ocr.for_app());
         assert_eq!(ocr.page.as_deref(), Some(crate::pushes::PAGE_AUGMENT_OCR));
+        // 一键导入只给页面（卡片上的按钮），要“操作客户端”，副作用和 lol.client 一样
+        let import = specs.iter().find(|s| s.name == TOOL_IMPORT).unwrap();
+        assert!(!import.for_model() && import.for_app());
+        assert_eq!(import.side_effects, ["controls-game-client"]);
         assert_eq!(specs[2].page.as_deref(), Some(PAGE_MATCH));
     }
 }
