@@ -964,7 +964,7 @@ unsafe fn desktop_shell_execute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elevation::{process_integrity, INTEGRITY_HIGH, INTEGRITY_MEDIUM};
+    use crate::elevation::{process_integrity, INTEGRITY_MEDIUM};
     use std::time::{Duration, Instant};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -980,6 +980,22 @@ mod tests {
                 eprintln!("[unelevated test] 跳过：{e}");
                 None
             }
+        }
+    }
+
+    /// 以桌面为父进程起的子进程拿的是桌面外壳的令牌：完整性级别和桌面一样，桌面是普通权限（平常的电脑）时就是普通
+    /// （Medium）。GitHub 的 Windows 机器上用户是管理员、关了 UAC，桌面本身就是 High，子进程照样是 High（没有更低的令牌可拿）。
+    fn assert_desktop_integrity(level: Option<u32>, desktop: u32) {
+        let desktop_level = process_integrity(desktop).expect("读得到桌面的完整性级别");
+        let level = level.expect("读得到完整性级别");
+        assert_eq!(
+            level, desktop_level,
+            "完整性级别 {level:#x}，桌面是 {desktop_level:#x}"
+        );
+        if desktop_level == INTEGRITY_MEDIUM {
+            assert_eq!(level, INTEGRITY_MEDIUM, "降到了普通权限");
+        } else {
+            eprintln!("[unelevated test] 桌面本身是 {desktop_level:#x}（关了 UAC 的管理员），只比对和桌面一样");
         }
     }
 
@@ -1114,7 +1130,7 @@ mod tests {
         assert_eq!(child.wait().await.unwrap().code(), Some(0));
     }
 
-    /// 强制走“以桌面为父进程”：管道进出、退出码、环境变量、工作目录、父进程是桌面、完整性级别是普通（Medium）。
+    /// 强制走“以桌面为父进程”：管道进出、退出码、环境变量、工作目录、父进程是桌面、完整性级别和桌面一样（平常是普通 Medium）。
     #[tokio::test]
     async fn desktop_parent_keeps_pipes_exit_code_env_and_runs_at_medium() {
         let Some(desktop) = desktop_or_skip() else {
@@ -1145,9 +1161,7 @@ mod tests {
         assert!(job.is_some(), "放进作业对象");
         let pid = child.id().unwrap();
         assert_eq!(parent_of(pid), Some(desktop), "父进程是桌面");
-        let level = process_integrity(pid).expect("读得到完整性级别");
-        assert!(level < INTEGRITY_HIGH, "完整性级别 {level:#x}");
-        assert_eq!(level, INTEGRITY_MEDIUM);
+        assert_desktop_integrity(process_integrity(pid), desktop);
 
         let mut stdin = child.stdin.take().unwrap();
         stdin.write_all(b"xyz from stdin\r\n").await.unwrap();
@@ -1267,7 +1281,7 @@ mod tests {
         );
     }
 
-    /// 完全脱离地以桌面为父进程启动：父进程是桌面、普通权限、拿得到 PID。
+    /// 完全脱离地以桌面为父进程启动：父进程是桌面、权限和桌面一样（平常是普通）、拿得到 PID。
     #[test]
     fn detached_under_desktop_is_unelevated() {
         let Some(desktop) = desktop_or_skip() else {
@@ -1277,14 +1291,14 @@ mod tests {
             spawn_detached_under_desktop(&cmd_exe(), &["/d", "/c", "ping -n 3 127.0.0.1 >nul"])
                 .unwrap();
         assert_eq!(parent_of(pid), Some(desktop));
-        assert_eq!(process_integrity(pid), Some(INTEGRITY_MEDIUM));
+        assert_desktop_integrity(process_integrity(pid), desktop);
         // SAFETY: 句柄有效。
         unsafe {
             let _ = TerminateProcess(raw(&process), 0);
         }
     }
 
-    /// 让桌面打开：起一个没有窗口的 wscript（JScript 只睡几秒），看它的父进程是桌面、完整性级别是普通。
+    /// 让桌面打开：起一个没有窗口的 wscript（JScript 只睡几秒），看它的父进程是桌面、完整性级别和桌面一样（平常是普通）。
     /// 不弹窗、不抢焦点；`//E:JScript` 指定引擎（.js 常被关联给编辑器）；这台电脑没有 wscript 就跳过。
     #[test]
     fn desktop_shell_execute_starts_things_unelevated() {
@@ -1326,6 +1340,6 @@ mod tests {
             .args(["/F", "/PID", &pid.to_string()])
             .output();
         assert_eq!(parent, Some(desktop), "是桌面起的");
-        assert_eq!(level, Some(INTEGRITY_MEDIUM));
+        assert_desktop_integrity(level, desktop);
     }
 }

@@ -383,14 +383,33 @@ mod tests {
         assert!(r.output.chars().count() < text::OUTPUT_LIMIT_CHARS + 100);
     }
 
+    /// `whoami /groups` 里的完整性级别（`S-1-16-<级别>`：组名随系统语言变，SID 不变）。
+    fn integrity_levels_in(output: &str) -> Vec<u32> {
+        output
+            .split("S-1-16-")
+            .skip(1)
+            .filter_map(|rest| {
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+            .collect()
+    }
+
     /// 以桌面为父进程（Kotone 是管理员时走的路，这里强制走）：标准输入进去的命令、UTF-8 输出、退出码照旧，
-    /// `whoami /groups` 里是普通权限（Medium Mandatory Level = S-1-16-8192）。没有桌面（CI）就跳过。
+    /// `whoami /groups` 里的完整性级别和桌面一样——平常的电脑上桌面是普通权限（Medium Mandatory Level = S-1-16-8192）；
+    /// GitHub 的 Windows 机器上用户是管理员、关了 UAC，桌面本身就是 High（S-1-16-12288），PowerShell 照样是 High。
+    /// 没有桌面（CI 的服务会话）就跳过。
     #[tokio::test]
     async fn runs_unelevated_through_the_desktop() {
-        if let Err(e) = unelevated::desktop_pid() {
-            eprintln!("[shell test] 跳过：{e}");
-            return;
-        }
+        let desktop = match unelevated::desktop_pid() {
+            Ok(pid) => pid,
+            Err(e) => {
+                eprintln!("[shell test] 跳过：{e}");
+                return;
+            }
+        };
+        let desktop_level = kotone_platform_windows::elevation::process_integrity(desktop)
+            .expect("读得到桌面的完整性级别");
         let dir = cwd();
         let r = run_with(
             r#"Write-Output '中文输出'; & "$env:SystemRoot\System32\whoami.exe" /groups /fo csv; exit 4"#,
@@ -404,8 +423,15 @@ mod tests {
         assert!(r.in_job, "{r:?}");
         assert_eq!(r.exit_code, Some(4), "{r:?}");
         assert!(r.output.contains("中文输出"), "{r:?}");
-        assert!(r.output.contains("S-1-16-8192"), "{r:?}");
-        assert!(!r.output.contains("S-1-16-12288"), "{r:?}");
+        assert_eq!(integrity_levels_in(&r.output), [desktop_level], "{r:?}");
+        if desktop_level == kotone_platform_windows::elevation::INTEGRITY_MEDIUM {
+            assert!(r.output.contains("S-1-16-8192"), "{r:?}");
+            assert!(!r.output.contains("S-1-16-12288"), "{r:?}");
+        } else {
+            eprintln!(
+                "[shell test] 桌面本身是 {desktop_level:#x}（关了 UAC 的管理员），只比对和桌面一样"
+            );
+        }
     }
 
     #[tokio::test]

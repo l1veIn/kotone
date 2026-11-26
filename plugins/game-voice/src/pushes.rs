@@ -9,7 +9,8 @@
 //! - 事件 `game-voice.said`（说了什么）：给自动化用，报到现在在玩的游戏上（[`Host::playing_game`]），游戏中心里没有在玩的
 //!   游戏就不报。
 //!
-//! 推送要写对话（磁盘），不在说话的路上等：交给后台线程，一次一条、按先后（[`SaidDesk::report`]）。
+//! 推送要写对话（磁盘），不在说话的路上等：交给后台线程，一次一条、按说的先后（[`SaidDesk::report`]：先排进队，
+//! 后台线程每次取最早的一句，不管哪个线程先跑）。
 //!
 //! 卡片里的数据（页面 `ui://kotone/game-voice/said`，`plugins/game-voice/ui/SaidCard.svelte` 照它画）：
 //!
@@ -17,6 +18,7 @@
 //! { lines: [{ text, atMs }] }
 //! ```
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -93,9 +95,8 @@ fn plan(
         });
     }
     let card = card.as_mut().expect("刚放进去");
+    // 按说的先后来（SaidDesk 的队），一句接一句
     card.lines.push((text.to_string(), now_ms));
-    // 后台线程偶尔不按先后跑：卡片里照说的时间排
-    card.lines.sort_by_key(|(_, at)| *at);
     card.last_ms = card.last_ms.max(now_ms);
     let push = Push {
         trigger: PUSH_SAID.into(),
@@ -116,11 +117,17 @@ fn plan(
     (push, event)
 }
 
+/// 还没交的一句：交给哪个 Host、说了什么、什么时候说的。
+type Said = (Arc<dyn Host>, String, u64);
+
 /// 游戏语音的推送台：记着正在并的那张卡片。
 #[derive(Default)]
 pub(crate) struct SaidDesk {
     card: Mutex<Option<SaidCard>>,
-    /// 一次只交一条，按先后
+    /// 还没交的几句，按说的先后排。每句起一个后台任务，任务交的是队里最早的那句：后台线程谁先跑都一样按先后交
+    /// （以前每个任务交自己那句，同一毫秒说的两句偶尔会反过来）
+    queue: Mutex<VecDeque<Said>>,
+    /// 一次只交一条
     serial: Mutex<()>,
     /// 还在后台推的条数（测试等它推完）
     inflight: AtomicUsize,
@@ -129,12 +136,15 @@ pub(crate) struct SaidDesk {
 impl SaidDesk {
     /// 她对队友说了一句：交给后台线程推送、报事件（说话那条路不等它）。
     pub(crate) fn report(self: &Arc<Self>, host: Arc<dyn Host>, text: &str) {
-        let desk = self.clone();
-        let text = text.to_string();
-        let now = now_ms();
         self.inflight.fetch_add(1, Ordering::SeqCst);
+        // 在锁里取时间：队里的先后和时间的先后一致
+        {
+            let mut queue = self.queue.lock().unwrap();
+            queue.push_back((host, text.to_string(), now_ms()));
+        }
+        let desk = self.clone();
         let deliver = move || {
-            desk.deliver(host.as_ref(), &text, now);
+            desk.deliver_next();
             desk.inflight.fetch_sub(1, Ordering::SeqCst);
         };
         match tokio::runtime::Handle::try_current() {
@@ -145,10 +155,14 @@ impl SaidDesk {
         }
     }
 
-    fn deliver(&self, host: &dyn Host, text: &str, now_ms: u64) {
+    /// 交队里最早的那句（每句起一个任务，所以总有一句等着）。
+    fn deliver_next(&self) {
         let _one = self.serial.lock().unwrap();
+        let Some((host, text, now_ms)) = self.queue.lock().unwrap().pop_front() else {
+            return;
+        };
         let game = host.playing_game().map(|p| p.game);
-        let (push, event) = plan(&mut self.card.lock().unwrap(), text, now_ms, game);
+        let (push, event) = plan(&mut self.card.lock().unwrap(), &text, now_ms, game);
         let key = push.key.clone();
         match host.push(push) {
             Ok(outcome) => kotone_core::log::log(&format!("game-voice push {key}: {outcome:?}")),
@@ -235,7 +249,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingHost {
         pushes: Mutex<Vec<Push>>,
-        events: Mutex<Vec<(String, String)>>,
+        events: Mutex<Vec<(String, String, Value)>>,
     }
 
     impl Host for RecordingHost {
@@ -268,10 +282,14 @@ mod tests {
             game: &str,
             kind: &str,
             _: &str,
-            _: Map<String, Value>,
+            data: Map<String, Value>,
             _: Option<f64>,
         ) {
-            self.events.lock().unwrap().push((game.into(), kind.into()));
+            let text = data.get("text").cloned().unwrap_or(Value::Null);
+            self.events
+                .lock()
+                .unwrap()
+                .push((game.into(), kind.into(), text));
         }
         fn playing_game(&self) -> Option<Playing> {
             Some(Playing {
@@ -285,7 +303,8 @@ mod tests {
         }
     }
 
-    /// 说了两句：后台按先后推两次同一张卡片（第二次带着两句）、报两件事，说话那条路不等它。
+    /// 说了两句（多半在同一毫秒里）：后台按说的先后推两次同一张卡片（第一次一句，第二次带着两句）、按先后报两件事，
+    /// 说话那条路不等它。两个后台任务谁先跑都一样（CI 上以前偶尔反过来）。
     #[tokio::test]
     async fn reports_go_out_in_order_off_the_speaking_path() {
         let desk = Arc::new(SaidDesk::default());
@@ -296,19 +315,22 @@ mod tests {
         let pushes = host.pushes.lock().unwrap().clone();
         assert_eq!(pushes.len(), 2);
         assert_eq!(pushes[0].key, pushes[1].key);
-        let texts: Vec<Value> = lines(&pushes[1])
-            .iter()
-            .map(|l| l["text"].clone())
-            .collect();
+        let texts =
+            |push: &Push| -> Vec<Value> { lines(push).iter().map(|l| l["text"].clone()).collect() };
+        assert_eq!(texts(&pushes[0]), [json!("我去拿龙")], "先交先说的");
         assert_eq!(
-            texts,
+            texts(&pushes[1]),
             [json!("我去拿龙"), json!("等我一下")],
-            "照说的时间排"
+            "照说的先后排"
         );
         let events = host.events.lock().unwrap().clone();
-        assert_eq!(
-            events,
-            vec![("pubg".to_string(), "game-voice.said".to_string()); 2]
-        );
+        let said = |text: &str| {
+            (
+                "pubg".to_string(),
+                "game-voice.said".to_string(),
+                json!(text),
+            )
+        };
+        assert_eq!(events, vec![said("我去拿龙"), said("等我一下")]);
     }
 }
