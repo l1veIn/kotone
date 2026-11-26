@@ -56,6 +56,8 @@ pnpm release:test
 - **kotone-cli 的集成测试**写成 `crates/kotone-cli/tests/it/` 下的子模块（在 `it/main.rs` 里 `mod`），不要在 `tests/` 下再加文件：每多一个文件就多链接一个大测试程序。
 - **要一个“没人听的端口”**：绑一个不 `listen` 的 socket，测完再放；不要绑了马上放掉再连（Windows 上连没人听的端口要重试约 2 秒，这期间同进程别的测试可能正好绑上它）。
 
+测试碰不到玩家的数据（2026-11-26）：没设 `KOTONE_HOME` 的 cargo 测试程序，数据目录是 `target/tmp/kotone-test-home/<进程号>`，不是 `~/.kotone`（`crates/kotone-core/src/settings.rs` 的 `kotone_dir()` 按 exe 的位置认出测试程序），凭据库的服务名也跟着分开；真机脚本和 `pnpm dev` 要隔离就自己设 `KOTONE_HOME`。
+
 ### 推送前
 
 **推送到 main 之前跑 `pnpm prepush`**，最后一行是“可以推送”才推。它把上面的检查按 CI 的样子跑一遍（`scripts/prepush.mjs`）：
