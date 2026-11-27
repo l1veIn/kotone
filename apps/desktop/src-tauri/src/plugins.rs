@@ -50,6 +50,7 @@ pub fn registry() -> &'static [Arc<dyn Plugin>] {
         vec![
             Arc::new(kotone_plugin_lol::LolPlugin::new()) as Arc<dyn Plugin>,
             Arc::new(kotone_plugin_cs2::Cs2Plugin::new()),
+            Arc::new(kotone_plugin_genshin::GenshinPlugin::new()),
             Arc::new(kotone_plugin_game_voice::GameVoicePlugin::new()),
             Arc::new(kotone_plugin_music::MusicPlugin::new()),
             Arc::new(kotone_plugin_interpreter::InterpreterPlugin),

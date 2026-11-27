@@ -1,0 +1,71 @@
+# 原神插件（ADR 047 第 3 期，“驱动现成工具”这一种）：找到玩家自己装的 BetterGI（GPL-3.0，只隔着进程调，ADR 030），
+# 命令行启动它的一条龙 / 配置组 / 计划，收它的通知 Webhook（插件在 127.0.0.1 开的接收端，带令牌），读它的配置、
+# 计划的运行记录和日志。停止：BetterGI 没有给外部停止的接口，如实说怎么在 BetterGI 里停，不结束它的进程。
+# 驱动 BetterGI 等于模拟键鼠：启动任务要原神的游戏配置“允许自动化输入”开着。清单的写法见 crates/kotone-plugin-api。
+
+id = "genshin"
+name = "原神"
+description = "驱动你装的 BetterGI：一键跑一条龙、配置组或计划，跑完在聊天里告诉你"
+games = ["genshin"]
+# 默认关：要玩家自己装了 BetterGI；第一次打开时弹风险说明（ADR 043 D8）
+enabled_by_default = false
+
+# 唯一的数据开关，只为了把风险说明放进“风险和许可”弹窗（一个插件一个弹窗，ADR 043）
+[[sources]]
+id = "bettergi"
+name = "驱动 BetterGI"
+description = "启动 BetterGI 跑一条龙、配置组或计划；读它的配置、运行记录和日志；收它的通知"
+risk = "驱动 BetterGI 等于用第三方工具替你操作原神的键盘鼠标。米哈游的用户协议禁止使用未经许可的第三方工具，BetterGI 自己的说明也写着“用户条款上明确说明第三方软件 / 模拟操作是封号理由之一，当前方案还是存在被检测的可能”。跑不跑、跑什么由你定；Kotone 只替你启动它、读它的记录，不读游戏内存、不改游戏文件。github.com/babalae/better-genshin-impact"
+
+[[pages]]
+uri = "ui://kotone/genshin/home"
+title = "原神"
+needs = ["bettergi"]
+
+# 推送的卡片（ADR 043 D11）：聊天里的卡片和点开以后右侧栏里的样子，数据见 src/runs.rs
+[[pages]]
+uri = "ui://kotone/genshin/run"
+title = "BetterGI 的运行"
+needs = ["bettergi"]
+
+# 内置推送（ADR 043 D4、D5）：一次运行一张卡片，开始时发，跑完 / 出错时原地更新；跑完和出错时给她留一句
+[[pushes]]
+id = "runs"
+title = "BetterGI 的运行"
+when = "Kotone 启动了 BetterGI 的任务，或者 BetterGI 通知开始、跑完、出错（一条龙、配置组、计划）"
+what = "聊天里一张卡片：跑的是什么、现在怎样；跑完或出错时原地更新，并告诉她一句"
+forms = ["card"]
+needs = ["bettergi"]
+
+# 事件（ADR 043 D11）：给自动化用（“当 BetterGI 跑完了的时候”）。没有适配器，名字以插件 id 开头；报在原神上。
+[[events]]
+type = "genshin.run_finished"
+label = "BetterGI 跑完了"
+data.kind = "跑的是什么：dragon（一条龙）/ group（配置组）/ plan（计划）"
+data.name = "配置名、配置组名或计划名（不知道时为空）"
+data.result = "success（成功）/ partial（部分成功）/ cancelled（取消了）"
+data.message = "BetterGI 说的话（可能为空）"
+needs = ["bettergi"]
+
+[[events]]
+type = "genshin.run_failed"
+label = "BetterGI 出错了"
+data.kind = "跑的是什么：dragon（一条龙）/ group（配置组）/ plan（计划）/ task（不知道是哪次运行）"
+data.name = "配置名、配置组名或计划名（不知道时为空）"
+data.message = "BetterGI 说的出错原因（可能为空）"
+needs = ["bettergi"]
+
+# 许可和出处（ADR 043 D8）：和风险说明一起放进“风险和许可”弹窗
+[[notices]]
+id = "bettergi"
+title = "BetterGI（GPL-3.0）"
+body = "BetterGI 是你自己装的开源工具，按 GPL-3.0 发布。Kotone 不带它、不改它，也不用它的代码：只隔着进程调它——用它的命令行启动、读它写的文件、收它的通知 Webhook。它的配置和日志只在你电脑上读，不发给别人。"
+links = ["https://github.com/babalae/better-genshin-impact", "https://www.gnu.org/licenses/gpl-3.0.html"]
+
+[agent]
+overview = "原神：驱动玩家装的 BetterGI 跑一条龙、配置组、计划，查它在跑什么、最近几次的结果"
+rule = """- 原神（BetterGI）：玩家说“跑一下一条龙 / 原神日常 / 跑配置组 X / 跑计划 X”时用 genshin.run（kind 写 dragon / group / plan；不知道有哪些、叫什么先 genshin.list）；\
+它会启动 BetterGI 去操作原神的键盘鼠标，要玩家确认。问“跑完没 / 在跑什么 / 上次怎么样”用 genshin.status。\
+玩家要停时用 genshin.stop：BetterGI 没有给外部停止的接口，照它回的话告诉玩家在 BetterGI 里怎么停，不要说已经停了。\
+跑完或出错时聊天里会有一张“BetterGI 的运行”卡片，你会收到一句说明，玩家问起再说。\n\
+"""

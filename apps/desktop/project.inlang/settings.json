@@ -22,7 +22,8 @@
       "../../plugins/music/messages/{locale}.json",
       "../../plugins/interpreter/messages/{locale}.json",
       "../../plugins/voice-input/messages/{locale}.json",
-      "../../plugins/cs2/messages/{locale}.json"
+      "../../plugins/cs2/messages/{locale}.json",
+      "../../plugins/genshin/messages/{locale}.json"
     ]
   }
 }

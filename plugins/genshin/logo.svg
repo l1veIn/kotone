@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="原神">
+  <title>原神</title>
+  <!-- Kotone 原创（不用米哈游、BetterGI 的商标）：一大一小两颗四角星，外面一圈表示“替你跑一圈日常”。 -->
+  <rect width="48" height="48" rx="12" fill="#a1621a"/>
+  <rect x="0.5" y="0.5" width="47" height="47" rx="11.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+  <path d="M36.5 17.5A14 14 0 1 0 38 24" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M38.6 13.6l.4 4.6-4.5-.9" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M22 13c.9 5.3 3.1 7.6 8.4 8.5-5.3.9-7.5 3.2-8.4 8.5-.9-5.3-3.1-7.6-8.4-8.5 5.3-.9 7.5-3.2 8.4-8.5z" fill="#fff"/>
+  <path d="M30.5 27.5c.4 2.3 1.4 3.3 3.7 3.7-2.3.4-3.3 1.4-3.7 3.7-.4-2.3-1.4-3.3-3.7-3.7 2.3-.4 3.3-1.4 3.7-3.7z" fill="#fff" fill-opacity=".85"/>
+</svg>

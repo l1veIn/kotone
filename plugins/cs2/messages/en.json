@@ -53,7 +53,6 @@
   "plugin_cs2_result_loss": "Lost",
   "plugin_cs2_result_tie": "Tied",
   "plugin_cs2_rounds": "Rounds",
-  "plugin_cs2_rounds_empty": "No finished rounds yet.",
   "plugin_cs2_reason_elimination": "Elimination",
   "plugin_cs2_reason_bomb": "Bomb exploded",
   "plugin_cs2_reason_defuse": "Defused",

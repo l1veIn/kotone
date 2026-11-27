@@ -2824,6 +2824,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-plugin-genshin"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "kotone-core",
+ "kotone-platform-windows",
+ "kotone-plugin-api",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "kotone-plugin-interpreter"
 version = "0.1.0"
 dependencies = [
@@ -2961,6 +2976,7 @@ dependencies = [
  "kotone-plugin-api",
  "kotone-plugin-cs2",
  "kotone-plugin-game-voice",
+ "kotone-plugin-genshin",
  "kotone-plugin-interpreter",
  "kotone-plugin-lol",
  "kotone-plugin-music",

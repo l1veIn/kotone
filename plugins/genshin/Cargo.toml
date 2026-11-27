@@ -1,0 +1,27 @@
+[package]
+name = "kotone-plugin-genshin"
+version = "0.1.0"
+description = "Kotone 原神插件（ADR 047 第 3 期，“驱动现成工具”）：找到玩家装的 BetterGI，命令行启动一条龙 / 配置组 / 计划，收它的通知 Webhook，读它的配置、运行记录和日志"
+edition = "2021"
+rust-version = "1.77.2"
+
+# 插件只依赖插件契约、kotone-core 的纯数据类型、系统适配层里没有状态的系统调用和自己的第三方库（ADR 038 D6），不碰 Tauri。
+# BetterGI 是 GPL-3.0：只隔着进程调它（命令行、文件、HTTP），不链接、不抄它的代码（ADR 030）。
+[dependencies]
+kotone-plugin-api.workspace = true
+kotone-core.workspace = true
+# 降权启动 BetterGI（ADR 044：Kotone 打开的东西一律普通权限，`detached::spawn_detached`）
+kotone-platform-windows.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# 通知 Webhook 的本机接收端（只听 127.0.0.1）、本机外部访问服务的健康检查
+tokio.workspace = true
+# Webhook 地址里的随机令牌（版本已在工作区锁文件里）
+getrandom = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# 读 BetterGI.exe 的文件版本（GetFileVersionInfoW）
+windows = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile.workspace = true

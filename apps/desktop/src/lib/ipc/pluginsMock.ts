@@ -16,6 +16,7 @@ import { remotePlugins } from "./mcpServersMock";
 import { gameVoiceCall } from "./gameVoiceMock";
 import { interpreterCall } from "./interpreterMock";
 import { cs2Call, cs2Manifest, cs2Tools } from "$plugins/cs2/ui/mock";
+import { genshinCall, genshinManifest, genshinTools } from "$plugins/genshin/ui/mock";
 import { musicCall, pluginTurnedOff as musicTurnedOff, subscribe as subscribeMusic } from "./musicMock";
 import { findSamplePlayer, sampleGame, sampleHistory, sampleMatch, samplePlayer, type SamplePhase } from "./lolMock";
 import {
@@ -282,6 +283,7 @@ const TOOLS: Record<string, MockTool[]> = {
   ],
   "voice-input": [{ name: "voice-input.resend", needs: [], visibility: ["app"], page: null }],
   cs2: cs2Tools,
+  genshin: genshinTools,
   interpreter: [
     { name: "interpreter.status", needs: [], visibility: ["app"], page: null },
     { name: "interpreter.start", needs: [], visibility: ["app"], page: null },
@@ -290,7 +292,7 @@ const TOOLS: Record<string, MockTool[]> = {
   ],
 };
 
-const MANIFESTS: PluginManifest[] = [voiceInput, lol, cs2Manifest, gameVoice, music, interpreter];
+const MANIFESTS: PluginManifest[] = [voiceInput, lol, cs2Manifest, genshinManifest, gameVoice, music, interpreter];
 
 /** 插件开着没有（设置里写了按设置，没写按清单的默认）。 */
 async function enabled(manifest: PluginManifest): Promise<boolean> {
@@ -370,6 +372,10 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   if (plugin === "cs2") {
     if (!(await enabled(cs2Manifest))) return { content: { status: "disabled", text: cs2Manifest.name } };
     return cs2Call(tool, args);
+  }
+  if (plugin === "genshin") {
+    if (!(await enabled(genshinManifest))) return { content: { status: "disabled", text: genshinManifest.name } };
+    return genshinCall(tool, args);
   }
   if (plugin !== "lol") return { content: { status: "error", text: tool } };
   for (const needs of spec.needs) {
