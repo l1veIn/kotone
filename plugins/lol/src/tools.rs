@@ -1,5 +1,6 @@
 //! 英雄联盟插件的工具（ADR 035 D2）：名字、说明、参数。实现在 [`crate::watcher`]。
-//! 给她的工具都马上返回（主会话也有，ADR 029），结果里有别人起的名字，按不可信数据交给她。
+//! 给她的工具都马上返回（主会话也有，ADR 029）；结果里有别人起的名字的（战绩、技能记录、网上的统计……）按不可信数据
+//! 交给她。`lol.match` 只写英雄、不写玩家名，是可信的，还带一份给自动化程序的结构化数据（ADR 046 D8）。
 //! 带页面的（照 MCP Apps）：`lol.scout` → 这局，`lol.player` → 战绩，`lol.game`（只给页面）→ 单局详情。
 
 use kotone_plugin_api::ToolSpec;
@@ -35,15 +36,19 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec::new(
             TOOL_MATCH,
-            "英雄联盟这局现在的样子（马上返回）：模式、游戏时间、比分；10 个人的英雄、玩家名、召唤师技能、\
+            "英雄联盟这局现在的样子（马上返回）：模式、游戏时间、比分；10 个人的英雄、召唤师技能、\
 等级、KDA、补刀、装备、是否阵亡；对面谁的闪现没好（玩家报过的，几点好）、谁没带闪；最近的龙、塔、团灭。\
-“谁没闪”“对面谁没带闪”“对面 AD 出了什么”“现在几比几”都用它。不在对局里时会说。",
+不带玩家名（要名字和战绩用 lol.scout）。“谁没闪”“对面谁没带闪”“对面 AD 出了什么”“现在几比几”都用它。不在对局里时会说。\
+自动化的程序里 tool(\"lol.match\") 拿到的是结构化数据：status（ok / not_in_game / error）、reason（不是 ok 时：\
+loading / champ_select / not_in_game / client_closed，或读不到的原因）、mode（CLASSIC / ARAM / KIWI……）、gameTime（秒）、\
+score {ally, enemy}（击杀数）、alive {ally, enemy}（活着几个，我方含自己）、players[]（我方在前）：champion、\
+alias（英文 id）、team（ally / enemy）、me、bot、level、kills、deaths、assists、cs、dead、respawnSeconds、\
+position（峡谷的 TOP / JUNGLE / MIDDLE / BOTTOM / UTILITY，别的模式空）、spells[{key（SummonerFlash 这类）, name, \
+readyAt（玩家报过、还没好的才有：游戏时间到几秒时好）}]、items[{id, name}]。没有别人的金币、技能冷却和海克斯。",
             json!({"type": "object", "additionalProperties": false, "properties": {}}),
         )
         .needs(&["client"])
-        .instant()
-        // 玩家名是别人起的
-        .untrusted(),
+        .instant(),
         ToolSpec::new(
             TOOL_SPELL,
             "记下对面（或任何人）交了召唤师技能（英雄联盟的接口里没有冷却，只能玩家说了才记）：\
@@ -259,10 +264,11 @@ mod tests {
                 _ => &["client"],
             };
             assert_eq!(s.needs, needs, "{}", s.name);
-            // 读到别人写的字的都按不可信数据
+            // 读到别人写的字的都按不可信数据；lol.match 不写玩家名（ADR 046 D8）
             let trusted = matches!(
                 s.name.as_str(),
-                TOOL_CLIENT
+                TOOL_MATCH
+                    | TOOL_CLIENT
                     | TOOL_CHAMPIONS
                     | TOOL_SHOUT
                     | TOOL_SOURCE

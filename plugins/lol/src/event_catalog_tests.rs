@@ -5,14 +5,59 @@
 
 use serde_json::{json, Map, Value};
 
+use std::collections::HashMap;
+
 use kotone_core::automation::library::{AutomationDraft, AutomationLibrary, CreatedBy};
-use kotone_core::games::{trigger_matches, Armed, EventCatalog, GameEvent, Triggers};
+use kotone_core::games::{
+    trigger_matches, validate_trigger, Armed, EventCatalog, EventTrigger, GameEvent, Triggers,
+};
 use kotone_core::settings::Settings;
 use kotone_plugin_api::{event_catalog, Plugin};
 
-use crate::client::events::new_events;
-use crate::client::live::{parse_all_game_data, tests as l};
+use crate::client::events::{death_events, new_events, Roster};
+use crate::client::live::{parse_all_game_data, tests as l, LiveGame, LivePlayer};
 use crate::{manifest, LolPlugin};
+
+/// 比前后两份局内数据报的阵亡、复活（[`death_events`]，每个人第一次看到时的样子按 `before`）。
+fn deaths(before: &Value, after: &Value) -> Vec<(&'static str, Map<String, Value>, f64)> {
+    let before = parse_all_game_data(before).unwrap();
+    let first: HashMap<String, LivePlayer> = before
+        .players
+        .iter()
+        .map(|p| (p.key(), p.clone()))
+        .collect();
+    let after: LiveGame = parse_all_game_data(after).unwrap();
+    death_events(&Roster::of(&before), &after, &first, None)
+}
+
+/// 一件插件报的事 → 游戏中心里的样子（自动化按它触发）。
+fn game_event(n: usize, (kind, data, time): (&'static str, Map<String, Value>, f64)) -> GameEvent {
+    GameEvent {
+        id: format!("lol-live-{n}"),
+        kind: kind.into(),
+        game: "lol".into(),
+        match_id: "lol-1".into(),
+        time: n as u64,
+        game_time: Some(time),
+        source: "lol/live-client".into(),
+        data,
+    }
+}
+
+/// 那把录的海斗（我是佛耶戈）：`dead` 里的人（`riotIdGameName` 或隐藏了身份的人的 `summonerName`）死着。
+fn mayhem_with_dead(time: f64, dead: &[&str]) -> Value {
+    let mut v = l::mayhem_hidden_json();
+    v["gameData"]["gameTime"] = json!(time);
+    for p in v["allPlayers"].as_array_mut().unwrap() {
+        let name = p["riotIdGameName"].as_str().unwrap().to_string();
+        let summoner = p["summonerName"].as_str().unwrap().to_string();
+        if dead.contains(&name.as_str()) || dead.contains(&summoner.as_str()) {
+            p["isDead"] = json!(true);
+            p["respawnTimer"] = json!(12.0);
+        }
+    }
+    v
+}
 
 fn registered() -> Vec<String> {
     manifest().events.iter().map(|e| e.kind.clone()).collect()
@@ -107,17 +152,39 @@ fn every_emitted_event_is_registered() {
     let game = parse_all_game_data(&v).unwrap();
     let live = new_events(&v, &game, 0);
     assert_eq!(live.len(), 8, "每种认得的事都换出来了");
-    for (_, kind, data, _) in &live {
+    // 比前后两份局内数据报的：阵亡（两边）、我阵亡了、我复活了（ADR 046 D6、D7）
+    let alive = l::mayhem_hidden_json();
+    let down = mayhem_with_dead(10.0, &["玩家甲", "对手子"]);
+    let mut compared = deaths(&alive, &down);
+    compared.extend(deaths(&down, &mayhem_with_dead(30.0, &[])));
+    let kinds: Vec<&str> = compared.iter().map(|e| e.0).collect();
+    assert_eq!(
+        kinds,
+        ["lol.death", "lol.my_death", "lol.death", "lol.my_respawn"]
+    );
+    let compared: Vec<(&str, Map<String, Value>)> =
+        compared.into_iter().map(|(k, d, _)| (k, d)).collect();
+    for (kind, data) in live
+        .iter()
+        .map(|(_, kind, data, _)| (*kind, data))
+        .chain(compared.iter().map(|(kind, data)| (*kind, data)))
+    {
         let spec = manifest()
             .events
             .iter()
-            .find(|e| e.kind == *kind)
+            .find(|e| e.kind == kind)
             .unwrap_or_else(|| panic!("{kind} 没在 plugin.toml 的 [[events]] 里登记"));
         for field in data.keys() {
             assert!(
                 spec.data.contains_key(field),
                 "{kind} 的 data.{field} 没登记"
             );
+        }
+        // 反过来：登记的字段都会报（`lol.death` 的每个字段每件都有）
+        if kind == "lol.death" || kind == "lol.my_death" {
+            for field in spec.data.keys() {
+                assert!(data.contains_key(field), "{kind} 没报 data.{field}");
+            }
         }
     }
 
@@ -236,13 +303,26 @@ fn old_automations_with_lol_triggers_still_load_and_fire() {
             {"id": "auto-2", "name": "英雄联盟的任何事", "params": [],
              "action": {"kind": "prompt", "text": "说一句"},
              "createdBy": "agent", "createdAtMs": 1, "updatedAtMs": 1,
-             "on": {"event": ["lol.*"], "enabled": true}}
+             "on": {"event": ["lol.*"], "enabled": true}},
+            // ADR 046 D7：我阵亡 / 复活、团灭改成和 lol.death 同一处报以后，已存的照样触发、字段不变
+            {"id": "auto-3", "name": "我阵亡了", "params": [],
+             "action": {"kind": "speak", "text": "别急", "delivery": ["voice"]},
+             "createdBy": "user", "createdAtMs": 1, "updatedAtMs": 1,
+             "on": {"event": ["lol.my_death"], "game": "lol", "enabled": true}},
+            {"id": "auto-4", "name": "我复活了", "params": [],
+             "action": {"kind": "speak", "text": "上吧", "delivery": ["voice"]},
+             "createdBy": "user", "createdAtMs": 1, "updatedAtMs": 1,
+             "on": {"event": ["lol.my_respawn"], "game": "lol", "enabled": true}},
+            {"id": "auto-5", "name": "被团灭了", "params": [],
+             "action": {"kind": "speak", "text": "稳住", "delivery": ["voice"]},
+             "createdBy": "user", "createdAtMs": 1, "updatedAtMs": 1,
+             "on": {"event": ["lol.ace"], "game": "lol", "match": {"team": "enemy"}, "enabled": true}}
         ]
     });
     std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
     let library = AutomationLibrary::open(path.clone()).unwrap();
     let list = library.list();
-    assert_eq!(list.len(), 2);
+    assert_eq!(list.len(), 5);
 
     // 照样触发：插件报的龙（new_events 换出来的）对得上
     let mut v = l::sample_json();
@@ -268,13 +348,52 @@ fn old_automations_with_lol_triggers_still_load_and_fire() {
             trigger: a.on.as_ref().unwrap(),
         })
         .collect();
-    assert!(armed.iter().all(|a| trigger_matches(a.trigger, &event)));
-    let fired: Vec<String> = Triggers::default()
-        .on_event(&armed, &event, 1)
+    // 触发了哪几个（按 id 排，列表的顺序不管）
+    let fired_by = |event: &GameEvent| -> Vec<String> {
+        let mut ids: Vec<String> = Triggers::default()
+            .on_event(&armed, event, 1)
+            .into_iter()
+            .map(|f| f.automation)
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(fired_by(&event), ["auto-1", "auto-2"]);
+    // 我阵亡了、我复活了：现在由比前后两份局内数据的那一处报，字段照旧（只有 respawnSeconds）
+    let alive = l::mayhem_hidden_json();
+    let down = mayhem_with_dead(10.0, &["玩家甲"]);
+    let mut compared = deaths(&alive, &down);
+    compared.extend(deaths(&down, &mayhem_with_dead(30.0, &[])));
+    let events: Vec<GameEvent> = compared
         .into_iter()
-        .map(|f| f.automation)
+        .enumerate()
+        .map(|(n, e)| game_event(n, e))
         .collect();
-    assert_eq!(fired, ["auto-1", "auto-2"]);
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(kinds, ["lol.death", "lol.my_death", "lol.my_respawn"]);
+    assert_eq!(
+        Value::Object(events[1].data.clone()),
+        json!({"respawnSeconds": 12})
+    );
+    assert!(events[2].data.is_empty());
+    assert_eq!(fired_by(&events[1]), ["auto-2", "auto-3"]);
+    assert_eq!(fired_by(&events[2]), ["auto-2", "auto-4"]);
+    assert_eq!(
+        fired_by(&events[0]),
+        ["auto-2"],
+        "lol.death 只有 lol.* 接得到"
+    );
+    // 团灭照旧是局内接口的事件列表换出来的
+    let mut v = l::sample_json();
+    v["events"]["Events"] = json!([
+        {"EventID": 8, "EventName": "Ace", "EventTime": 815.0, "Acer": "敌人二", "AcingTeam": "CHAOS"}
+    ]);
+    let game = parse_all_game_data(&v).unwrap();
+    let (_, kind, data, time) = new_events(&v, &game, 0).remove(0);
+    assert_eq!(
+        fired_by(&game_event(9, (kind, data, time))),
+        ["auto-2", "auto-5"]
+    );
 
     // 插件关着时改个名字再保存：照常保存（不报废），提醒里说清楚
     let mut closed = Settings::default();
@@ -310,4 +429,72 @@ fn old_automations_with_lol_triggers_still_load_and_fire() {
         .unwrap_err();
     assert!(error.contains("没有“lol.dragon_kill”"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ADR 046 的验收场景“队友都倒了放首歌”的触发：保存时认得（插件登记的 `lol.death` 和它的字段），一波里队友一个个倒下
+/// 只触发一次（最后一个倒下的那件）；`team: "ally"` 省了的话，只剩我活着时对面再死一个也会触发。
+#[test]
+fn the_last_ally_down_trigger_fires_once() {
+    let trigger: EventTrigger = serde_json::from_value(json!({
+        "event": ["lol.death"], "game": "lol",
+        "match": {"team": "ally", "meAlive": true, "alliesAlive": 1}, "cooldownSeconds": 60
+    }))
+    .unwrap();
+    let catalog = event_catalog([manifest()], &Settings::default());
+    let trigger = validate_trigger(&trigger, &catalog).unwrap();
+    assert!(catalog.notes(&trigger).is_empty());
+    // 我（佛耶戈）还活着，队友四个同一份数据里倒下，对面也死了一个
+    let alive = mayhem_with_dead(600.0, &[]);
+    let wiped = mayhem_with_dead(
+        602.0,
+        &["玩家乙", "玩家丙", "卡牌大师", "无极剑圣", "对手寅"],
+    );
+    let events: Vec<GameEvent> = deaths(&alive, &wiped)
+        .into_iter()
+        .enumerate()
+        .map(|(n, e)| game_event(n, e))
+        .collect();
+    assert_eq!(events.len(), 5);
+    let armed = [Armed {
+        id: "bgm",
+        trigger: &trigger,
+    }];
+    let mut triggers = Triggers::default();
+    let fired: Vec<String> = events
+        .iter()
+        .flat_map(|e| triggers.on_event(&armed, e, 1))
+        .map(|f| f.automation)
+        .collect();
+    assert_eq!(fired, ["bgm"]);
+    let last = events
+        .iter()
+        .find(|e| trigger_matches(&trigger, e))
+        .unwrap();
+    assert_eq!(last.data["team"], "ally");
+    assert_eq!(last.data["alliesAlive"], 1);
+    // 省了 team：对面那件（我方只剩我、对面 4 个）也对得上
+    let mut loose = trigger.clone();
+    loose.matches.remove("team");
+    let enemy = events.iter().filter(|e| trigger_matches(&loose, e)).count();
+    assert!(enemy >= 1);
+    // 下一份对面又死一个：我方还是只剩我，team = ally 的不触发
+    let more = mayhem_with_dead(
+        604.0,
+        &[
+            "玩家乙",
+            "玩家丙",
+            "卡牌大师",
+            "无极剑圣",
+            "对手寅",
+            "对手卯",
+        ],
+    );
+    let next: Vec<GameEvent> = deaths(&wiped, &more)
+        .into_iter()
+        .enumerate()
+        .map(|(n, e)| game_event(10 + n, e))
+        .collect();
+    assert_eq!(next.len(), 1);
+    assert!(!trigger_matches(&trigger, &next[0]));
+    assert!(trigger_matches(&loose, &next[0]), "所以 team 不能省");
 }

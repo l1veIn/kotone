@@ -55,6 +55,7 @@
   "plugin_lol_event_inhib_killed": "推掉一个水晶",
   "plugin_lol_event_ace": "团灭",
   "plugin_lol_event_multikill": "三杀以上",
+  "plugin_lol_event_death": "有英雄阵亡",
   "plugin_lol_event_my_death": "我阵亡了",
   "plugin_lol_event_my_respawn": "我复活了",
   "plugin_lol_event_level": "升级了",

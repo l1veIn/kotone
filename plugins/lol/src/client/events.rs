@@ -7,13 +7,15 @@
 //!   为了不让事件太多，只报**对面和自己**：等级——自己每升一级都报，对面只报到 6、11、16 级（大招升级的那几级）；
 //!   装备——出了一件成装（不再合成别的、总价 2000 以上，客户端的装备资料里查；资料没读到时只认 [`KEY_ITEM_IDS`]），
 //!   同一个人同一件只报一次。第一次看到这局时只记下当时的样子，之前的不补。
+//! - **阵亡、复活**（ADR 046 D6、D7，[`death_events`]）：也是比前后两份局内数据，`isDead` 由假变真的每个人报一件
+//!   `lol.death`（两边都报），同一段时间里这个人的 `ChampionKill` 补上击杀者；“我阵亡了 / 我复活了”由同一处报。
 
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Map, Value};
 
 use crate::client::gamedata::GameData;
-use crate::client::live::{LiveGame, LiveItem, LivePlayer};
+use crate::client::live::{LiveEvent, LiveGame, LiveItem, LivePlayer};
 
 /// 客户端阶段（`/lol-gameflow/v1/gameflow-phase`）→ 所有游戏共用的阶段（ADR 036 D3）。
 /// `live_ready` = 局内接口已经有数据（游戏时间 > 0），这时才算“对局中”，之前是“加载”。
@@ -40,7 +42,7 @@ fn s<'a>(e: &'a Value, key: &str) -> &'a str {
     e.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-/// 这个名字（玩家名）的英雄和是哪边。
+/// 这个名字（玩家名；隐藏了身份的人是 `summonerName`，[`LiveGame::find`]）的英雄和是哪边。
 fn who(game: &LiveGame, name: &str) -> (String, &'static str) {
     let team = match game.is_ally_name(name) {
         Some(true) => "ally",
@@ -48,9 +50,7 @@ fn who(game: &LiveGame, name: &str) -> (String, &'static str) {
         None => "",
     };
     let champion = game
-        .players
-        .iter()
-        .find(|p| !name.is_empty() && (p.name == name || p.riot_id == name))
+        .find(name)
         .map(|p| p.champion.clone())
         .unwrap_or_default();
     (champion, team)
@@ -327,6 +327,113 @@ pub fn roster_events(
     out
 }
 
+// ---------- 阵亡、复活：比前后两份局内数据（ADR 046 D6、D7） ----------
+
+/// 上一份数据之前多久的 `ChampionKill` 还算这一次阵亡（同一份数据里的事件列表和 `isDead` 是一起出来的；
+/// 留一点余量给两份数据的时间对不齐。复活最快也要好几秒，不会把上一次阵亡算进来）。
+const KILL_SLACK: f64 = 1.0;
+
+/// 这个人这一次阵亡的 `ChampionKill`：上一份数据以后、死的是他（[`LiveGame::find`]，隐藏了身份的人按
+/// `summonerName`）的里面最晚的那件。没有时 None（接口没给，或者事件列表还没跟上）。
+fn kill_of<'a>(game: &'a LiveGame, victim: &LivePlayer, after: f64) -> Option<&'a LiveEvent> {
+    let key = victim.key();
+    game.events
+        .iter()
+        .filter(|e| e.name == "ChampionKill" && e.time > after - KILL_SLACK)
+        .filter(|e| game.find(&e.victim).is_some_and(|p| p.key() == key))
+        .max_by(|a, b| a.time.total_cmp(&b.time))
+}
+
+/// 阵亡、复活 → 游戏事件（类型，数据，游戏时间）（ADR 046 D6、D7）。和“你阵亡时”的卡片、“对面阵亡”的提醒是同一个
+/// 判断：上一份数据里活着、这一份 `isDead` 的人。上一份里没有的人（刚连上、换了人）不算；中间没读到接口那段死了又
+/// 复活的不补；看不出自己在哪边（观战）时什么都不报。
+///
+/// - `lol.death`：一人一件，按击杀时间排（没有 `ChampionKill` 的排在最后，时间算这一份的），`alliesAlive`、
+///   `enemiesAlive`、`meAlive` 是“这一个死了之后”的：同一份数据里倒下的最后一个队友只有那一件是 `alliesAlive = 1`。
+///   `killer` 是击杀者的英雄，塔、小兵、野怪杀的或对不上时是空的。
+/// - `lol.my_death`：自己那件 `lol.death` 后面跟一件（字段照旧，`respawnSeconds` 一样）；`lol.my_respawn`：自己上一份
+///   死着、这一份活了。
+///
+/// `first` 是每个人这局第一次看到时的样子（按 [`LivePlayer::key`]）：英雄名都按它，佛耶戈附身时阵亡或击杀也还是佛耶戈。
+pub fn death_events(
+    before: &Roster,
+    game: &LiveGame,
+    first: &HashMap<String, LivePlayer>,
+    data: Option<&GameData>,
+) -> Vec<(&'static str, Map<String, Value>, f64)> {
+    let Some(me) = game.me() else {
+        return Vec::new();
+    };
+    let mine = me.team.as_str();
+    if mine.is_empty() {
+        return Vec::new();
+    }
+    let me_key = me.key();
+    let was_dead = |p: &LivePlayer| before.players.get(&p.key()).map(|s| s.dead);
+    let champion = |p: &LivePlayer| {
+        let seen = first.get(&p.key()).unwrap_or(p);
+        crate::client::text::champion_names(seen, data).1
+    };
+    let mut out = Vec::new();
+    if !me.dead && was_dead(me) == Some(true) {
+        out.push(("lol.my_respawn", Map::new(), game.time));
+    }
+    let mut died: Vec<(&LivePlayer, Option<&LiveEvent>)> = game
+        .players
+        .iter()
+        .filter(|p| p.dead && was_dead(p) == Some(false))
+        .map(|p| (p, kill_of(game, p, before.time)))
+        .collect();
+    let at = |kill: Option<&LiveEvent>| kill.map_or(game.time, |e| e.time);
+    // 稳定排序：同一时刻的照局内接口的顺序
+    died.sort_by(|a, b| at(a.1).total_cmp(&at(b.1)));
+    let alive_now = |ours: bool| {
+        game.players
+            .iter()
+            .filter(|p| (p.team == mine) == ours && !p.dead)
+            .count()
+    };
+    for (i, &(p, kill)) in died.iter().enumerate() {
+        // 排在后面的那几个这时候还活着
+        let later = &died[i + 1..];
+        let alive = |ours: bool| {
+            alive_now(ours)
+                + later
+                    .iter()
+                    .filter(|(q, _)| (q.team == mine) == ours)
+                    .count()
+        };
+        let is_me = p.key() == me_key;
+        let respawn = p.respawn.max(0.0).round() as i64;
+        let killer = kill
+            .and_then(|e| game.find(&e.killer))
+            .map(champion)
+            .unwrap_or_default();
+        out.push((
+            "lol.death",
+            object(json!({
+                "team": if p.team == mine { "ally" } else { "enemy" },
+                "champion": champion(p),
+                "me": is_me,
+                "killer": killer,
+                "respawnSeconds": respawn,
+                "alliesAlive": alive(true),
+                "enemiesAlive": alive(false),
+                "meAlive": !me.dead || later.iter().any(|(q, _)| q.key() == me_key),
+            })),
+            at(kill),
+        ));
+        if is_me {
+            out.push((
+                "lol.my_death",
+                object(json!({"respawnSeconds": respawn})),
+                at(kill),
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +585,179 @@ mod tests {
         fewer["allPlayers"].as_array_mut().unwrap().truncate(1);
         let c = changes(&Roster::of(&parse_all_game_data(&fewer).unwrap()), &after);
         assert!(c.items.is_empty(), "卡牌不在上一份里");
+    }
+
+    /// 阵亡测试用的一份：照录的那把海斗（[`l::mayhem_hidden_json`]：我是佛耶戈，卡牌、剑圣隐藏了身份），
+    /// `dead` 里的人（英文 id）死着，`kills` 是局内接口的事件列表。
+    fn mayhem_at(time: f64, dead: &[(&str, f64)], kills: Value) -> Value {
+        let mut v = l::mayhem_hidden_json();
+        v["gameData"]["gameTime"] = json!(time);
+        v["events"]["Events"] = kills;
+        for p in v["allPlayers"].as_array_mut().unwrap() {
+            let raw = p["rawChampionName"].as_str().unwrap().to_string();
+            if let Some((_, respawn)) = dead.iter().find(|(a, _)| raw.ends_with(a)) {
+                p["isDead"] = json!(true);
+                p["respawnTimer"] = json!(respawn);
+            }
+        }
+        v
+    }
+
+    fn first_seen(game: &LiveGame) -> HashMap<String, LivePlayer> {
+        game.players.iter().map(|p| (p.key(), p.clone())).collect()
+    }
+
+    fn kill(id: i64, time: f64, killer: &str, victim: &str) -> Value {
+        json!({"EventID": id, "EventName": "ChampionKill", "EventTime": time,
+            "KillerName": killer, "VictimName": victim, "Assisters": []})
+    }
+
+    /// ADR 046 D6：一份数据里我方倒了四个（我还活着）、对面倒了一个：按击杀时间排，一人一件；人数是“这一个死了之后”的，
+    /// 逐个递减，只有最后倒下的那个队友 `alliesAlive = 1`。击杀者是隐藏了身份的人也对得上（`summonerName`）；塔、小兵杀的
+    /// `killer` 是空的；上一次阵亡的 `ChampionKill` 不算进来；数据里没有玩家名。
+    #[test]
+    fn deaths_in_one_poll_are_ordered_and_count_down() {
+        let before = parse_all_game_data(&mayhem_at(300.0, &[], json!([]))).unwrap();
+        let roster = Roster::of(&before);
+        let kills = json!([
+            kill(5, 250.0, "对手子", "玩家乙"),
+            kill(10, 300.5, "对手子", "玩家丙"),
+            kill(11, 301.6, "Turret_T2_C_05_A", "卡牌大师"),
+            kill(12, 300.9, "对手丑", "无极剑圣"),
+            kill(13, 301.9, "Minion_T2L1S04N0001", "玩家乙"),
+            kill(14, 300.7, "无极剑圣", "对手寅"),
+        ]);
+        let dead = [
+            ("Lucian", 14.6),
+            ("Ashe", 12.0),
+            ("TwistedFate", 13.0),
+            ("MasterYi", 11.0),
+            ("Taliyah", 9.4),
+        ];
+        let game = parse_all_game_data(&mayhem_at(302.0, &dead, kills)).unwrap();
+        let out = death_events(&roster, &game, &first_seen(&before), None);
+        assert!(out.iter().all(|e| e.0 == "lol.death"), "我没死：{out:?}");
+        let rows: Vec<(String, String, String, i64, i64)> = out
+            .iter()
+            .map(|(_, d, _)| {
+                (
+                    d["team"].as_str().unwrap().to_string(),
+                    d["champion"].as_str().unwrap().to_string(),
+                    d["killer"].as_str().unwrap().to_string(),
+                    d["alliesAlive"].as_i64().unwrap(),
+                    d["enemiesAlive"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        let row = |team: &str, champion: &str, killer: &str, allies: i64, enemies: i64| {
+            (
+                team.to_string(),
+                champion.to_string(),
+                killer.to_string(),
+                allies,
+                enemies,
+            )
+        };
+        assert_eq!(
+            rows,
+            [
+                row("ally", "Ashe", "Locke", 4, 5),
+                row("enemy", "Taliyah", "MasterYi", 4, 4),
+                row("ally", "MasterYi", "Ambessa", 3, 4),
+                row("ally", "TwistedFate", "", 2, 4),
+                row("ally", "Lucian", "", 1, 4),
+            ]
+        );
+        let times: Vec<f64> = out.iter().map(|e| e.2).collect();
+        assert_eq!(times, [300.5, 300.7, 300.9, 301.6, 301.9]);
+        assert!(out
+            .iter()
+            .all(|(_, d, _)| d["meAlive"] == true && d["me"] == false));
+        assert_eq!(out[4].1["respawnSeconds"], 15);
+        // 验收场景（队友都倒了、我还活着）只对得上一件
+        let last_ally = out
+            .iter()
+            .filter(|(_, d, _)| {
+                d["team"] == "ally" && d["meAlive"] == true && d["alliesAlive"] == 1
+            })
+            .count();
+        assert_eq!(last_ally, 1);
+        let text = format!("{out:?}");
+        assert!(
+            !text.contains("玩家") && !text.contains("对手") && !text.contains("卡牌大师"),
+            "{text}"
+        );
+        // 下一份还死着：不再报
+        let again = parse_all_game_data(&mayhem_at(304.0, &dead, json!([]))).unwrap();
+        assert!(death_events(&Roster::of(&game), &again, &first_seen(&before), None).is_empty());
+    }
+
+    /// 我阵亡：`lol.death`（`me = true`）后面跟一件 `lol.my_death`（同一个 `respawnSeconds`）；没有 `ChampionKill` 时
+    /// 击杀者空、时间算这一份的；复活报 `lol.my_respawn`。佛耶戈附身成蕾欧娜时阵亡，英雄还是佛耶戈；附身时击杀也是。
+    /// 看不出自己在哪边（观战）、上一份里没有这个人时不报。
+    #[test]
+    fn my_death_follows_my_death_event_and_viego_stays_viego() {
+        let before_json = mayhem_at(400.0, &[], json!([]));
+        let before = parse_all_game_data(&before_json).unwrap();
+        let first = first_seen(&before);
+        // 我（佛耶戈）附身成了蕾欧娜，杀了维克托，然后被塔打死
+        let mut v = mayhem_at(
+            402.0,
+            &[("Viego", 20.4), ("Viktor", 8.0)],
+            json!([
+                kill(20, 400.6, "玩家甲", "对手辰"),
+                kill(21, 401.2, "Turret_T2_L_03_A", "玩家甲")
+            ]),
+        );
+        v["allPlayers"][0]["rawChampionName"] = json!("game_character_displayname_Leona");
+        v["allPlayers"][0]["championName"] = json!("Leona");
+        let game = parse_all_game_data(&v).unwrap();
+        let out = death_events(&Roster::of(&before), &game, &first, None);
+        let kinds: Vec<&str> = out.iter().map(|e| e.0).collect();
+        assert_eq!(kinds, ["lol.death", "lol.death", "lol.my_death"]);
+        assert_eq!(out[0].1["champion"], "Viktor");
+        assert_eq!(out[0].1["killer"], "Viego", "附身时击杀也是佛耶戈");
+        assert_eq!(out[0].1["meAlive"], true, "维克托先死，那时我还活着");
+        assert_eq!(
+            Value::Object(out[1].1.clone()),
+            json!({"team": "ally", "champion": "Viego", "me": true, "killer": "", "respawnSeconds": 20,
+                "alliesAlive": 4, "enemiesAlive": 4, "meAlive": false})
+        );
+        assert_eq!(
+            Value::Object(out[2].1.clone()),
+            json!({"respawnSeconds": 20})
+        );
+        assert_eq!(out[1].2, 401.2);
+        assert_eq!(out[2].2, 401.2);
+        // 没有 ChampionKill：击杀者空，时间是这一份的
+        let bare = parse_all_game_data(&mayhem_at(402.0, &[("Viego", 20.0)], json!([]))).unwrap();
+        let out = death_events(&Roster::of(&before), &bare, &first, None);
+        assert_eq!(out[0].1["killer"], "");
+        assert_eq!(out[0].2, 402.0);
+        // 复活
+        let back = parse_all_game_data(&mayhem_at(424.0, &[], json!([]))).unwrap();
+        let out = death_events(&Roster::of(&bare), &back, &first, None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "lol.my_respawn");
+        assert!(out[0].1.is_empty());
+        // 观战：看不出自己是谁、在哪边
+        let mut watching = mayhem_at(402.0, &[("Viego", 20.0), ("Viktor", 8.0)], json!([]));
+        watching["activePlayer"] = json!({});
+        let watching = parse_all_game_data(&watching).unwrap();
+        assert!(death_events(&Roster::of(&before), &watching, &first, None).is_empty());
+        // 上一份里没有的人（刚连上）不算
+        let mut fewer = before_json.clone();
+        fewer["allPlayers"].as_array_mut().unwrap().truncate(1);
+        let out = death_events(
+            &Roster::of(&parse_all_game_data(&fewer).unwrap()),
+            &game,
+            &first,
+            None,
+        );
+        assert!(
+            out.iter()
+                .all(|e| e.1.get("champion") != Some(&json!("Viktor"))),
+            "{out:?}"
+        );
     }
 }

@@ -326,11 +326,30 @@ data.team = "哪一边：ally（我方）/ enemy（对面）"
 data.killer = "英雄"
 data.count = "几杀：3 / 4 / 5"
 
+# 阵亡（ADR 046 D6）：两边每有一个英雄阵亡报一件。以局内数据里 isDead 由假变真为准（和“你阵亡时”的卡片、“对面阵亡”
+# 同一个判断），同一段时间里这个人的 ChampionKill 补上击杀者；隐藏了身份的人按 summonerName 对得上。每 2 秒读一次，
+# 最多晚约 2 秒。每局第一份数据只记样子、之前的不补；中间没读到接口那段死了又复活的不补；看不出自己在哪边（观战）时不报。
+# 同一份数据里死了几个：按击杀时间排，一人一件，人数是“这一个死了之后”的，所以“最后一个队友倒下”只有那一件
+# alliesAlive = 1。守护天使、基兰大招不算阵亡；赛恩被动、艾尼维亚的蛋、扎克被动照接口算活着。
+[[events]]
+type = "lol.death"
+label = "有英雄阵亡"
+needs = ["client"]
+data.team = "死的是哪一边：ally（我方，含自己）/ enemy（对面）"
+data.champion = "阵亡的英雄（佛耶戈附身时阵亡也是佛耶戈）"
+data.me = "是不是自己"
+data.killer = "击杀者的英雄；塔、小兵、野怪杀的或对不上时是空的"
+data.respawnSeconds = "多少秒后复活"
+data.alliesAlive = "这一个阵亡之后我方还活着几个（含自己）"
+data.enemiesAlive = "这一个阵亡之后对面还活着几个"
+data.meAlive = "这一个阵亡之后自己还活着没有"
+
+# 我阵亡了 / 我复活了：由报 lol.death 的同一处报（ADR 046 D7），字段不变，已存的自动化照样触发
 [[events]]
 type = "lol.my_death"
 label = "我阵亡了"
 needs = ["client"]
-data.respawnSeconds = "多少秒后复活"
+data.respawnSeconds = "多少秒后复活（同一次阵亡的 lol.death 里 me = true，两件一起报）"
 
 [[events]]
 type = "lol.my_respawn"

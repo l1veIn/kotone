@@ -8,7 +8,7 @@
 | 东西 | 在哪 |
 | --- | --- |
 | 清单：名字、挂在游戏配置 `lol` 上、`lol` 适配器、数据开关、页面、给她的两段话 | `plugin.toml` |
-| 给她和页面的工具 `lol.match`、`lol.spell`、`lol.scout`（都马上返回，结果按不可信数据给她） | `src/tools.rs` |
+| 给她和页面的工具 `lol.match`、`lol.spell`、`lol.scout`（都马上返回；`lol.match` 只写英雄、不写玩家名，是可信的，还带一份给自动化程序的结构化数据，见下面“游戏事件和这局的数据”；别的结果按不可信数据给她） | `src/tools.rs` |
 | 后台：客户端开着时每 2 秒看一次阶段，进加载界面就查战绩，往游戏中心报阶段和局内的事；工具的实现 | `src/watcher.rs` |
 | 客户端和局内接口、游戏资料、战绩、技能计时、写给她看的文字（纯函数 + 只连 127.0.0.1 的 HTTP） | `src/client/` |
 | 页面（插件页、游戏配置页里的一节） | `ui/` |
@@ -58,6 +58,18 @@
 - 只写英雄，不发玩家名（选英雄时还没选的用分路、几楼）。
 - 她也能用：你说“把对面闪现发出去”时一次调用；`preview: true` 只看会发什么。
 - 照 LeagueAkari 的“游戏内发送”预设学做法（`dev` 分支 `src/main/shards/in-game-send/` 的 `preset-controller.ts`、`send-executor.ts`），不抄代码。没做它的“打野偏好”和“自定义模板”。
+
+## 游戏事件和这局的数据（ADR 036、ADR 046）
+
+插件报事实，判断在自动化：事件说“刚发生了什么”，这局现在的样子随时用 `lol.match` 查。事件登记在 `plugin.toml` 的 `[[events]]`（字段名 camelCase，`data` 里只放英雄名，不放玩家名），`src/event_catalog_tests.rs` 查报的和登记的对得上。
+
+- **局内接口的事件列表**（`client/events.rs` 的 `new_events`）：一血、龙、先锋、大龙、塔、水晶、团灭、三杀以上。
+- **比前后两份局内数据**（每 2 秒一份，和对局中的提醒同一处，`pushes/alerts.rs`）：等级、成装（只报对面和自己），和阵亡：
+  - `lol.death`：两边每有一个英雄阵亡报一件，以 `isDead` 由假变真为准（和“你阵亡时”的卡片、“对面阵亡”同一个判断），同一段时间里这个人的 `ChampionKill` 补上击杀者（隐藏了身份的人按 `summonerName` 对）。字段 `team`、`champion`、`me`、`killer`（塔、小兵、野怪杀的或对不上时是空的）、`respawnSeconds`、`alliesAlive`（含自己）、`enemiesAlive`、`meAlive`。同一份数据里死了几个：按击杀时间排，一人一件，人数是“这一个死了之后”的，所以“最后一个队友倒下”只有那一件 `alliesAlive = 1`。佛耶戈附身时阵亡或击杀，英雄还是佛耶戈（按这局第一次看到他时的英雄）。
+  - 每局第一份数据只记样子、之前的不补；中间没读到接口那段死了又复活的不补；看不出自己在哪边（观战）时不报；最多晚约 2 秒。
+  - `lol.my_death` / `lol.my_respawn` 字段不变，由同一处报：`lol.my_death` 紧跟在自己那件 `lol.death`（`me = true`）后面。
+  - 还没在真机上核对：守护天使、基兰大招、赛恩被动、艾尼维亚的蛋、扎克被动时 `isDead` 会不会闪一下（录的那把海斗是每 20 秒一份）。
+- **`lol.match` 的结构化数据**（`client/text.rs` 的 `match_data`，程序里 `tool("lol.match")` 拿到的就是它；字段名是约定，写在工具说明里）：`status`、`reason`（不是 `ok` 时：`loading` / `champ_select` / `not_in_game` / `client_closed`，或读不到的原因）、`mode`、`gameTime`（整数秒）、`score {ally, enemy}`、`alive {ally, enemy}`、`players[]`（我方在前）：`champion`、`alias`、`team`、`me`、`bot`、`level`、`kills`、`deaths`、`assists`、`cs`、`dead`、`respawnSeconds`、`position`、`spells[{key, name, readyAt?}]`、`items[{id, name}]`。接口给不出的不放：别人的金币、技能冷却、海克斯。没有页面，宿主不把它放进她的上下文、也不出卡片。
 
 ## 素材（图片）
 
@@ -117,7 +129,7 @@ args = ["mcp"]
 | --- | --- | --- | --- |
 | `kotone_lol_scout` | 这局 10 个人的战绩、开黑（只给事实） | `ui://kotone/lol/match` 这局（选人、加载、对局中、结算） | 读客户端数据 |
 | `kotone_lol_tier` | 强度榜（峡谷按位置、海斗） | `ui://kotone/lol/tier` 强度榜 | 用网上的统计 |
-| `kotone_lol_match` | 这局的样子、谁的召唤师技能没好 | — | 读客户端数据 |
+| `kotone_lol_match` | 这局的样子、谁的召唤师技能没好（不带玩家名；`structuredContent` 是给程序的结构化数据） | — | 读客户端数据 |
 | `kotone_lol_spell` | 记对面交的召唤师技能 | — | 读客户端数据 |
 | `kotone_lol_player` | 任何人的战绩 | `ui://kotone/lol/player` | 读客户端数据 |
 | `kotone_lol_champion` | 英雄的强度、克制、出装、海斗海克斯 | `ui://kotone/lol/champion` | 用网上的统计 |

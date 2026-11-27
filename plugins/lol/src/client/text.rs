@@ -1,6 +1,9 @@
-//! 把这局、战绩、技能记录写成给她看的几行字（工具结果）。玩家名是别人起的，工具结果整体按不可信数据交给模型。
+//! 把这局、战绩、技能记录写成给她看的几行字（工具结果）。玩家名是别人起的：带玩家名的工具结果（战绩）整体按不可信数据
+//! 交给模型；`lol.match` 只写英雄、不写玩家名（ADR 046 D8），是可信的，另有一份给程序的结构化数据（[`match_data`]）。
 
 use std::collections::BTreeMap;
+
+use serde_json::{json, Value};
 
 use crate::client::clock;
 use crate::client::gamedata::GameData;
@@ -89,7 +92,12 @@ fn recent_events(game: &LiveGame, limit: usize) -> Vec<String> {
                     if n < 3 {
                         return None;
                     }
-                    format!("{who}{} {n} 杀", e.killer)
+                    // 事件里是玩家名：换成英雄（不写玩家名）
+                    let champion = game
+                        .find(&e.killer)
+                        .map(|p| p.champion.as_str())
+                        .unwrap_or("");
+                    format!("{who}{champion} {n} 杀")
                 }
                 "FirstBlood" => "一血".to_string(),
                 _ => return None,
@@ -110,14 +118,12 @@ fn player_line(
     is_me: bool,
 ) -> String {
     let (full, _) = champion_names(p, data);
+    // 不写玩家名（ADR 046 D8：要名字和战绩用 lol.scout）
     let mut parts = vec![if is_me {
         format!("{full}（你）")
     } else {
         full
     }];
-    if !p.name.is_empty() {
-        parts.push(format!("「{}」", p.name));
-    }
     parts.push(format!(
         "{} 级 {}/{}/{} 补刀 {}",
         p.level, p.kills, p.deaths, p.assists, p.cs
@@ -227,6 +233,94 @@ pub fn render_match(game: &LiveGame, data: Option<&GameData>, tracker: &SpellTra
         out.push(format!("最近：{}", events.join("；")));
     }
     out.join("\n")
+}
+
+/// `lol.match` 给程序的结构化数据（ADR 046 D8，`tool("lol.match")` 拿到的就是它；字段名是约定，写在工具说明里，
+/// camelCase，和事件数据一样）：
+///
+/// - 顶层：`status`（`"ok"`）、`mode`（局内接口的 `gameMode`：`CLASSIC`、`ARAM`、`KIWI`……）、`gameTime`（整数秒）、
+///   `score {ally, enemy}`（两边的击杀数）、`alive {ally, enemy}`（两边活着几个，我方含自己）；
+/// - `players[]`（我方在前）：`champion`（英雄的短名，和事件里的一样）、`alias`（英文 id）、`team`（`ally` / `enemy`）、
+///   `me`、`bot`、`level`、`kills`、`deaths`、`assists`、`cs`、`dead`、`respawnSeconds`（没死是 0）、`position`
+///   （峡谷的分路 `TOP` / `JUNGLE` / `MIDDLE` / `BOTTOM` / `UTILITY`，别的模式是空的）、`spells[{key, name, readyAt?}]`
+///   （`key` 是不随语言变的 id，例如 `SummonerFlash`；`readyAt` 只有玩家报过、还没转好的才有，是转好时的游戏时间，整数秒）、
+///   `items[{id, name}]`。
+///
+/// 不放玩家名（要名字和战绩用 `lol.scout`），也不放接口给不出的：别人的金币、技能冷却、海克斯。
+pub fn match_data(game: &LiveGame, data: Option<&GameData>, tracker: &SpellTracker) -> Value {
+    let me = game.me().map(LivePlayer::key);
+    let (ours, theirs) = game.score();
+    let player = |p: &LivePlayer, ally: bool| {
+        let slots: Vec<(&str, &str)> = if p.spells.len() == p.spell_keys.len() {
+            p.spells
+                .iter()
+                .zip(&p.spell_keys)
+                .map(|(name, key)| (name.as_str(), key.as_str()))
+                .collect()
+        } else {
+            // 名字缺了一格：对不上是哪一格，只给名字
+            p.spells.iter().map(|name| (name.as_str(), "")).collect()
+        };
+        let spells: Vec<Value> = slots
+            .into_iter()
+            .map(|(name, key)| {
+                let mut spell = json!({"key": key, "name": name});
+                if let Some(ready) = tracker.ready_at(&p.alias, name, game.time) {
+                    spell["readyAt"] = json!(ready.round() as i64);
+                }
+                spell
+            })
+            .collect();
+        let items: Vec<Value> = p
+            .items
+            .iter()
+            .filter(|i| i.id > 0)
+            .map(|i| {
+                let name = if i.name.is_empty() {
+                    data.and_then(|d| d.items.get(&i.id))
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    i.name.clone()
+                };
+                json!({"id": i.id, "name": name})
+            })
+            .collect();
+        let position = p.position.trim().to_ascii_uppercase();
+        json!({
+            "champion": champion_names(p, data).1,
+            "alias": p.alias,
+            "team": if ally { "ally" } else { "enemy" },
+            "me": me.as_deref() == Some(p.key().as_str()),
+            "bot": p.bot,
+            "level": p.level,
+            "kills": p.kills,
+            "deaths": p.deaths,
+            "assists": p.assists,
+            "cs": p.cs,
+            "dead": p.dead,
+            "respawnSeconds": if p.dead { p.respawn.max(0.0).round() as i64 } else { 0 },
+            "position": if position == "NONE" { String::new() } else { position },
+            "spells": spells,
+            "items": items,
+        })
+    };
+    let players: Vec<Value> = game
+        .allies()
+        .map(|p| player(p, true))
+        .chain(game.enemies().map(|p| player(p, false)))
+        .collect();
+    json!({
+        "status": "ok",
+        "mode": game.mode,
+        "gameTime": game.time.max(0.0).round() as i64,
+        "score": {"ally": ours, "enemy": theirs},
+        "alive": {
+            "ally": game.allies().filter(|p| !p.dead).count(),
+            "enemy": game.enemies().filter(|p| !p.dead).count(),
+        },
+        "players": players,
+    })
 }
 
 /// 这个人是谁看得到看不到（ADR 043 D9）。只有接口自己标了是电脑的才算电脑；没有 puuid 的真人照样列出来，
@@ -499,15 +593,82 @@ mod tests {
             text.contains("对面的闪现：没闪：亚索 14:27 好（还有 1:53）；没带闪：阿狸"),
             "{text}"
         );
+        // 不写玩家名（ADR 046 D8），别的照旧
         assert!(
-            text.contains("刀锋舞者 艾瑞莉娅（你） · 「玩家」"),
+            text.contains("- 刀锋舞者 艾瑞莉娅（你） · 9 级 5/2/1 补刀 30 · 闪现、标记"),
             "{text}"
         );
         assert!(
-            text.contains("闪现（14:27 好）、引燃 · 装备：明朗之靴"),
+            text.contains(
+                "- 疾风剑豪 亚索 · 9 级 3/2/1 补刀 30 · 闪现（14:27 好）、引燃 · 装备：明朗之靴"
+            ),
             "{text}"
         );
         assert!(text.contains("最近：10:01 对面拿了火龙（抢的）"), "{text}");
+        assert!(
+            !text.contains("玩家") && !text.contains("敌人") && !text.contains('「'),
+            "{text}"
+        );
+        // 三杀以上的事件里是玩家名：换成英雄
+        let mut v = l::sample_json();
+        v["events"]["Events"] = serde_json::json!([
+            {"EventID": 8, "EventName": "Multikill", "EventTime": 700.0, "KillerName": "敌人二", "KillStreak": 3}
+        ]);
+        let game = parse_all_game_data(&v).unwrap();
+        let text = render_match(&game, Some(&data), &tracker);
+        assert!(text.contains("最近：11:40 对面九尾妖狐 3 杀"), "{text}");
+        assert!(!text.contains("敌人"), "{text}");
+    }
+
+    /// `lol.match` 给程序的结构化数据（ADR 046 D8）：字段名照约定，我方在前；记下的技能带 readyAt；没有玩家名。
+    #[test]
+    fn match_data_for_programs_has_the_agreed_fields_and_no_names() {
+        let data = crate::client::gamedata::tests::sample();
+        let mut v = l::sample_json();
+        v["allPlayers"][2]["isDead"] = json!(true);
+        v["allPlayers"][2]["respawnTimer"] = json!(17.6);
+        v["allPlayers"][0]["position"] = json!("MIDDLE");
+        let game = parse_all_game_data(&v).unwrap();
+        let mut tracker = SpellTracker::default();
+        tracker.record(SpellUse {
+            alias: "Yasuo".into(),
+            champion: "亚索".into(),
+            spell: "闪现".into(),
+            used_at: 700.0,
+            ready_at: 866.7,
+            notes: vec![],
+        });
+        let out = match_data(&game, Some(&data), &tracker);
+        assert_eq!(out["status"], "ok");
+        assert_eq!(out["mode"], "KIWI");
+        assert_eq!(out["gameTime"], 754);
+        assert_eq!(out["score"], json!({"ally": 5, "enemy": 4}));
+        assert_eq!(out["alive"], json!({"ally": 1, "enemy": 1}));
+        let players = out["players"].as_array().unwrap();
+        assert_eq!(players.len(), 3);
+        assert_eq!(
+            players[0],
+            json!({
+                "champion": "艾瑞莉娅", "alias": "Irelia", "team": "ally", "me": true, "bot": false,
+                "level": 9, "kills": 5, "deaths": 2, "assists": 1, "cs": 30, "dead": false,
+                "respawnSeconds": 0, "position": "MIDDLE",
+                "spells": [{"key": "SummonerFlash", "name": "闪现"}, {"key": "SummonerSnowball", "name": "标记"}],
+                "items": []
+            })
+        );
+        let yasuo = &players[1];
+        assert_eq!(yasuo["team"], "enemy");
+        assert_eq!(yasuo["me"], false);
+        assert_eq!(yasuo["position"], "", "大乱斗、海斗的 NONE 写成空的");
+        assert_eq!(
+            yasuo["spells"],
+            json!([{"key": "SummonerFlash", "name": "闪现", "readyAt": 867}, {"key": "SummonerDot", "name": "引燃"}])
+        );
+        assert_eq!(yasuo["items"], json!([{"id": 3158, "name": "明朗之靴"}]));
+        assert_eq!(players[2]["dead"], true);
+        assert_eq!(players[2]["respawnSeconds"], 18);
+        let text = out.to_string();
+        assert!(!text.contains("玩家") && !text.contains("敌人"), "{text}");
     }
 
     fn scout_player(

@@ -15,7 +15,8 @@
 //! 一行、记进聊天。插件这边只管同一件事不重复（同一个人到 6 级只说一次、同一个人同一件装备只说一次）。大乱斗、海斗没有分路
 //! 和峡谷资源：只有“关键英雄到 6 级”“关键装备”“技能转好”“对面阵亡”“你阵亡”。
 //!
-//! 等级、装备两类游戏事件（`lol.level`、`lol.item`，给自动化和她）也在这里报，规矩在 `client/events.rs`。
+//! 等级、装备、阵亡这几类游戏事件（`lol.level`、`lol.item`、`lol.death` 和“我阵亡了 / 我复活了”，给自动化和她）也在
+//! 这里报，规矩在 `client/events.rs`：阵亡和“你阵亡时”的卡片、“对面阵亡”用的是同一份前后数据、同一个判断（ADR 046 D7）。
 
 use std::collections::{HashMap, HashSet};
 
@@ -310,6 +311,8 @@ pub struct Out {
 pub struct Alerts {
     game: Option<i64>,
     roster: Option<Roster>,
+    /// 每个人这局第一次看到时的样子（[`LivePlayer::key`]）：阵亡事件里的英雄名按它（佛耶戈附身时还是佛耶戈）。
+    first_seen: HashMap<String, LivePlayer>,
     /// 到 6 级已经说过的人（[`LivePlayer::key`]）。
     ult_said: HashSet<String>,
     /// 出过的关键装备（`<人>:<装备后四位>`，重伤是 `<人>:grievous`）。
@@ -343,15 +346,24 @@ impl Alerts {
                 ..Self::default()
             };
         }
+        for p in &game.players {
+            self.first_seen.entry(p.key()).or_insert_with(|| p.clone());
+        }
         let now = Roster::of(game);
         let Some(before) = self.roster.replace(now) else {
             return Out::default();
         };
         let changes = events::changes(&before, game);
         let mut out = Out {
-            events: events::roster_events(&changes, game, data, &mut self.item_reported),
+            events: events::death_events(&before, game, &self.first_seen, data),
             pushes: Vec::new(),
         };
+        out.events.extend(events::roster_events(
+            &changes,
+            game,
+            data,
+            &mut self.item_reported,
+        ));
         let key = |kind: &str| format!("{kind}:{game_id}:{}", game.time.round() as i64);
         if let Some(push) = self.enemy_ults(&changes, game, data, key(PUSH_ENEMY_ULT)) {
             out.pushes.push(push);
@@ -740,8 +752,8 @@ fn pushed(push: &Push, result: Result<PushOutcome, String>) {
 }
 
 impl LolPlugin {
-    /// 后台每一轮（客户端开着时）：对局里（局内接口有游戏时间）看一眼有什么要提醒的、要报的等级和装备事件；不在对局里
-    /// 时清掉这局的记录。
+    /// 后台每一轮（客户端开着时）：对局里（局内接口有游戏时间）看一眼有什么要提醒的、要报的阵亡、等级和装备事件；
+    /// 不在对局里时清掉这局的记录。
     pub(crate) fn live_alerts(&self, host: &dyn Host, phase: &str, live: Option<&LiveGame>) {
         let Some(game) = live.filter(|g| g.time > 0.0 && crate::client::in_game_phase(phase))
         else {

@@ -100,13 +100,23 @@ impl LiveGame {
         })
     }
 
+    /// 事件列表里的名字（`KillerName`、`VictimName`、`Recipient`……）是谁：名字、Riot ID 或 `summonerName`。
+    /// 隐藏了身份的人事件里写的是 `summonerName`（2026-11-26 录的那把海斗：英雄的称号），名字是空的，只有它对得上
+    /// （ADR 046 D6）。空名字谁都不是（塔、小兵、野怪的名字也对不上任何人）。
+    pub fn find(&self, name: &str) -> Option<&LivePlayer> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        self.players
+            .iter()
+            .find(|p| p.name == name || p.riot_id == name || p.summoner == name)
+    }
+
     /// 这个名字（击杀事件里的名字）属于哪边：true = 我方。
     pub fn is_ally_name(&self, name: &str) -> Option<bool> {
         let team = self.my_team();
-        self.players
-            .iter()
-            .find(|p| p.name == name || p.riot_id == name)
-            .map(|p| p.team == team)
+        self.find(name).map(|p| p.team == team)
     }
 }
 

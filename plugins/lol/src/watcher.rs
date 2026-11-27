@@ -7,7 +7,8 @@
 //! - 端口和令牌从 `LeagueClientUx.exe` 的命令行读（不用管理员）；令牌不进日志。
 //! - 插件或它的“读客户端数据”开关（`plugins.lol.sources.client`）关着时什么都不读（D5）。
 //! - 游戏中心（ADR 036）的 `lol` 适配器：客户端开着时由这里报阶段（客户端阶段 + 局内接口有没有数据），
-//!   对局里每 2 秒把局内接口的新事件（龙、塔、团灭……）和“我阵亡 / 复活”报给游戏中心。
+//!   对局里每 2 秒把局内接口的新事件（龙、塔、团灭……）报给游戏中心；阵亡、复活、等级、装备是比前后两份局内数据
+//!   得出的，和对局中的提醒在同一处报（`pushes/alerts.rs`，ADR 046 D7）。
 //! - 测试用（不开游戏，`scripts/manual-e2e/lol_tools_real.py`）：`KOTONE_LOL_LCU=<端口>:<令牌>` 不找客户端进程、
 //!   直接连 127.0.0.1 的这个端口；`KOTONE_LOL_LIVE=<地址>` 换掉局内接口的地址（只认本机）；
 //!   `KOTONE_LOL_CDRAGON=<地址>` 换掉素材层的 CommunityDragon 地址（只认本机，写错了就不连网）。
@@ -126,8 +127,6 @@ pub(crate) struct State {
     claimed: bool,
     /// 局内接口里已经报过的最大 `EventID`（第一次连上时取当时最新的，之前的不补）。
     live_seen: Option<i64>,
-    /// 上一轮玩家自己是不是阵亡了。
-    was_dead: Option<bool>,
     /// 推送过哪局的哪种卡片（[`auto_cards`]）。
     cards: auto_cards::CardState,
     /// “这局”页面的阶段和进这个阶段的时间（Unix 毫秒）。
@@ -297,7 +296,6 @@ impl LolPlugin {
             let mut s = self.state();
             s.tracker = SpellTracker::default();
             s.live_seen = None;
-            s.was_dead = None;
         }
         self.report_phase(host.as_ref(), &phase, live.as_ref().map(|(_, game)| game));
         // 卡片推送（ADR 039 D3、ADR 043）：进加载查完战绩推“开局战绩”，结算推“这局总结”
@@ -341,49 +339,19 @@ impl LolPlugin {
         );
     }
 
-    /// 局内接口的新事件和“我阵亡 / 复活”报给游戏中心。第一次连上时只记下起点，之前的不补。
+    /// 局内接口事件列表里的新事报给游戏中心。第一次连上时只记下起点，之前的不补。阵亡、复活不在这里
+    /// （[`crate::pushes`] 的对局中的提醒那一处报，ADR 046 D7）。
     fn push_live_events(&self, host: &dyn Host, raw: &Value, game: &LiveGame) {
-        let me = game.me().map(|p| (p.dead, p.respawn));
-        let (after, was_dead) = {
-            let mut s = self.state();
-            let after = *s
-                .live_seen
-                .get_or_insert_with(|| events::last_event_id(raw));
-            let was_dead = match me {
-                Some((dead, _)) => s.was_dead.replace(dead),
-                None => s.was_dead,
-            };
-            (after, was_dead)
-        };
+        let after = *self
+            .state()
+            .live_seen
+            .get_or_insert_with(|| events::last_event_id(raw));
         let new = events::new_events(raw, game, after);
         if let Some(last) = new.iter().map(|e| e.0).max() {
             self.state().live_seen = Some(last);
         }
         for (_, kind, data, time) in new {
             host.game_event(LOL, kind, "lol/live-client", data, Some(time));
-        }
-        match (was_dead, me) {
-            (Some(false), Some((true, respawn))) => {
-                let mut data = Map::new();
-                data.insert("respawnSeconds".into(), json!(respawn.max(0.0).round()));
-                host.game_event(
-                    LOL,
-                    "lol.my_death",
-                    "lol/live-client",
-                    data,
-                    Some(game.time),
-                );
-            }
-            (Some(true), Some((false, _))) => {
-                host.game_event(
-                    LOL,
-                    "lol.my_respawn",
-                    "lol/live-client",
-                    Map::new(),
-                    Some(game.time),
-                );
-            }
-            _ => {}
         }
     }
 
@@ -923,7 +891,7 @@ impl LolPlugin {
             return self.shout_tool(host.as_ref(), arguments).await;
         }
         Ok(match name {
-            TOOL_MATCH => ToolResult::content(self.match_tool(host.as_ref()).await),
+            TOOL_MATCH => self.match_tool(host.as_ref()).await,
             TOOL_SPELL => ToolResult::content(self.spell_tool(host.as_ref(), arguments).await),
             TOOL_SCOUT => self.scout_tool(host, arguments).await,
             TOOL_PLAYER => self.player_tool(host.as_ref(), arguments).await,
@@ -937,14 +905,36 @@ impl LolPlugin {
         })
     }
 
-    async fn match_tool(&self, host: &dyn Host) -> Value {
+    /// `lol.match`：给她的几行字（不带玩家名），加上给程序的结构化数据（ADR 046 D8，字段见 [`text::match_data`]；
+    /// 没有页面，宿主不把它放进她的上下文、也不出卡片）。
+    async fn match_tool(&self, host: &dyn Host) -> ToolResult {
         let game = match self.live_game(host).await {
             Ok(game) => game,
-            Err(result) => return result,
+            Err(result) => return with_program_data(result),
         };
         let data = self.ensure_data().await;
         let tracker = self.state().tracker.clone();
-        json!({"status": "ok", "text": text::render_match(&game, data.as_deref(), &tracker)})
+        ToolResult {
+            content: json!({"status": "ok", "text": text::render_match(&game, data.as_deref(), &tracker)}),
+            structured_content: Some(text::match_data(&game, data.as_deref(), &tracker)),
+            ui: None,
+        }
+    }
+}
+
+/// 没拿到这局（不在对局里、读不到）时给程序的那份：`{status, reason}`。不在对局里的 `reason` 是
+/// `loading` / `champ_select` / `not_in_game` / `client_closed`；别的（`status = "error"`）是给她的那句原因。
+fn with_program_data(content: Value) -> ToolResult {
+    let reason = content
+        .get("reason")
+        .or_else(|| content.get("text"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let program = json!({"status": content["status"], "reason": reason});
+    ToolResult {
+        content,
+        structured_content: Some(program),
+        ui: None,
     }
 }
 
@@ -1488,6 +1478,28 @@ mod tests {
         assert_eq!(stage_of("Lobby", false, true), Some(P::PostMatch));
         assert_eq!(stage_of("Lobby", false, false), None);
         assert_eq!(stage_of("None", false, false), None);
+    }
+
+    /// `lol.match` 没拿到这局时（ADR 046 D8）：给她的照旧，给程序的是 `{status, reason}`；读不到时 reason 是原因。
+    #[test]
+    fn match_without_a_game_gives_programs_status_and_reason() {
+        let out = with_program_data(loading());
+        assert_eq!(out.content, loading());
+        assert_eq!(
+            out.structured_content,
+            Some(json!({"status": "not_in_game", "reason": "loading"}))
+        );
+        assert!(out.ui.is_none(), "没有页面：不进她的上下文、不出卡片");
+        let mut closed = status("not_in_game", "英雄联盟没开");
+        closed["reason"] = json!("client_closed");
+        assert_eq!(
+            with_program_data(closed).structured_content,
+            Some(json!({"status": "not_in_game", "reason": "client_closed"}))
+        );
+        assert_eq!(
+            with_program_data(status("error", "读局内数据失败：超时")).structured_content,
+            Some(json!({"status": "error", "reason": "读局内数据失败：超时"}))
+        );
     }
 
     #[test]

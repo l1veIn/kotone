@@ -314,6 +314,106 @@ fn alerts_over_a_whole_mayhem_game() {
     );
 }
 
+/// 阵亡事件（ADR 046 D6、D7）照录的一整把海斗：和“你阵亡时”的卡片同一个判断——我每阵亡一次，同一轮里有一张卡片、
+/// 一件 `lol.death`（`me = true`）、紧跟着一件 `lol.my_death`，只报一次（下一份还死着不再报）；复活一次一件
+/// `lol.my_respawn`；第一份不报；两边的阵亡都报，同一轮里死了几个时人数逐个递减；换一局从头来。
+#[test]
+fn death_events_over_a_whole_mayhem_game() {
+    let data = data();
+    let games = frames(None);
+    let outs = run(&games, Some(&data), &[]);
+    assert!(outs[0].1.events.is_empty(), "第一份只记下样子");
+    let me = |g: &LiveGame| g.me().unwrap().dead;
+    let mut cards = 0;
+    let mut respawns = 0;
+    for (i, (_, out)) in outs.iter().enumerate() {
+        let kinds: Vec<&str> = out.events.iter().map(|e| e.0).collect();
+        let card = out.pushes.iter().any(|p| p.trigger == PUSH_MY_DEATH);
+        let my_deaths: Vec<usize> = (0..kinds.len())
+            .filter(|j| kinds[*j] == "lol.my_death")
+            .collect();
+        assert_eq!(
+            card,
+            !my_deaths.is_empty(),
+            "第 {i} 份：卡片和事件同一个判断"
+        );
+        assert!(my_deaths.len() <= 1);
+        if card {
+            cards += 1;
+            let j = my_deaths[0];
+            let death = &out.events[j - 1];
+            assert_eq!(death.0, "lol.death");
+            assert_eq!(death.1["me"], true);
+            assert_eq!(death.1["meAlive"], false);
+            assert_eq!(death.1["champion"], "佛耶戈", "附身的时候死也是佛耶戈");
+            assert_eq!(out.events[j].1["respawnSeconds"], death.1["respawnSeconds"]);
+            assert!(me(&games[i]) && !me(&games[i - 1]));
+        }
+        if kinds.contains(&"lol.my_respawn") {
+            respawns += 1;
+            assert!(!me(&games[i]) && me(&games[i - 1]));
+        }
+        // 同一轮里的阵亡：每边的人数逐个递减，最后一件是这一份的样子
+        let deaths: Vec<&Map<String, Value>> = out
+            .events
+            .iter()
+            .filter(|e| e.0 == "lol.death")
+            .map(|e| &e.1)
+            .collect();
+        for side in ["ally", "enemy"] {
+            let key = if side == "ally" {
+                "alliesAlive"
+            } else {
+                "enemiesAlive"
+            };
+            let counts: Vec<i64> = deaths
+                .iter()
+                .filter(|d| d["team"] == side)
+                .map(|d| d[key].as_i64().unwrap())
+                .collect();
+            assert!(counts.windows(2).all(|w| w[0] == w[1] + 1), "{counts:?}");
+        }
+        if let Some(last) = deaths.last() {
+            let g = &games[i];
+            assert_eq!(
+                last["alliesAlive"].as_i64().unwrap() as usize,
+                g.allies().filter(|p| !p.dead).count()
+            );
+            assert_eq!(
+                last["enemiesAlive"].as_i64().unwrap() as usize,
+                g.enemies().filter(|p| !p.dead).count()
+            );
+        }
+    }
+    let my_deaths = pushes_of(&outs, PUSH_MY_DEATH).len();
+    assert_eq!(cards, my_deaths);
+    assert!(my_deaths >= 10, "{my_deaths}");
+    assert!(respawns >= my_deaths - 1, "{respawns}");
+    let events: Vec<&(&str, Map<String, Value>, f64)> =
+        outs.iter().flat_map(|(_, o)| o.events.iter()).collect();
+    let all_deaths = events.iter().filter(|e| e.0 == "lol.death").count();
+    let enemy_deaths = events
+        .iter()
+        .filter(|e| e.0 == "lol.death" && e.1["team"] == "enemy")
+        .count();
+    assert!(all_deaths > my_deaths && enemy_deaths > 0, "两边都报");
+    assert!(
+        events
+            .iter()
+            .filter(|e| e.0 == "lol.death")
+            .all(|e| e.1["killer"] == ""),
+        "这份压过的数据里没有 ChampionKill"
+    );
+    let text = format!("{events:?}");
+    assert!(!text.contains("玩家") && !text.contains("对手"), "{text}");
+    // 换一局（对局 id 变了）：第一份只记下样子
+    let mut alerts = Alerts::default();
+    let dead_at = games.iter().position(|g| g.me().unwrap().dead).unwrap();
+    alerts.step(1, &games[dead_at - 1], Some(&data), &[]);
+    let out = alerts.step(2, &games[dead_at], Some(&data), &[]);
+    assert!(out.events.is_empty() && out.pushes.is_empty());
+}
+
 /// 你玩回血英雄时对面出了重伤：每个人只说一次（升级成荆棘之甲不再说）；不是回血英雄不说。
 #[test]
 fn grievous_wounds_only_when_you_play_a_healer() {
