@@ -95,7 +95,7 @@ fn truncate(text: &str, max: usize) -> String {
 /// 你能替玩家做什么（主会话与后台共用的开头）。
 const WHAT_YOU_DO: &str =
     "你通过工具替玩家做事：看屏幕和游戏聊天、替玩家在游戏聊天里发言、语音或弹幕播报、设提醒、\
-运行和编写自动化（沙盒里的 Luau 程序，替玩家按键、点鼠标、看屏幕），以及管理 Kotone 的设置。\n";
+运行和编写自动化（沙盒里的 Luau 程序：替玩家按键、点鼠标、看屏幕，或者到点说一句、推送一条），以及管理 Kotone 的设置。\n";
 
 /// 主会话手上的工具（ADR 029 第二期：一小套马上出结果的，其余交给后台）。
 const MAIN_TOOLS_RULE: &str = "工作方式：\n\
@@ -131,6 +131,11 @@ browser.snapshot 读页面（可操作的元素带 [ref=N]），\
 const COMMON_RULES: &str = "- 能用已保存的自动化完成的，优先用它（工具名以 saved. 开头），不要重写程序。\n\
 - 写新的自动化时：先说明打算怎么做，用 automation.run 试运行（第一次运行会请玩家确认），\
 玩家满意后再用 automation.save 保存。\n\
+- 自动化程序要通知玩家就在程序里写：say 开口说一句（say(话, { toast = true }) 同时出弹幕）、toast 只出弹幕、\
+push 在聊天里记一条并在悬浮窗显示一行（不出声、不叫你）；不写就安静，Kotone 不会替它说“好了”。\
+ask 把一句话交给你跑一轮，每次花一次 AI 调用，只能在保存的自动化里用；话里别拼游戏事件里的字（多半是别人起的名字，会被拒），\
+要用就写成让你到时候自己去查。会叫你的自动化你自己不运行，由玩家、热键或游戏事件运行。\
+要晚一会儿开始就用 delaySeconds 或数字参数 delay_seconds，不要在程序里 wait 几分钟。\n\
 - 只做玩家要求的事；改设置、删除、下载等操作会先请玩家确认，被拒绝时不要换个方式重试。\n\
 - 帮玩家配置 Kotone 时：先用 settings.describe 查清字段路径、可选值和生效方式，再用 settings.update \
 一次只改相关的几项；一次问一两个问题（玩什么游戏、用什么热键、要不要语音播报……），\
@@ -197,8 +202,8 @@ pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
         "\n## 两个入口\n玩家每条消息前面 <kotone-context> 里是 Kotone 写的这一轮的情况（从哪个入口来、当前游戏、现在几点），\
 不是玩家说的话；照它决定怎么回复。\n\
 - 入口是「聊天窗口」：玩家看得到文字，可以分点说明，但保持简短；不用 Markdown 表格。\
-此时前台是 Kotone 自己的窗口：要看游戏画面、运行自动化或替玩家在游戏里发言之前，\
-先用 game.focus 切到那个游戏（不知道是哪个就先用 game.list 看看，或问玩家）。\
+此时前台是 Kotone 自己的窗口：要看游戏画面、运行要按键或看画面的自动化、替玩家在游戏里发言之前，\
+先用 game.focus 切到那个游戏（不知道是哪个就先用 game.list 看看，或问玩家）；只说一句、推送的自动化和提醒不用切。\
 reply.ask 和 speak 在这里不用（玩家在看文字），要问就直接在回复里问。\n\
 - 入口是「语音」（唤醒词、呼叫键或快捷指令）：玩家多半在玩游戏、看不到聊天窗口。\
 **这一轮必须用 speak 回答**：只有 speak 里的字会被念出来，你的回复正文只显示在聊天窗口。\
@@ -249,12 +254,16 @@ speak 最多两句、一共不超过 40 个字，只说结论，像打电话一�
     if !ctx.automations.is_empty() {
         out.push_str("\n玩家已保存的自动化（可直接调用对应的 saved.<id> 工具）：\n");
         for a in ctx.automations {
-            // TODO(ADR 045 D): 按“用不用游戏窗口”写。这里只照旧：会叫她的（以前的“让她做”）不列成她能调用的。
+            // 按“用不用游戏窗口”写（ADR 045 D4）；会叫她的（程序里有 ask()）不列成她能调用的，和 saved.* 清单一致。
             let uses = a.action.uses();
             if uses.asks {
                 continue;
             }
-            let kind = if uses.window { "程序" } else { "播报" };
+            let kind = if uses.window {
+                "按键或看画面，先切到游戏"
+            } else {
+                "不用切到游戏"
+            };
             let description: String = a.description.chars().take(80).collect();
             out.push_str(&format!(
                 "- saved.{}：{}（{kind}）{}\n",
@@ -302,7 +311,7 @@ const CAPABILITIES: &[(&str, &str, &[&str])] = &[
     ),
     (
         "automation",
-        "自动化：把重复的操作写成小程序替玩家按键、点鼠标、看画面，可以保存、定时运行，随时停下",
+        "自动化：把重复的操作写成小程序替玩家按键、点鼠标、看画面，或者到点说一句、推送一条；可以保存、定时或按游戏事件运行，随时停下",
         &[
             "automation.run",
             "automation.save",

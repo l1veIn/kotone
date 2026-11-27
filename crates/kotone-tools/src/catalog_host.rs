@@ -648,15 +648,15 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_RUN,
-            description: "Run an automation against the CURRENT foreground window: either a saved one by id (with args checked against its declared params; see automation.save) or an ad-hoc sandboxed Luau program in source (written by the companion or an Agent) — switch to the game first. The target window is bound when you call this, also for delayed runs (delaySeconds or at, up to 7 days): if that window is gone when the run is due, it fails instead of pressing keys elsewhere; a run missed by more than 120 s (Kotone closed) is recorded as missed and never run late; runs are never retried. Whitelisted functions only (coordinates are window-client ratios 0..1 everywhere): key(name) / key_down / key_up / type_text(text); chat(text, {channel = \"team\"|\"all\"}) sends to the game chat through the same entry as game_chat.send (the game profile's chat keys, one message per line) — use it instead of pressing Enter yourself; click(x, y, {button left/right/middle, count 1-3}), mouse_move(x, y), mouse_down(button) / mouse_up(button) (drag = move, down, move, up), scroll(n) (+ up); wait(ms), every(ms, fn, {for_ms, times}) (fn returning false stops), wait_until(cond, {poll_ms, stable_frames, timeout_ms}) → bool, now(); region(x, y, w, h), brightness(region) 0..255, color_at(x, y) → r, g, b; find_color(region, color, {variation 0-255 per channel = 0, largest = false, min_pixels}) → x, y, n like AutoHotkey PixelSearch (first match top-to-bottom, left-to-right; largest = center of the biggest connected patch); find_image(region, args.<image param>, {variation, trans = color}) → center x, y, top-left x, y like ImageSearch (first match, template compared at its own size, trans color ignored); find_text(region, text) → center x, y of the text via OCR; ocr(region) → object with :has(text) / :count() / :find(text) (screen text can be tested and located but never copied into input); colors are {r, g, b} or \"#RRGGBB\"; say(text), toast(text), log(text), game_focused(), stop(); args is a read-only table of the call's arguments (regions are {x, y, w, h} usable with brightness/ocr, colors {r, g, b}). No files, network or processes. Guards: 30 min max, step limit, ≥50 ms between keys, max 10000 inputs (keys and mouse), input only while that window is in front (paused otherwise), held keys released at the end, at most 3 running at once (BUSY for an immediate run; a delayed run that comes due while 3 are running fails); stop with automation.stop, the 停下 (stop) hotkey (default Ctrl+Shift+F12) or 停下 in the tray menu. Returns at once with {status started/scheduled, id, target, dueAtUnixMs}; the end arrives as an automation.finished event carrying the run record (status finished/failed/cancelled/missed, message, report {outcome finished/stopped/limit/error, keys, durationMs, log}).",
+            description: "Run an automation: either a saved one by id (with args checked against its declared params; see automation.save) or an ad-hoc sandboxed Luau program in source (written by the companion or an Agent). Every automation is a program; what it calls decides the rules (judged from the source, conservatively; names inside comments and strings don't count). A program that presses keys, types, sends to the game chat, uses the mouse, looks at the screen or calls game_focused USES THE GAME WINDOW: it acts on the CURRENT foreground window — switch to the game first (a game that allows automation input) — and that window is bound when you call this, also for delayed runs: if it is gone when the run is due, the run fails instead of pressing keys elsewhere; input pauses while it is not in front; at most 3 such runs at once (BUSY for an immediate run; a delayed one that comes due while 3 are running fails). A program that only speaks, shows danmaku, pushes, asks 琴音, logs or waits binds NO window: no foreground check (target null), not counted in the 3, never paused or ended because a window closed (a window function called there fails at once). Delays: delaySeconds or at (up to 7 days); a saved automation that declares a number param delay_seconds starts that many seconds later on top of that (7 days in total at most). A run missed by more than 120 s (Kotone closed) is recorded as missed and never run late; runs are never retried. 琴音 herself cannot run a saved automation that asks her (it would hand the turn back to her); the player, hotkeys, game events and external Agents can. Whitelisted functions only (coordinates are window-client ratios 0..1 everywhere): key(name) / key_down / key_up / type_text(text); chat(text, {channel = \"team\"|\"all\"}) sends to the game chat through the same entry as game_chat.send (the game profile's chat keys, one message per line) — use it instead of pressing Enter yourself; click(x, y, {button left/right/middle, count 1-3}), mouse_move(x, y), mouse_down(button) / mouse_up(button) (drag = move, down, move, up), scroll(n) (+ up); wait(ms), every(ms, fn, {for_ms, times}) (fn returning false stops), wait_until(cond, {poll_ms, stable_frames, timeout_ms}) → bool, now(); region(x, y, w, h), brightness(region) 0..255, color_at(x, y) → r, g, b; find_color(region, color, {variation 0-255 per channel = 0, largest = false, min_pixels}) → x, y, n like AutoHotkey PixelSearch (first match top-to-bottom, left-to-right; largest = center of the biggest connected patch); find_image(region, args.<image param>, {variation, trans = color}) → center x, y, top-left x, y like ImageSearch (first match, template compared at its own size, trans color ignored); find_text(region, text) → center x, y of the text via OCR; ocr(region) → object with :has(text) / :count() / :find(text) (screen text can be tested and located but never copied into input); colors are {r, g, b} or \"#RRGGBB\"; log(text), game_focused(), stop(). Telling the player is the program's own job — nothing is said or shown unless it calls one of these: say(text, {toast = true}) speaks (≤300 chars; waits until said, queued behind her other speech, at most 240 s; waits while the mic is recording and falls back to danmaku when voice fails; toast = true also shows the same line as danmaku at the same time); toast(text) danmaku only (≤300, doesn't wait); push(text) records one line in the Kotone chat and shows it in the floating window (≤40 chars, one line, no voice, no model call; at least 1 s apart); ask(text) hands one sentence to 琴音 in the main conversation (≤500; saved automations only; waits until she is free, at most 2 min, → true if handed over; costs one AI call each time; the text must not contain values filled in from the triggering game event — refused; when triggered by a game event, at most 3 per match for each automation). args is a read-only table of the call's arguments (regions are {x, y, w, h} usable with brightness/ocr, colors {r, g, b}). No files, network or processes. Guards: 30 min max, step limit, ≥50 ms between keys, max 10000 inputs (keys and mouse), held keys released at the end; stop with automation.stop, the 停下 (stop) hotkey (default Ctrl+Shift+F12) or 停下 in the tray menu. Returns at once with {status started/scheduled, id, target (window label; null when no window is bound), dueAtUnixMs}; the end arrives as an automation.finished event carrying the run record (status finished/failed/cancelled/missed, message, report {outcome finished/stopped/limit/error, keys, durationMs, log}).",
             side_effects: &["input", "captures-screen", "may-speak"],
             egress: "backend-dependent",
             input: object(&[], json!({"id": id("已保存自动化的 ID（与 source 二选一）"), "args": {"type": "object", "description": "已保存自动化的入参，按它声明的 params 校验；缺省值自动补上"}, "source": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "临时 Luau 程序（与 id 二选一）"}, "name": {"type": "string", "maxLength": 40}, "delaySeconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "几秒后开始（与 at 二选一；都不传 = 立即）"}, "at": {"type": "integer", "minimum": 0, "description": "开始时刻（Unix 毫秒）"}})),
-            output: object(&["status", "id"], json!({"status": {"enum": ["started", "scheduled"]}, "id": {"type": "string"}, "target": {"type": "string"}, "dueAtUnixMs": {"type": "integer"}})),
+            output: object(&["status", "id"], json!({"status": {"enum": ["started", "scheduled"]}, "id": {"type": "string"}, "target": {"type": ["string", "null"], "description": "绑定的游戏窗口；不用游戏窗口的程序为 null"}, "dueAtUnixMs": {"type": "integer"}})),
         },
         Def {
             name: TOOL_AUTOMATION_RUNS,
-            description: "Automation run records, reminders included (pending and running first by due time, then finished ones newest first; up to 50). Each run: id, sessionId, action {kind speak: text, delivery | kind program: name, source, automationId, args, target {label}}, createdAtMs, dueAtMs, startedAtMs, finishedAtMs, status pending/running/finished/failed/cancelled/missed, message, report {outcome, keys, durationMs, log}.",
+            description: "Automation run records, reminders included (pending and running first by due time, then finished ones newest first; up to 50). Every run is a program (reminders and older speak records too): id, sessionId, action {kind program, name, source, automationId, args, target {label} or null (null = not bound to a game window, e.g. a reminder), event {type, game} when a game event triggered it}, createdAtMs, dueAtMs, startedAtMs, finishedAtMs, status pending/running/finished/failed/cancelled/missed, message, report {outcome, keys, durationMs, log}. running counts the running runs bound to a game window (at most maxRunning = 3); pending counts all pending ones.",
             side_effects: &[],
             egress: "none",
             input: none(),
@@ -664,7 +664,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_STOP,
-            description: "Cancel a pending run or stop a running one by id (reminders too). Without id: stop every running program and cancel every pending program; pending reminders are kept. Held keys are released. Returns how many runs were affected.",
+            description: "Cancel a pending run or stop a running one by id (reminders too). Without id (same as the 停下 hotkey): stop every running run and cancel every pending run bound to a game window; pending runs that don't use the game window (reminders, programs that only speak or push) are kept — cancel those one by one by id. Held keys are released. Returns how many runs were affected.",
             side_effects: &["stops-automation"],
             egress: "none",
             input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"id": id("执行记录 ID（automation.run / automation.runs）")}}),
@@ -672,7 +672,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_SAVE,
-            description: "Save an automation for reuse (create, or overwrite by id). action is {kind: program, source: Luau} or {kind: speak, text, delivery: [voice|danmaku]}. params declare typed arguments the program reads as args.<name>: type number {min, max, integer} / text {maxLength ≤200, no newlines} / boolean / choice {options} / key (key name such as Q, Enter, Ctrl+Q) / region ({x, y, w, h} window-client ratios) / color ({r, g, b}) / image (template for find_image: pass {png: base64} — e.g. from screen.capture → image.crop → artifact.get — and it is stored as {image: sha256}; PNG ≤512×512, ≤512 KB); each has name (lowercase identifier), optional label, description and default (no default = required). Programs are syntax-checked. Speak automations may take number / text / boolean / choice params: {name} in text is replaced by the value, and a number param named delay_seconds speaks that many seconds later. schedule {cron, enabled, args} runs it on a crontab-like schedule in local time (5 fields \"min hour day month weekday\", or @hourly / @daily / @weekly / @monthly; missed runs are not caught up). on {event: [types or prefix like lol.*], game?: profile id, match?: {data field: value or [values] meaning or}, for?: seconds a phase must hold (game.phase_changed only), mode?: single|restart|queued, oncePerMatch?, cooldownSeconds?, enabled} runs it when a game event happens (ADR 036; event names and data fields from game.state); data fields with the same name as a param (camelCase field = snake_case param) fill that param. action {kind: prompt, text} (no params) hands one sentence to 琴音 in the main conversation when triggered, with the event attached: she runs one turn and speaks; costs one AI call per trigger, at most 3 per match. Saved automations run without calling a model (automation.run with id and args); runs keep a snapshot, so editing or deleting later does not change scheduled runs. Max 200.",
+            description: "Save an automation for reuse (create, or overwrite by id). action is {kind: program, source: Luau} — the functions are listed under automation.run: to tell the player write say / toast / push in the program (without them it stays silent), to hand something to 琴音 write ask(text). The older forms {kind: speak, text, delivery: [voice|danmaku]} ({name} in text = that param) and {kind: prompt, text} (≤500) are still accepted and saved as the equivalent program (say / toast with the params joined in, ask(\"…\")); prefer writing the program. params declare typed arguments the program reads as args.<name>: type number {min, max, integer} / text {maxLength ≤200, no newlines} / boolean / choice {options} / key (key name such as Q, Enter, Ctrl+Q) / region ({x, y, w, h} window-client ratios) / color ({r, g, b}) / image (template for find_image: pass {png: base64} — e.g. from screen.capture → image.crop → artifact.get — and it is stored as {image: sha256}; PNG ≤512×512, ≤512 KB); each has name (lowercase identifier), optional label, description and default (no default = required); a number param named delay_seconds starts every run that many seconds later. Programs are syntax-checked. schedule {cron, enabled, args} runs it on a crontab-like schedule in local time (5 fields \"min hour day month weekday\", or @hourly / @daily / @weekly / @monthly; missed runs are not caught up). on {event: [types or prefix like lol.*], game?: profile id, match?: {data field: value or [values] meaning or}, for?: seconds a phase must hold (game.phase_changed only), mode?: single|restart|queued (only for programs that use the game window; the others run on every trigger), oncePerMatch?, cooldownSeconds?, enabled} runs it when a game event happens (ADR 036; event names and data fields from game.state); data fields with the same name as a param (camelCase field = snake_case param) fill that param — they may be names other players chose: fine for say / toast / push, refused inside ask. ask() hands the turn to 琴音 with the event attached (one AI call each time, at most 3 per match per automation). The result (like automation.get / automation.list) carries usesWindow (binds the game window: needs the game in front, ▶ counts down first) and asks (hands a turn to 琴音; such automations are not offered to her as saved.* tools and she cannot run them herself). Saved automations run without calling a model unless they ask (automation.run with id and args); runs keep a snapshot, so editing or deleting later does not change scheduled runs. Max 200.",
             side_effects: &["writes-automations"],
             egress: "none",
             input: object(&["name", "action"], json!({
@@ -692,8 +692,8 @@ fn defs() -> Vec<Def> {
                 "action": {"type": "object", "required": ["kind"], "properties": {
                     "kind": {"enum": ["program", "speak", "prompt"]},
                     "source": {"type": "string", "maxLength": 8000},
-                    "text": {"type": "string", "maxLength": 500, "description": "speak：播报的话（≤300）；prompt：交给琴音的一句话（≤500）"},
-                    "delivery": {"type": "array", "items": {"enum": ["voice", "danmaku"]}}
+                    "text": {"type": "string", "maxLength": 500, "description": "旧写法，保存时转成程序：speak 说的话（≤300）；prompt 交给琴音的一句话（≤500）"},
+                    "delivery": {"type": "array", "items": {"enum": ["voice", "danmaku"]}, "description": "旧写法 speak 的说法"}
                 }},
                 "schedule": {"type": ["object", "null"], "required": ["cron"], "properties": {
                     "cron": {"type": "string", "maxLength": 100, "description": "如 0 8 * * *（每天 8 点）、*/10 * * * *、0 9 * * 1-5、@daily"},
@@ -711,11 +711,11 @@ fn defs() -> Vec<Def> {
                     "enabled": {"type": "boolean"}
                 }}
             })),
-            output: open("保存后的自动化：id、name、description、params（补全 label 与规范化缺省值）、action、createdBy、createdAtMs、updatedAtMs"),
+            output: open("保存后的自动化：id、name、description、params（补全 label 与规范化缺省值）、action（{kind: program, source}）、usesWindow、asks、createdBy、createdAtMs、updatedAtMs；触发里的事现在不会发生时多一项 triggerNotes"),
         },
         Def {
             name: TOOL_AUTOMATION_GET,
-            description: "One saved automation by id, including the program source.",
+            description: "One saved automation by id, including the program source, usesWindow (it presses keys or looks at the screen: binds the game window) and asks (it hands a turn to 琴音).",
             side_effects: &[],
             egress: "none",
             input: object(&["id"], json!({"id": id("自动化 ID")})),
@@ -723,7 +723,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_LIST,
-            description: "Saved automations sorted by name (program source omitted; use automation.get): id, name, description, params, action kind, createdBy, timestamps.",
+            description: "Saved automations sorted by name (program source omitted; use automation.get): id, name, description, params, action kind (always program), usesWindow, asks, schedule, on, createdBy, timestamps.",
             side_effects: &[],
             egress: "none",
             input: none(),
@@ -883,5 +883,53 @@ mod tests {
     fn every_host_tool_has_exactly_one_definition() {
         let names: Vec<&str> = super::defs().iter().map(|d| d.name).collect();
         assert_eq!(names, super::HOST_TOOLS);
+    }
+
+    /// ADR 045：自动化只剩程序。说明里有通知和交给她的函数、“用不用游戏窗口”的规矩和停下的范围；
+    /// 旧写法 speak / prompt 照旧收（已发布的入参不收窄），不用窗口的 `target` 是 null。
+    #[test]
+    fn automation_tools_describe_programs_only() {
+        let defs = super::defs();
+        let def = |name: &str| defs.iter().find(|d| d.name == name).unwrap();
+        let run = def(super::TOOL_AUTOMATION_RUN);
+        for text in [
+            "say(text, {toast = true})",
+            "push(text)",
+            "ask(text)",
+            "USES THE GAME WINDOW",
+            "binds NO window",
+            "delay_seconds",
+            "cannot run a saved automation that asks her",
+        ] {
+            assert!(run.description.contains(text), "{text}");
+        }
+        assert_eq!(
+            run.output["properties"]["target"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        let save = def(super::TOOL_AUTOMATION_SAVE);
+        assert_eq!(
+            save.input["properties"]["action"]["properties"]["kind"]["enum"],
+            serde_json::json!(["program", "speak", "prompt"])
+        );
+        assert!(save.description.contains("saved as the equivalent program"));
+        for name in [
+            super::TOOL_AUTOMATION_SAVE,
+            super::TOOL_AUTOMATION_GET,
+            super::TOOL_AUTOMATION_LIST,
+        ] {
+            let d = def(name);
+            assert!(
+                d.description.contains("usesWindow") && d.description.contains("asks"),
+                "{name}"
+            );
+        }
+        let stop = def(super::TOOL_AUTOMATION_STOP);
+        assert!(stop
+            .description
+            .contains("cancel every pending run bound to a game window"));
+        assert!(stop.description.contains("are kept"));
+        let runs = def(super::TOOL_AUTOMATION_RUNS);
+        assert!(!runs.description.contains("kind speak"));
     }
 }

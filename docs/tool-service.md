@@ -149,23 +149,25 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 ### 自动化（委托桌面宿主，2026-11-16）
 
-大模型或 Agent 写的一小段 Luau 程序（自动化）在沙盒里对游戏窗口执行（[演进计划 §12](product-evolution-game-tools.md#12-自动化大模型写程序沙盒执行2026-11-16-定方向)、[ADR 013](adr/013-automation-domain-model.md)）。调用时的**前台窗口**就是目标，先切到游戏。提醒也是自动化（“延迟 + 播报”），和程序共用一个调度器与执行记录。
+大模型或 Agent 写的一小段 Luau 程序（自动化）在沙盒里执行（[演进计划 §12](product-evolution-game-tools.md#12-自动化大模型写程序沙盒执行2026-11-16-定方向)、[ADR 013](adr/013-automation-domain-model.md)）。2026-11-27 起每个自动化都是程序（[ADR 045](adr/045-automation-is-programs.md)）：说一句、弹幕、推送、交给她是程序里的函数，程序里不写就安静（Kotone 不再替自动化加“成功了”的提示）。提醒是“晚一会儿开始、只说一句”的程序，和别的程序共用一个调度器与执行记录。
+
+**用不用游戏窗口**：按源码判断（保守，宁可多算；注释和字符串里的不算；`args.key`、`{ key = 1 }` 不算）。程序里出现按键、打字、发到游戏聊天、鼠标、看屏幕的函数或 `game_focused`（下面白名单里“键盘”“游戏聊天”“鼠标”“找色 / 找图 / 找字”和 `brightness` / `color_at` / `ocr`），就**用到游戏窗口**：调用时的**前台窗口**就是目标（先切到游戏，要是允许自动化输入的游戏），在安排时记下，失焦暂停，窗口关了结束，占“同时最多 3 个”的名额，游戏事件触发时照 `mode`。只用说话、弹幕、推送、交给她、日志、等待的程序**不绑窗口**：不看前台（结果的 `target` 为 `null`），不占名额，不会因为窗口没了失败或被停，不挡她操作游戏，游戏事件每次触发都跑；这种执行里一调用窗口函数就报错（不进暂停等待）。定义的 `usesWindow` / `asks` 由 Kotone 按这条规矩算好给出。
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
-| `automation.run` | `id` + 可选 `args`（运行已保存的自动化），或 `source`（临时 Luau，≤8000 字）+ 可选 `name`；可选 `delaySeconds`（≤604800）或 `at`（Unix 毫秒） | 先按声明校验入参、检查语法（错误为 `INVALID_ARGUMENTS`）；播报类自动化不需要前台窗口。立即运行时同时最多 3 个（否则 `BUSY`）；带延迟时存为等待中（Kotone 重启后仍在）。返回 `{status:"started"/"scheduled", id, target, dueAtUnixMs}` |
-| `automation.runs` | 无 | `running`、`pending`、`maxRunning`、`runs[]`：执行记录（含提醒），未结束的按到期时间在前，其后已结束的新的在前，最多 50 条 |
-| `automation.save` | 可选 `id`（覆盖）、`name`（≤40）、可选 `description`（≤200）、可选 `params[]`（≤16）、`action`（`{kind:"program", source}`、`{kind:"speak", text, delivery}` 或 `{kind:"prompt", text}`）、可选 `schedule`、可选 `on`（游戏事件触发，ADR 036：`event[]`、`game`、`match`、`for`、`mode`、`oncePerMatch`、`cooldownSeconds`、`enabled`，事件名见 `game.state`） | 保存的自动化（补全 `label`、规范化缺省值）；`createdBy` 为 `agent`。程序先检查语法；`prompt`（“让她做”：触发时把这句话交给她跑一轮，每次一次 AI 调用，按事件触发时每局最多 3 次）不能有参数；按事件触发时和事件 `data` 同名的参数自动填上。`on` 里的事件名按合并后的事件目录校验（插件关着时它登记的也认得）；触发里的事现在不会发生时（例如英雄联盟插件关着）照常保存，结果多一项 `triggerNotes`（“英雄联盟插件关着，这个触发不会发生；到「插件」里打开以后照常触发”）。发布 `automation.saved` |
-| `automation.get` | `id` | 一个已保存的自动化（含源码） |
-| `automation.list` | 无 | `automations[]`（按名字排序，省略源码）、`max`（200） |
+| `automation.run` | `id` + 可选 `args`（运行已保存的自动化），或 `source`（临时 Luau，≤8000 字）+ 可选 `name`；可选 `delaySeconds`（≤604800）或 `at`（Unix 毫秒） | 先按声明校验入参、检查语法（错误为 `INVALID_ARGUMENTS`）；不用游戏窗口的程序不需要前台窗口。用到游戏窗口的立即运行时同时最多 3 个（否则 `BUSY`）；带延迟时存为等待中（Kotone 重启后仍在）。已保存的自动化声明了数字参数 `delay_seconds` 时再晚这么多秒开始（和 `delaySeconds` / `at` 相加，合计 ≤7 天）。返回 `{status:"started"/"scheduled", id, target（绑定窗口的名字，不用窗口的为 null）, dueAtUnixMs}`。**琴音自己**用它（或 `saved.*`）运行会叫她的已保存自动化（`asks: true`）时被拒绝（“这个自动化会叫你……由玩家、热键或游戏事件来运行”，拦在她的工具端口里）；外部 Agent、▶、热键、游戏事件不受影响 |
+| `automation.runs` | 无 | `running`（运行中、绑了游戏窗口的条数）、`pending`、`maxRunning`（3）、`runs[]`：执行记录（含提醒），未结束的按到期时间在前，其后已结束的新的在前，最多 50 条 |
+| `automation.save` | 可选 `id`（覆盖）、`name`（≤40）、可选 `description`（≤200）、可选 `params[]`（≤16）、`action`（`{kind:"program", source}`；旧写法 `{kind:"speak", text, delivery}` 和 `{kind:"prompt", text}` 照旧收）、可选 `schedule`、可选 `on`（游戏事件触发，ADR 036：`event[]`、`game`、`match`、`for`、`mode`、`oncePerMatch`、`cooldownSeconds`、`enabled`，事件名见 `game.state`） | 保存的自动化（补全 `label`、规范化缺省值，带 `usesWindow` / `asks`）；`createdBy` 为 `agent`。程序先检查语法。旧写法保存时转成等价的程序（ADR 045 D1）：`speak` → 字符串拼接的 `say(…)` / `toast(…)` / `say(…, { toast = true })`（`{参数}` 换成 `args.<参数>`，数字 `tostring`，开关“是 / 否”），`prompt` → `ask("…")`；推荐直接写程序。参数类型不再按动作限制。按事件触发时和事件 `data` 同名的参数自动填上（这些值可能是别人起的名字：`say` / `toast` / `push` 里能用，`ask` 的话里出现就报错）；`mode` 只对用到游戏窗口的程序生效。`on` 里的事件名按合并后的事件目录校验（插件关着时它登记的也认得）；触发里的事现在不会发生时（例如英雄联盟插件关着）照常保存，结果多一项 `triggerNotes`（“英雄联盟插件关着，这个触发不会发生；到「插件」里打开以后照常触发”）。会叫她的（`asks`）不当 `saved.*` 工具交给她。发布 `automation.saved` |
+| `automation.get` | `id` | 一个已保存的自动化（含源码），带 `usesWindow`（用到游戏窗口）和 `asks`（会叫她） |
+| `automation.list` | 无 | `automations[]`（按名字排序，省略源码，每项带 `usesWindow` / `asks`）、`max`（200） |
 | `automation.delete` | `id` | `deleted`；已安排的执行保存的是快照，照常执行（要取消用 `automation.stop`）。发布 `automation.deleted` |
-| `automation.stop` | 可选 `id` | 有 `id`：取消等待中的或停止运行中的那一条（提醒也可以）。没有 `id`：停止全部运行中的程序并取消全部等待中的程序，**等待中的提醒保留**。返回 `stopped`（涉及条数）；按住的键随即松开 |
+| `automation.stop` | 可选 `id` | 有 `id`：取消等待中的或停止运行中的那一条（提醒也可以）。没有 `id`（和停下热键一样，ADR 045 D6）：停止全部运行中的执行，取消等待中、**绑了游戏窗口**的执行；**等待中的提醒**（以及别的不用窗口的程序）**保留**，要取消就按 `id` 一条一条来。返回 `stopped`（涉及条数）；按住的键随即松开 |
 
 **入参**（`params[]`）：每项 `name`（程序里的 `args.<name>`，小写字母开头，只含小写字母、数字、下划线）、可选 `label` / `description` / `default`（没有缺省值 = 必填），`type` 是 `number`（`min`、`max`、`integer`）、`text`（`maxLength` ≤200，不能换行）、`boolean`、`choice`（`options`）、`key`（键名）、`region`（`{x, y, w, h}` 窗口比例，可直接交给 `brightness` / `ocr`）、`color`（`{r, g, b}`）、`image`（`find_image` 的模板：提交 `{png: base64}`，例如 `screen.capture` → `image.crop` → `artifact.get` 拿到的 PNG，≤512×512、≤512 KB；保存为 `~/.kotone/automation-images/<sha256>.png`，参数里换成 `{image: <sha256>}`，执行记录只存引用）。运行时多给、少给、类型或范围不对都是 `INVALID_ARGUMENTS`，且不留执行记录。程序里 `args` 是只读表。已保存的自动化存在 `~/.kotone/automations.json`。
 
-**执行记录**：`id`、`sessionId`（发起方）、`action`（`{kind:"speak", text, delivery}` 或 `{kind:"program", name, source, automationId, args, target:{label,…}}`）、`createdAtMs`、`dueAtMs`、`startedAtMs`、`finishedAtMs`、`status`（`pending` / `running` / `finished` / `failed` / `cancelled` / `missed`）、`message`（失败、停止或错过的原因，如“游戏窗口已关闭”“停止自动化热键”）、`report`（程序：`outcome` 为 `finished` / `stopped` / `limit` / `error`，`keys`、`durationMs`、`log[]`）。每条执行进入终态时发布 `automation.finished`，内容即这条记录（省略 `source`）。
+**执行记录**：`id`、`sessionId`（发起方）、`action`（`{kind:"program", name, source, automationId, args, target, event}`：`target` 是 `{label,…}`，不用游戏窗口的为 `null`；`event` 是触发它的游戏事件，只露 `{type, game}`，不是游戏事件触发的没有这一项。2026-11-27 起只有程序：旧的 `{kind:"speak"}` 记录打开文件时换成提醒形状的程序）、`createdAtMs`、`dueAtMs`、`startedAtMs`、`finishedAtMs`、`status`（`pending` / `running` / `finished` / `failed` / `cancelled` / `missed`）、`message`（失败、停止或错过的原因，如“游戏窗口已关闭”“停止自动化热键”）、`report`（程序：`outcome` 为 `finished` / `stopped` / `limit` / `error`，`keys`、`durationMs`、`log[]`）。每条执行进入终态时发布 `automation.finished`，内容即这条记录（省略 `source`）。
 
-**调度语义**：最多执行一次，**绝不自动重试**；到期超过 120 秒（Kotone 没开、休眠）记为 `missed`，不补执行；Kotone 退出时仍在运行的记录下次启动记为 `failed`；程序在**安排时**记下目标窗口，到点时窗口已关闭则 `failed`，不会改投当时的前台窗口；到点时已有 3 个程序在跑则这次 `failed`，不排队。
+**调度语义**：最多执行一次，**绝不自动重试**；到期超过 120 秒（Kotone 没开、休眠）记为 `missed`，不补执行；Kotone 退出时仍在运行的记录下次启动记为 `failed`；用到游戏窗口的程序在**安排时**记下目标窗口，到点时窗口已关闭则 `failed`，不会改投当时的前台窗口；到点时已有 3 个用到游戏窗口的程序在跑，再到点的用到窗口的这次 `failed`，不排队（不用窗口的照常启动）。等待中 + 运行中合计最多 100 条。
 
 **白名单函数**（坐标一律是游戏窗口客户区比例 0..1，换分辨率仍可用）：
 
@@ -176,9 +178,14 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
   - `find_color(区域, 颜色, {variation=0, largest=false, min_pixels=1})` → `x, y, 像素数` 或 `nil`：每个通道与目标相差不超过 `variation`（0 = 完全相同）。缺省按从上到下、从左到右返回**第一个**匹配像素；`largest=true` 返回**最大一块相连区域**的中心，适合拿去点击。颜色写 `{r=…, g=…, b=…}` 或 `"#RRGGBB"`；
   - `find_image(区域, args.<image 参数>, {variation=0, trans=颜色})` → 中心 `x, y`、左上 `x, y` 或 `nil`：按模板原尺寸逐像素比较（不缩放，游戏分辨率或界面缩放变了要重新截模板），`trans` 颜色的模板像素不参与比较（AHK 的 `*TransN`），返回第一个匹配。与 AHK 不同：先返回中心，便于直接 `click`；
   - `find_text(区域, 文字)` → 文字中心 `x, y` 或 `nil`：对区域做一次 OCR（陪玩选定的模型），跨行、忽略空白与大小写；只匹配一行的一部分时按字符比例估计横向位置；
-- 其他：`wait(ms)`、`every(ms, fn, {for_ms, times})`（固定节拍、不补拍，`fn` 返回 `false` 结束）、`wait_until(条件, {poll_ms=200, stable_frames=1, timeout_ms})` → 是否满足、`now()`；`region(x, y, w, h)`（窗口客户区比例 0..1）、`brightness(区域)`（0..255）、`color_at(x, y)` → r, g, b、`ocr(区域)` → 只能 `:has(文字)` / `:count()` / `:find(文字)`（位置）的对象（拿不到原文）；`say(文字)`（语音，等播完）、`toast(文字)`（弹幕，不等）、`log(文字)`、`game_focused()`、`stop()`。没有文件、网络、进程、配置。
+- 其他：`wait(ms)`、`every(ms, fn, {for_ms, times})`（固定节拍、不补拍，`fn` 返回 `false` 结束）、`wait_until(条件, {poll_ms=200, stable_frames=1, timeout_ms})` → 是否满足、`now()`；`region(x, y, w, h)`（窗口客户区比例 0..1）、`brightness(区域)`（0..255）、`color_at(x, y)` → r, g, b、`ocr(区域)` → 只能 `:has(文字)` / `:count()` / `:find(文字)`（位置）的对象（拿不到原文）；`log(文字)`、`game_focused()`、`stop()`。没有文件、网络、进程、配置。
+- 告诉玩家、交给她（ADR 045 D2；程序里不写就什么都不说）：
+  - `say(文字, { toast = true })`：她开口说（≤300 字），说完才返回；排进她的输出队列（她自己在说话就排在后面），最多 240 秒；麦克风在录音时先等（最多 30 秒）、语音失败改弹幕；停下就跟着停。`toast = true` 时语音和同一句弹幕一起出现（`say(t); toast(t)` 会先说完再飘字）；
+  - `toast(文字)`：只出弹幕（≤300 字），不等；
+  - `push(文字)`：在 Kotone 聊天里记一条、悬浮窗显示一行（≤40 字、一行），走插件推送同一条路，不出声、不调用模型；两次至少隔 1 秒（太快自动等）；附一条不叫模型的说明，她之后在对话里看得到。0.1 旧助手没有聊天，报错；
+  - `ask(文字)` → 是否交给了她：就是以前的“让她做”。等主会话空下来（最多 2 分钟），作为系统消息放进主会话，附上触发它的游戏事件，她跑一轮；每次花一次 AI 调用（≤500 字）。只在保存的自动化里能用（临时程序报错）；话里不能带从游戏事件填进来的参数值（报错，只说参数名）；按游戏事件触发时每个自动化每局最多叫她 3 次，手动、热键不限；等着的时候被停下就什么都不发。过了 2 分钟还没空就不交了，在聊天里留一句。
 
-**护栏**：Luau 沙盒（无 `loadstring` / `require` / `io` / `os.execute`，内存 16 MB）；总时长 30 分钟、执行步数上限（死循环会被终止）、最多 10000 次输入（按键与鼠标动作）、两次输入至少 50 ms；输入与截图只在启动时的游戏窗口处于前台时进行，切走即暂停、切回继续（不补按）；窗口关闭则结束；自动化结束（含出错、超限、停止、Kotone 退出）时松开所有按住的键和鼠标键。鼠标移动用 `SendInput` 的绝对坐标（游戏读原始输入也能收到），换算偏差超过 2 像素时用 `SetCursorPos` 校正。停止方式：`automation.stop`、托盘「停止所有自动化」、**停止自动化热键**（`automationStopHotkey`，应用级，默认 `Ctrl+Shift+F12`，Kotone 停止时也有效）。`say` 与 `toast` 走提醒的输出队列：一条弹幕滚完之前，后面的语音会等它。
+**护栏**：Luau 沙盒（无 `loadstring` / `require` / `io` / `os.execute`，内存 16 MB）；总时长 30 分钟、执行步数上限（死循环会被终止）、最多 10000 次输入（按键与鼠标动作）、两次输入至少 50 ms；用到游戏窗口的程序，输入与截图只在启动时的游戏窗口处于前台时进行，切走即暂停、切回继续（不补按），窗口关闭则结束（不用窗口的不受影响）；自动化结束（含出错、超限、停止、Kotone 退出）时松开所有按住的键和鼠标键。鼠标移动用 `SendInput` 的绝对坐标（游戏读原始输入也能收到），换算偏差超过 2 像素时用 `SetCursorPos` 校正。停止方式：`automation.stop`、托盘「停止所有自动化」、**停止自动化热键**（`automationStopHotkey`，应用级，默认 `Ctrl+Shift+F12`，Kotone 停止时也有效）。`say` 与 `toast` 走她的输出队列（一次只投递一条）：一条弹幕滚完之前，后面的语音会等它。
 
 ### 游戏（委托桌面宿主，2026-11-16）
 
@@ -209,7 +216,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 **让琴音操作**：游戏配置的 `computerUse`：`ask`（缺省，内置 Agent 每段对话先问一次）/ `allow`（一直允许）/ `deny`。哪些游戏能操作由玩家判断，Kotone 不单独区分竞技游戏。外部 Agent 调 `game.act` 不经过询问（权限由它们自己的运行框架管），但游戏配置的拒绝同样生效。Kotone 发出的模拟输入在 `dwExtraInfo` 带标记 `0x4B544E49`（"KTNI"）：`game.act` 自己按的 Esc 照常传给游戏，只有玩家按的 Esc 才算停止。
 
-**允许自动化输入**：游戏配置的 `allowAutomationInput`（缺省允许）为 `false` 时，`automation.run` 对这个游戏的程序执行会被拒绝（安排时检查，带延迟的到点时再检查一次）；玩家自己的语音打字不受影响。启动路径存在游戏配置的 `launchPath`。
+**允许自动化输入**：游戏配置的 `allowAutomationInput`（缺省允许）为 `false` 时，`automation.run` 对这个游戏的用到游戏窗口的程序会被拒绝（安排时检查，带延迟的到点时再检查一次；只说话、推送的程序不看前台，不受影响）；玩家自己的语音打字不受影响。启动路径存在游戏配置的 `launchPath`。
 
 ### 插件（委托桌面宿主，2026-11-24，[ADR 038](adr/038-kotone-and-apps.md)）
 

@@ -365,14 +365,79 @@ fn saved_automation_becomes_a_typed_tool() {
     // 模型给不出图片：没有缺省模板的自动化不交给模型。
     let image = param("template", ParamKind::Image, None);
     assert!(saved_entry(&saved("auto-3", vec![image])).is_none());
-    let speak = Automation {
-        // ADR 045：以前的播报转成只说话的程序（不用游戏窗口）
+    // ADR 045：种类说明按“用不用游戏窗口”写——按键的要先切到游戏；以前的播报转成只说话的程序，不用切
+    assert!(
+        entry.description.contains("前台的游戏窗口"),
+        "{}",
+        entry.description
+    );
+    let program = |id: &str, source: &str| Automation {
         action: AutomationBody::Program(ProgramBody {
-            source: "say(\"喝水\")".into(),
+            source: source.into(),
         }),
-        ..saved("auto-4", Vec::new())
+        ..saved(id, Vec::new())
     };
-    assert!(saved_entry(&speak).unwrap().description.contains("播报"));
+    for source in ["say(\"喝水\")", "toast(\"喝水\")", "push(\"记得买眼\")"] {
+        let description = saved_entry(&program("auto-4", source)).unwrap().description;
+        assert!(
+            description.contains("不用切到游戏") && !description.contains("游戏窗口"),
+            "{source}: {description}"
+        );
+    }
+    // 会叫她的（以前的“让她做”）不当工具给她：交给她的那一轮又会叫她
+    assert!(saved_entry(&program("auto-5", "ask(\"看看对面谁是突破口\")")).is_none());
+}
+
+/// ADR 045：系统提示里已保存的自动化按“用不用游戏窗口”写，会叫她的不列；聊天窗口里只有要按键、看画面的
+/// 自动化才要先切到游戏；写自动化时通知、交给她、延迟的规矩都在（主会话和后台共用）。
+#[test]
+fn the_prompt_says_which_automations_need_the_game_and_how_programs_notify() {
+    let program = |id: &str, name: &str, source: &str| Automation {
+        name: name.into(),
+        action: AutomationBody::Program(ProgramBody {
+            source: source.into(),
+        }),
+        ..saved(id, Vec::new())
+    };
+    let automations = [
+        saved("auto-1", Vec::new()),
+        program("auto-2", "喝水提醒", "say(\"喝水\", { toast = true })"),
+        program("auto-3", "突破口", "ask(\"看看对面谁是突破口\")"),
+    ];
+    let prompt = system_prompt(&PromptContext {
+        automations: &automations,
+        workspace: None,
+        capabilities: "",
+        plugin_rules: "",
+    });
+    let line = |id: &str| {
+        prompt
+            .lines()
+            .find(|l| l.starts_with(&format!("- saved.{id}：")))
+            .map(str::to_string)
+    };
+    assert!(line("auto-1").unwrap().contains("先切到游戏"));
+    assert!(line("auto-2").unwrap().contains("不用切到游戏"));
+    assert!(line("auto-3").is_none(), "会叫她的不列成她能调用的");
+    assert!(!prompt.contains("（播报）"));
+    assert!(
+        prompt.contains("运行要按键或看画面的自动化")
+            && prompt.contains("推送的自动化和提醒不用切")
+    );
+    let child = crate::prompt::child_prompt("琴音", "写自动化", &[], false);
+    for text in [&prompt, &child] {
+        for rule in [
+            "say(话, { toast = true })",
+            "push 在聊天里记一条",
+            "不写就安静",
+            "每次花一次 AI 调用",
+            "别拼游戏事件里的字",
+            "delay_seconds",
+            "不要在程序里 wait 几分钟",
+        ] {
+            assert!(text.contains(rule), "{rule}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -721,11 +786,77 @@ async fn saved_automations_run_through_automation_run() {
     )
     .await;
     assert!(!out.is_error, "{}", out.content);
-    let (tool, args) = f.host.invocations()[0].clone();
+    let invocations = f.host.invocations();
+    // 先查一下会不会叫她（ADR 045），再运行
+    assert_eq!(
+        invocations[0],
+        ("automation.get".into(), json!({"id": "auto-1"}))
+    );
+    let (tool, args) = invocations[1].clone();
     assert_eq!(tool, "automation.run");
     assert_eq!(args["id"], "auto-1");
     assert_eq!(args["args"], json!({"interval": 0.5}));
     assert_eq!(args["delaySeconds"], 30);
+}
+
+/// ADR 045：会叫她的自动化（程序里有 ask()）她自己不运行——`automation.run` 带 id、这段对话中途才改成会叫她的
+/// `saved.*` 都在询问玩家之前拒绝，说清由谁来运行。临时程序不查；外部 Agent 经工具服务照常运行。
+#[tokio::test]
+async fn she_does_not_run_automations_that_ask_her() {
+    let f = fixture(Policy::default(), Answer::AllowOnce);
+    f.host.set_invoke_result(
+        "automation.get",
+        Ok(json!({"id": "auto-1", "name": "突破口", "usesWindow": false, "asks": true})),
+    );
+    for (tool, args) in [
+        ("automation.run", json!({"id": "auto-1"})),
+        ("saved.auto-1", json!({})),
+    ] {
+        let out = call(&f.port, tool, args).await;
+        assert!(
+            out.is_error
+                && out.content.contains("会叫你")
+                && out.content.contains("玩家、热键或游戏事件"),
+            "{tool}: {}",
+            out.content
+        );
+    }
+    assert!(
+        f.host
+            .invocations()
+            .iter()
+            .all(|(tool, _)| tool == "automation.get"),
+        "没有运行：{:?}",
+        f.host.invocations()
+    );
+    assert!(f.asked.lock().unwrap().is_empty(), "拒绝在询问之前");
+
+    // 临时程序不查（ask() 在临时程序里本来就报错）
+    let out = call(&f.port, "automation.run", json!({"source": "say('好')"})).await;
+    assert!(!out.is_error, "{}", out.content);
+    assert_eq!(f.host.invocations().last().unwrap().0, "automation.run");
+
+    // 外部 Agent 经工具服务调：不经过她的端口，照常交给宿主
+    let (service, host) = service();
+    host.set_invoke_result("automation.get", Ok(json!({"asks": true})));
+    let envelope = service
+        .call(kotone_tools::protocol::ToolCallRequest {
+            request_id: None,
+            tool: "automation.run".into(),
+            arguments: json!({"id": "auto-1"}),
+            timeout_ms: None,
+        })
+        .await;
+    assert!(envelope.ok, "{:?}", envelope.error);
+    assert_eq!(host.invocations()[0].0, "automation.run");
+
+    // 不会叫她的照常运行
+    let f = fixture(Policy::default(), Answer::AllowOnce);
+    f.host
+        .set_invoke_result("automation.get", Ok(json!({"id": "auto-1", "asks": false})));
+    let out = call(&f.port, "automation.run", json!({"id": "auto-1"})).await;
+    assert!(!out.is_error, "{}", out.content);
+    assert_eq!(f.host.invocations().last().unwrap().0, "automation.run");
 }
 
 #[tokio::test]

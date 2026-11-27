@@ -38,7 +38,8 @@ def call(tool, args=None):
 def brief(run):
     a = run["action"]
     return {
-        "id": run["id"], "kind": a["kind"], "title": a.get("name") or a.get("text"),
+        # ADR 045：执行记录只有程序（提醒的 name 是正文前 40 字）；window = 绑了游戏窗口（target 不是 null）
+        "id": run["id"], "kind": a["kind"], "title": a.get("name"), "window": a.get("target") is not None,
         "status": run["status"], "message": run.get("message"),
         "dueIn_s": round((run["dueAtMs"] - time.time() * 1000) / 1000, 1),
         "keys": (run.get("report") or {}).get("keys"),

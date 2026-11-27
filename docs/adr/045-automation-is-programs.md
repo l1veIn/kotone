@@ -97,4 +97,42 @@
 
 ## 实现情况
 
-（实现时填写。）
+分四步提交（2026-11-27，分支 `claude/automation-functions`），外加一个先做的小改。
+
+**小改（`5728a90e`）**：热键运行自动化成功时不出声也不弹（D2 最后一段；ADR 040 第 3 期 P2 修订），没运行起来照旧说原因；调工具的热键照旧弹一行结果。同一个提交里还有两件不属于本 ADR 的：聊天页顶栏只留图标和数字；替玩家发的字不再记进自动化执行记录（ADR 014 §3、ADR 041 修订）。
+
+**第 1 步 core 和脚本引擎（`6c308b9f`）**：
+- 定义（`AutomationBody`）和执行记录（`RunAction`）只剩 `Program`。旧写法 `speak` / `prompt` 在读 `AutomationDraft`（serde `try_from`）和 `Automation` 时就转成程序（D1），旧写法照旧规矩查（话 1–300 字、`{参数}` 要有对应参数、“让她做”1–500 字），转完存盘；内置的提醒新装是 `say(args.text, { toast = true })`，突破口是 `ask("…")`；删过的不装回。文件 `version` 还是 1。
+- 旧执行记录里的播报打开文件时换成提醒形状的程序（`automation::reminder_source`：`say(args.text)` / `toast(args.text)` / `say(args.text, { toast = true })`），已结束的作为历史，运行中的标失败，`legacy-reminder-` 前缀保留（D3）。调度器的播报循环、`ReminderDelivery` 端口、`schedule_speak`、投递中的单独恢复都删了；`schedule_reminder(session, text, delivery, due)` 生成提醒形状的程序；`schedule_batch` 签名不变。
+- 扫描器 `library::ProgramUses::of(source) → {window, asks}`（`WINDOW_FUNCTIONS` / `PLAIN_FUNCTIONS` 两张表，注释、字符串、`args.key`、`{ key = 1 }` 不算，反引号字符串保守地算；D4）；名额只数运行中、绑了窗口的（D5）；`stop_programs`：运行中全停，等待中只取消绑了窗口的（D6）；`library::delay_ms` 让 `delay_seconds` 对所有自动化生效（D7）；`library::event_args` 从事件填参数；`ProgramAction.event` 存整份触发事件（超过 8 KB 去掉 data），`ProgramAction::check_ask` 是 `ask` 的两道护栏；`games::Triggers::take_ask` 每局 3 次挪到 `ask`（`ASKS_PER_MATCH`），删了 `Armed.per_match`（D8）；`library::templates()` 四个模板 `say` / `push` / `ask` / `blank`（D9）。
+- 脚本引擎：`say(text, { toast })`、`push`（≤40 字、一行、两次至少隔 1 秒）、`ask`（≤500 字）、`ScriptHost::require_window`（没绑窗口时窗口函数一调用就报错，不进暂停循环；`game_focused()` 返回 false）；`say` / `toast` 上限 120 → 300 字；宿主报错时若已取消记成 Cancelled。另有测试保证白名单里每个函数都被扫描器归了类。
+- 测试：新加 24 个、删 7 个（播报循环的），覆盖 merge-plan 测试清单 1–12。
+
+**第 2 步 桌面端后端（`f220fcb7`）**：
+- 安排时按扫描器决定绑不绑窗口：用到的照旧要前台是允许自动化输入的游戏、记目标、失焦暂停、窗口关了结束；不用的不看前台、`target` 为 null、不占名额、不挡她操作游戏（`program_running` 只数绑了窗口的）。▶ 只对用到窗口的先倒数（`needs_countdown`）；游戏事件触发的 `mode` 只管用到窗口的（`mode_applies`）。事件触发改用 core 的 `event_args`，事件随执行记录保存，`run_json` 对外只露 `{type, game}`。
+- `DesktopHost::say`：排进她的输出队列，最多 240 秒，停下跟着停（取消后再等最多 5 秒让壳收尾，`deliver_text` 改成收取消令牌），`toast = true` 时一次投递语音和弹幕；0.1 的提醒按执行记录的 session 前缀用旧语音引擎。
+- `push()` 经 `agent::post_automation_push` 走推送那条路（`plugin = "automation"`、key = `<执行记录 id>-<第几条>`），附一条不叫模型的说明；0.1 旧助手报错。`ask()` 经 `agent::relay::ask_from_automation`：等主会话空下来（最多 2 分钟），作为来源 `automation` 的系统消息放进主会话、附上触发事件；过时了在聊天里留一句；等的时候被停下就什么都不发。
+- `automation_saved_list` / `automation.list` / `get` / `save` 带 `usesWindow` / `asks`，列表另给模板。
+- 测试：新加 11 个（推送的形状和给她的说明、`ask` 的消息、`run_json`、`usesWindow` / `asks`、倒数和 `mode`、只有绑窗口的挡她操作游戏、`say` 的返回 / 停下收尾 / 240 秒超时、复盘里的类别）。
+
+**第 3 步 前端（`94beb8e2`）**：编辑器没有动作种类的选择，新建先选模板（说一句 / 推送一条 / 让{name}做 / 空白程序；按键类提示去复制内置的按键程序），程序默认折叠、多半只填参数；去掉播报内容、回答方式、“让她做”输入框。列表里用到游戏窗口的标“操作游戏窗口”，会叫她的带“会叫{name}”的小标记和“每运行一次花一次 AI 调用”；▶ 只对用到窗口的倒数；等待中的执行挂在它自己那一项下、可以单条取消（内置提醒跑出来的不再出现在“临时提醒”里）；加了“复制”。自动化的推送在聊天和悬浮窗里写“自动化”。顺带：聊天里她“发到游戏聊天”的那一行折叠时直接写发的字（一键喊话同样）。Playwright 新加 4 个、改了 `automation.spec.ts` / `plugin-events.spec.ts`（“让她做”改用模板）。
+
+**第 4 步 她和文档（`docs: ADR 045` 之后的“她的规矩与文档”那个提交）**：
+- 她的工具：`saved.*` 的种类说明按“用不用游戏窗口”写（“程序，对当前前台的游戏窗口执行” / “只说一句、弹幕或推送，不用切到游戏”），会叫她的照旧不当工具给她；系统提示里已保存的自动化列表同样写，聊天窗口那条“先切到游戏”改成只对要按键、看画面的自动化；共用规矩加一条：要通知就在程序里写 `say` / `toast` / `push`，不写就安静；`ask` 每次一次 AI 调用、话里别拼事件里的字；延迟用 `delaySeconds` / `delay_seconds`，不在程序里 `wait` 几分钟。
+- **她不能自己运行会叫她的自动化**：B 报告 `saved.*` 里藏掉了，但她用 `automation.run` 带 id 仍能运行（程序会等她这一轮结束再交给她一轮，绕成圈）。工具服务的入口分不出调用方（她在进程内调工具服务，和外部 Agent 同一个入口，`run_saved` 的 session 都是 `"tool"`），所以拦在她自己的工具端口：`kotone-agent` 的 `KotonePort::call` 在询问玩家之前，对 `saved.<id>` 和带 `id` 的 `automation.run` 现查一次 `automation.get` 的 `asks`，是 true 就拒绝（“这个自动化会叫你（程序里有 ask），由玩家、热键或游戏事件来运行，你自己不运行它”）。现查而不是用会话开始时冻结的清单：玩家可能这段对话中途把它改成会叫她的。主会话和后台都经这个端口；外部 Agent、▶、热键、游戏事件不经过它。
+- 工具说明（`catalog_host.rs`）：`automation.run` 写清“用不用游戏窗口”两套规矩、`target` 可为 null、函数清单加 `say(text, {toast = true})`、`push`、`ask` 和“不写就安静”、`delay_seconds`、她不能运行会叫她的；`save` 仍收 `speak` / `prompt` 并说明转成程序、推荐直接写程序、`mode` 只管用到窗口的、事件填进来的值不能进 `ask`；`list` / `get` / `save` 带 `usesWindow` / `asks`；`runs` 的记录只有程序（`target` 可为 null、`event`），`running` 只数绑了窗口的；`stop` 写清不带 id 时等待中的提醒留着。
+- 测试：`kotone-agent` 新加 2 个（系统提示的写法和规矩；她运行会叫她的自动化被拒、临时程序不查、外部 Agent 经工具服务照常、不会叫她的照常），改 2 个；`kotone-tools` 新加 1 个（自动化工具的说明和入参）。`cargo test -p kotone-agent -p kotone-tools` 114 + 114 个全过；`terminology.spec.ts` 4 个全过（术语表的改动没有和界面用语打架）。
+- 文档：本节；ADR 013 §2 / §3 / §4、ADR 036 D6 / D8、ADR 043 D3 的修订说明；ADR 目录；术语表；`docs/tool-service.md`；`docs/assistant.md` 几处；`CHANGELOG.md`；真机脚本 `game_events_real.py`（旧写法的“对面拿了{dragon_name}”留着测转换，断言改查程序执行记录）、`kotone.py`（执行记录的标题字段）。
+
+**待真机 / 真人**（merge-plan 测试清单里单元测试没覆盖的）：
+- 13：程序里的 `say` 排在她别的话后面；麦克风一直开着 30 秒后改弹幕；语音失败改弹幕（投递那一段是原来提醒的代码，单元测试只测了返回值、停下收尾和 240 秒）。
+- 14：`say(t, { toast = true })` 语音和弹幕同时出现。
+- 15：Kotone 窗口在前台时安排提醒能成功；游戏开着时安排的提醒不绑窗口；到点时游戏已关照样提醒。
+- 16：绑了窗口的程序在窗口关掉时被取消；不绑的不受影响。
+- 18：0.1 升级用户的提醒用旧语音引擎。
+- 19：`push` 在聊天里出现一条推送记录、悬浮窗显示一行、不调模型；她正忙时先排着、界面照样马上显示；发给模型的前缀只追加。
+- 20：`ask` 最多等 2 分钟、过时在聊天里留一句；这一轮不能交给后台；等待中被停下什么都不发。
+- 22：▶ 用到窗口的有倒数，不用的立即排上（真窗口里）。
+- 24：退出 Kotone：等待中的提醒留到下次；正在说的停掉。
+- 26：`game_events_real.py`（真 DeepSeek、假客户端、不发系统按键）：拿龙那一句、突破口那一句。
+- 27（真人）：一边录音一边等提醒，确认改用弹幕。

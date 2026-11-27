@@ -566,6 +566,27 @@ impl<H: BuiltinHost> Runner<H> {
         }
     }
 
+    /// 这个已保存的自动化会不会叫她（`automation.get` 结果里后端按源码算好的 `asks`，ADR 045 D9）。现查，不用会话开始时
+    /// 冻结的清单：玩家可能这段对话中途改了它。查不到（没有这个自动化、没有桌面）就当不会，交给 `automation.run` 照常报错。
+    async fn asks_her(&self, id: &str) -> bool {
+        let envelope = self
+            .service
+            .call(ToolCallRequest {
+                request_id: None,
+                tool: "automation.get".into(),
+                arguments: json!({"id": id}),
+                timeout_ms: None,
+            })
+            .await;
+        envelope.ok
+            && envelope
+                .result
+                .as_ref()
+                .and_then(|r| r.get("asks"))
+                .and_then(Value::as_bool)
+                == Some(true)
+    }
+
     async fn call_saved(&self, id: &str, arguments: Value) -> ToolOutcome {
         let mut args = match arguments {
             Value::Object(map) => map,
@@ -616,6 +637,21 @@ pub fn plugin_outcome(result: kotone_plugin_api::ToolResult) -> ToolOutcome {
         }));
     }
     outcome
+}
+
+/// 她运行会叫她的自动化时的回答（ADR 045）。
+pub const ASKS_HER_REFUSAL: &str =
+    "这个自动化会叫你（程序里有 ask），由玩家、热键或游戏事件来运行，你自己不运行它";
+
+/// 这次调用要运行的已保存自动化：`saved.<id>`，或 `automation.run` 带 `id`。
+fn saved_run_id<'a>(entry: &'a ToolEntry, arguments: &'a Value) -> Option<&'a str> {
+    match &entry.source {
+        Source::Saved { id } => Some(id),
+        Source::Service if entry.name == "automation.run" => {
+            arguments.get("id").and_then(Value::as_str)
+        }
+        _ => None,
+    }
 }
 
 fn parse_delivery(arguments: &Value) -> Result<Vec<DeliveryKind>, String> {
@@ -677,6 +713,14 @@ impl<H: BuiltinHost + 'static, A: Asker> ToolPort for KotonePort<H, A> {
                 .and_then(kotone_core::settings_guide::agent_protected_violation)
             {
                 return ToolOutcome::error(format!("没有执行：{reason}"));
+            }
+        }
+        // 会叫她的自动化（程序里有 ask()）她自己不运行：交给她的那一轮又是她，绕成圈（ADR 045）。也在询问之前拒绝。
+        // `saved.*` 里本来就没有它们，这里挡的是 `automation.run` 带 id，以及这段对话中途才改成会叫她的。
+        // 外部 Agent、玩家（▶、热键）和游戏事件不经过这里，照常运行。
+        if let Some(id) = saved_run_id(entry, &arguments) {
+            if self.run.asks_her(id).await {
+                return ToolOutcome::error(format!("没有执行：{ASKS_HER_REFUSAL}"));
             }
         }
         let decision = self

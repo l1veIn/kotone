@@ -807,8 +807,8 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
         "delaySeconds".into(),
         json!({"type": "integer", "minimum": 0, "maximum": 604800, "description": "几秒后开始；缺省立即"}),
     );
-    // TODO(ADR 045 D): 种类说明按“用不用游戏窗口”写。这里只照旧：会叫她的（以前的“让她做”）不当工具给她，
-    // 不用窗口的（以前的播报）仍叫“播报”。
+    // 种类说明按“用不用游戏窗口”写（ADR 045 D4，后端按源码算）。会叫她的（程序里有 ask()，以前的“让她做”）不当工具
+    // 给她：交给她的那一轮又会叫她，绕成圈；由玩家、热键或游戏事件运行（她用 automation.run 带 id 也会被拒，见 port.rs）。
     let uses = automation.action.uses();
     if uses.asks {
         return None;
@@ -816,7 +816,7 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
     let kind = if uses.window {
         "程序，对当前前台的游戏窗口执行"
     } else {
-        "播报"
+        "只说一句、弹幕或推送，不用切到游戏"
     };
     let mut description = format!("运行已保存的自动化「{}」（{kind}）", automation.name);
     if !automation.description.is_empty() {

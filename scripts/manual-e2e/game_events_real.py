@@ -1,5 +1,6 @@
 """ADR 036 phase 1 real-machine check without opening the game: the game hub, LoL adapter, event-triggered automations
-("ask her" with the real DeepSeek model, and a speak automation with event data as args) and the match recap.
+(a program that calls ask() with the real DeepSeek model, and an old-style speak automation with event data as args,
+which ADR 045 saves as a program) and the match recap.
 
 The fake client from lol_tools_real.py (same recording, HTTPS, random token) plays a timeline instead of a frozen game:
   0 s  Lobby → 8 s ChampSelect → 16 s InProgress (in-game API answers 404: loading) → 22 s in-game data (game clock
@@ -7,13 +8,18 @@ The fake client from lol_tools_real.py (same recording, HTTPS, random token) pla
 Setup as lol_tools_real.py (debug build with the web UI embedded, `--background`, isolated
 KOTONE_HOME=target/game-events-real/home, real DeepSeek key in memory only, input tools and real-window tools denied,
 speech volume 0, KOTONE_RECAP_MIN_SECONDS=20). No OS input at all, so it may run while the player is in a match.
-Before the timeline starts: the built-in template “英雄联盟进加载界面播报突破口” is switched on (the player's flow) and a
-speak automation “对面拿了{dragon_name}” is saved with on {lol.dragon_kill, team enemy}.
+Before the timeline starts: the built-in template “英雄联盟进加载界面播报突破口” (ADR 045: a program `ask("…")`) is
+switched on (the player's flow) and an automation “对面拿了{dragon_name}” is saved in the old speak form with
+on {lol.dragon_kill, team enemy} — ADR 045 D1 keeps accepting that form and saves it as the program
+`toast("对面拿了" .. args.dragon_name)`, so this also checks the conversion.
 
 Checks:
+G0. (ADR 045) the template is a program that asks her; the old speak form came back as a program that doesn't use the
+    game window (usesWindow false, asks false);
 G1. the hub shows lol in menu (claimed by the LoL adapter), then pre_match; D7 switched activeProfileId to lol;
-G2. loading → the template ran: a system message in the conversation, she called lol.scout and said something;
-G3. the dragon → the speak automation “对面拿了{dragon_name}” ran as “对面拿了火龙” (event data as args);
+G2. loading → the template's ask() ran: a system message in the conversation, she called lol.scout and said something;
+G3. the dragon → the converted program ran with dragon_name = 火龙 (event data as args): a finished program run of
+    that automation, not bound to a window (target null), with the triggering event {type lol.dragon_kill};
 G4. game.state lists the recent events (phase changes, lol.dragon_kill);
 G5. EndOfGame → game.match_ended → the recap ran for lol (she was asked something during the match).
 G6. (ADR 043 D7) champion select → the champ-select card (push `champ-select`, page ui://kotone/lol/champ-select) is in
@@ -187,15 +193,25 @@ def main():
         bt.call("settings.update", {"patch": {"assistant": {"connectionId": cid}}})
         bt.invoke("agent_new_conversation", {})
 
-        # 玩家的做法：打开内置模板；再存一个“对面拿龙就播报”
+        # 玩家的做法：打开内置模板（ADR 045：一行 ask(…) 的程序）；再存一个“对面拿龙就说”。后者故意用旧写法 speak
+        # （工具照旧收），保存时转成程序——顺便测转换
         template = bt.call("automation.get", {"id": "builtin-lol-scout-on-loading"})
+        action = template["action"]
+        check("G0: the template is a program that asks her",
+              action.get("kind") == "program" and "ask(" in action.get("source", "") and template.get("asks") is True,
+              json.dumps(template, ensure_ascii=False)[:300])
         on = dict(template["on"], enabled=True)
         bt.call("automation.save", {"id": template["id"], "name": template["name"], "description": template["description"],
-                                    "action": template["action"], "on": on})
-        bt.call("automation.save", {"name": "对面拿龙就说", "params": [{"name": "dragon_name", "type": "text"}],
-                                    "action": {"kind": "speak", "text": "对面拿了{dragon_name}", "delivery": ["danmaku"]},
-                                    "on": {"event": ["lol.dragon_kill"], "game": "lol", "match": {"team": "enemy"},
-                                           "enabled": True}})
+                                    "action": action, "on": on})
+        dragon = bt.call("automation.save", {"name": "对面拿龙就说", "params": [{"name": "dragon_name", "type": "text"}],
+                                             "action": {"kind": "speak", "text": "对面拿了{dragon_name}", "delivery": ["danmaku"]},
+                                             "on": {"event": ["lol.dragon_kill"], "game": "lol", "match": {"team": "enemy"},
+                                                    "enabled": True}})
+        source = (dragon.get("action") or {}).get("source", "")
+        check("G0: the old speak form was saved as a program that doesn't use the game window",
+              dragon["action"].get("kind") == "program" and "toast(" in source and "args.dragon_name" in source
+              and dragon.get("usesWindow") is False and dragon.get("asks") is False,
+              json.dumps(dragon, ensure_ascii=False)[:300])
 
         menu = bt.wait_until(lambda: lol_phase() == "menu", 30, 1)
         check("G1: the hub shows lol in the lobby (LoL adapter claimed it)", menu, json.dumps(game_state())[:200])
@@ -254,12 +270,18 @@ def main():
         check("G3: in-game data → in_match", in_match, str(lol_phase()))
 
         def dragon_run():
+            # ADR 045：执行记录只有程序；按自动化 id 找这一条，等它结束
             runs = bt.invoke("automation_runs", {}).get("ok", {}).get("runs", [])
-            return next((r for r in runs if r["action"].get("kind") == "speak" and "对面拿了" in r["action"].get("text", "")), None)
+            return next((r for r in runs if r["action"].get("kind") == "program"
+                         and r["action"].get("automationId") == dragon["id"]
+                         and r["status"] not in ("pending", "running")), None)
         run = bt.wait_until(dragon_run, 40, 1)
-        # 事件的 dragonName 填进参数 dragon_name（camelCase 字段 = snake_case 参数）
-        check("G3: the dragon ran the speak automation with dragon_name = 火龙", run and "火龙" in run["action"]["text"],
-              json.dumps(run, ensure_ascii=False)[:200] if run else "no run")
+        # 事件的 dragonName 填进参数 dragon_name（camelCase 字段 = snake_case 参数）；只出弹幕的程序不绑游戏窗口
+        a = (run or {}).get("action") or {}
+        check("G3: the dragon ran the converted program with dragon_name = 火龙 (finished, no window, event attached)",
+              run and run["status"] == "finished" and "火龙" in str((a.get("args") or {}).get("dragon_name", ""))
+              and a.get("target") is None and (a.get("event") or {}).get("type") == "lol.dragon_kill",
+              json.dumps(run, ensure_ascii=False)[:300] if run else "no run")
         recent = [e["type"] for e in ((game_state().get("playing") or [{}])[0].get("recent") or [])]
         check("G4: game.state lists recent events", "lol.dragon_kill" in recent and "game.phase_changed" in recent, str(recent))
 

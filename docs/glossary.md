@@ -35,7 +35,7 @@
 | 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的。「设置 → 热键」一页列出全部，标来源（Kotone / 插件名 / 自己加的 / 固定的 Esc），冲突标红；**热键只在那一页改**，别的页面（唤醒、系统 → 停下、模型 → 语音识别、语音输入）只显示现在的键和“去「设置 → 热键」改”，提醒助手热键照旧在提醒助手页改；游戏配置里的聊天键不是热键、不列在那里，但参与冲突检查（ADR 040） | `快捷键` | `*Hotkey`、`hotkey_table` | hotkey (Settings → Hotkeys) |
 | 快捷指令 | 「设置 → 热键」里自己加的、按一下就替你跟她说一句预设的话的热键（选了通话时按了也会接通）。同一处还能加运行自动化的热键（ADR 040 第 3 期）；这些都叫“自己加的” | `快捷消息`、`快捷短语` | `hotkeys.bindings[].say`（旧字段 `assistant.companion.quickMessages` 是镜像） | quick command |
 | 后台的事 / 交给后台 | 她交出去慢慢做的复杂的事，聊天里是一张卡片，做完她说一句 | `子代理`、`子会话`、`后台任务` | `agent.start`、`Subagent` | background task / hand off to the background |
-| 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` | Stop (stop everything); “stop hotkey” |
+| 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）：正在跑的全停，还没开始、要操作游戏窗口的取消；还没到点的提醒留着，要取消在「自动化」页单条取消（ADR 045 D6）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` | Stop (stop everything); “stop hotkey” |
 | 停止 / 取消 / 打断 | 停止 = 停一件具体的事（这个自动化、播放、本地语音识别）；取消 = 不做还没做的（对话框、下载、这次录音）；打断 = 她说话时被你打断 | | | stop / cancel / interrupt |
 | 权限 | 每个工具是 允许 / 先问我 / 禁止（角色页 → 权限；以前在「设置」里） | `授权`、`设置 → 权限` | `agent.permissions` | permissions: Allow / Ask first / Block |
 | 用量 | 今天 / 本月花了多少 token 和钱、命中缓存多少、对话多长整理成摘要（角色页 → 用量；以前在「设置」里） | `设置 → 用量` | `usage.jsonl`、`agent.compactAtTokens` | usage |
@@ -48,7 +48,7 @@
 | 语音识别 | 把说的话变成字（本地 / 在线）。只有一份，在本体：呼叫、语音输入、同传都用它，同一个模型只加载一份（ADR 039 D2）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` | speech recognition |
 | 同传 | 插件（ADR 021、038）：她在后台听你指定的程序（游戏、Discord、KOOK……，按程序录音）里队友说的话——不是你的麦克风，也录不到她自己——一句一句翻成你的语言，用气泡（默认，悬浮窗里一行）或弹幕显示，并记进聊天里一局一张的“这局的同传”卡片（推送，ADR 043 D11）。识别用本体的语音识别：你选的识别听得懂外语（自动判语种的在线识别，或本地 SenseVoice）就用它，否则用本地 SenseVoice（中英日韩粤）；用在线识别时队友的每一句都会发给它识别、每句计费。停止本地语音识别时，用本地识别的同传一起停（ADR 039 实施记录“同传用本体的识别”） | | `plugins/interpreter`、`voice.listen.*`、`voice_listen.rs`、`kotone_stt::listen` | interpreter |
 | 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` | conversation (聊天 = chat) |
-| 自动化 | 替你持续或稍后做事；动作是“说一句”或“程序” | `脚本` | `automation.*` | automation |
+| 自动化 | 替你持续或稍后做事。每个自动化都是一段程序（ADR 045）：按键、点鼠标、看画面、发到游戏聊天的会**操作游戏窗口**（运行前要切到游戏，▶ 先倒数）；要告诉你就在程序里说一句、出弹幕、推送一条，要她看着办就交给她（**会叫她**，每运行一次花一次 AI 调用），程序里不写就安静。新建时先选一个样子：说一句 / 推送一条 / 让{name}做 / 空白程序。以前的“播报”“让她做”两种动作已经没有了（旧的打开时转成程序），“让{name}做”只剩模板名 | `脚本` | `automation.*`、`ProgramUses`（`usesWindow` / `asks`） | automation |
 | 网易云音乐 | 放歌插件的名字（ADR 034、038；2026-11-25 起，以前叫“音乐”）：从左侧栏“插件”的卡片点开，搜歌、每日推荐、私人 FM、我的歌单、播放条。插件 id、配置（`plugins.music`）、她的工具名还是 `music`。“音乐”只说放歌这件事本身（音乐音量、她说话时音乐压低） | | `plugins/music`、`MusicPage` | NetEase Cloud Music |
 | 放歌 / 正在放 | Kotone 自己放歌（不用浏览器）：你在网易云音乐的页面里点，或者她用 `music` 工具放；“正在放”是播放条和左侧栏小播放条上的那首 | | `music`、`Player` | play music / Now playing |
 | 登录网易云音乐 | 点“登录网易云音乐”打开网易云官方登录页的窗口，用网易云音乐 App 扫码；第一次放歌要登录一次，登录信息交给 Windows 保管。她要放歌而你没登录时，聊天页出这个按钮（她不自己弹窗，免得游戏里抢焦点）；登录过期了（以前登录过、网易云说要重新登录），聊天里来一张“登录过期”卡片带这个按钮，登好了原地变成“已登录”（推送，ADR 043 D11） | | `music_login_start`、`login.stage = needed` | Log in to NetEase Cloud Music |
@@ -61,7 +61,7 @@
 | 全部页面 / 恢复默认 | 左侧栏“⋯”打开：页面在组内上移下移、显示隐藏（设置、关于固定）；恢复默认 = 默认顺序、全部显示 | | `ui.sidebar` | All pages / Restore defaults |
 | 游戏配置 | 一个游戏的聊天键、频道、词表等（游戏列表页里编辑） | `游戏设置`、`游戏档案` | `GameProfile` | game profile |
 | 悬浮窗 / 气泡 / 小窗 / 输入条 / 弹幕 | **悬浮窗**：游戏所在屏幕上的一个小窗（ADR 043 D6，2026-11-26 晚修订）。出来时角上一定是她的头像，头像外面一圈**进度条**（还剩多久，走完整个收起；鼠标停在上面停住，她在听 / 在想 / 在说时不走）；头像旁边是**气泡**（一条简单的：她在听、在想、说了一句短话，或插件推送的一行）或**小窗**（全称**聊天小窗**；复杂的：卡片、她用了工具、长回答、同时来了几条——就是聊天里这段对话最近的几条，和聊天页同一种消息和卡片，新的在下面，往回翻看更早的；推送卡片时弹出）。不抢焦点，只有头像和旁边那一块挡鼠标（透明的地方点得到下面的游戏），可以关（×）、可以拖，拖到哪里下次就从哪里出现；游戏独占全屏时不显示；开关和位置在“角色 → 交互 → 悬浮窗”。原来的说话气泡和右下角的消息提示都并进了它。**输入条**：语音输入说话时显示识别进度、频道的小条（以前叫悬浮窗）。**弹幕**：从右往左飘的字 | `对话气泡`、`消息提示`、`右下角弹窗`、`通知弹窗` | `floating/mod.rs`、`assistant.bubble`、`agent.autoCards.popup`；输入条是 `overlay.rs`、`overlay.*` | floating window (bubble / mini chat) / input bar / floating text |
-| 推送 | 插件在游戏里的某个时机自己发给你的东西，三种样子：**卡片**（发进聊天）、**一行**（悬浮窗气泡里的一行字，可以分几格，例如到 6 级提醒的“对面寒冰 | 6 级了，有大招”；只有一格时是一整句，例如同传翻好的一句，长了就折行）、**语音**（她说一句固定的短话，几个说法轮着用）。不叫她、不花对话的钱（语音推送用在线语音时按合成计费，每句约 0.002 元），全都记进聊天（一行和语音是一条小字记录）；带了给她的一句时留一条很短的说明，之后的对话里她看得到。同一条推送内容变了就在原地更新，不另发一条。每条推送在插件页的「设置 → 推送」里写明时机和做什么、单独一个开关，内容不能改——想改就自己建自动化。卡片上写明是哪个插件推送的。现在只有内置插件能推送（ADR 039 D3、ADR 043）。文档和代码也用这个词 | `自动卡片`、`事件卡片` | `Host::push`、`[[pushes]]`、`kotone_agent::push`、`plugins.<id>.pushes` | push (“{plugin} push”; card / line / voice) |
+| 推送 | 插件在游戏里的某个时机自己发给你的东西，三种样子：**卡片**（发进聊天）、**一行**（悬浮窗气泡里的一行字，可以分几格，例如到 6 级提醒的“对面寒冰 | 6 级了，有大招”；只有一格时是一整句，例如同传翻好的一句，长了就折行）、**语音**（她说一句固定的短话，几个说法轮着用）。不叫她、不花对话的钱（语音推送用在线语音时按合成计费，每句约 0.002 元），全都记进聊天（一行和语音是一条小字记录）；带了给她的一句时留一条很短的说明，之后的对话里她看得到。同一条推送内容变了就在原地更新，不另发一条。每条推送在插件页的「设置 → 推送」里写明时机和做什么、单独一个开关，内容不能改——想改就自己建自动化。卡片上写明是哪个插件推送的。插件里只有内置插件能推送（ADR 039 D3、ADR 043）；自动化的程序也能推送一条（程序里的 push：一行字，记进聊天、悬浮窗显示，不出声、不叫她，来源写“自动化”，ADR 045）。文档和代码也用这个词 | `自动卡片`、`事件卡片` | `Host::push`、`[[pushes]]`、`kotone_agent::push`、`plugins.<id>.pushes` | push (“{plugin} push”; card / line / voice) |
 | 风险和许可 | 每个插件一个弹窗（ADR 043 D8）：先是“风险”（每个有风险的数据开关，写明现在开着还是关着、风险是什么），再是“许可和出处”（数据和图片从哪来、按什么许可用）。只是告诉一声，从不拦开关、关掉它不改任何开关；第一次看到这个插件有风险的开关开着时自己弹一次，以后在插件的「设置」里点“风险和许可”再看。开关下面、卡片和页面底下不再各写一份风险 | | `PluginRiskDialog.svelte`、`[[notices]]`、`plugins.<id>.riskSeen` | Risks and licenses |
 | 技能 | 她会的本事包（一个文件夹一个） | `Skill` | `SKILL.md`、`workspace` | skills |
 | 本地 / 在线 | 在这台电脑上算 / 发给服务商算 | `离线`、`云端` | `asrLocal` | local / online |
@@ -76,7 +76,7 @@
 | 插件 | 装在本体上的 App（ADR 038），界面上的说法见上一节 | plugin |
 | 琴音 | 角色（默认的那个）。讲“谁在听、谁在说、谁在想”时用；玩家可以换角色 | Kotone (the character) |
 | 共享资源 / 管家 | 共享资源：全进程（或全屏、全机）只有一份、又有两个以上的用户要用的东西，例如热键、往游戏里输入、麦克风、扬声器、屏幕上的位置和前台、聊天流、语音识别。管家：本体里拥有它的那一处代码，“能不能用、谁先用”的规矩只写在这里，插件经宿主向它要（ADR 042）。界面上不说 | shared resource / owner |
-| 推送（架构） | `kotone-plugin-api` 的 `Push`（`trigger` = 清单 `[[pushes]]` 的 id、`key`、`card` / `line` / `voice`、`note`、`alert`）经 `Host::push` 发，结果 `Posted` / `Updated` / `Unchanged` / `Off`；`Host::push_done` 说这一条结束了（悬浮窗收起那一行）。清单 `[[pushes]]`（`PushSpec`：时机、做什么、样子、`priority`、`enabled_by_default`、`needs`）由宿主画开关、执行开关（照 Android 的通知渠道）。同一个 `插件:key` 再推一次就是更新，原地改 `Notice` 里的 `push`（Notice 不发给模型，前缀不变，ADR 043 D5）。语音推送谁先说由宿主排（`kotone_agent::push_voice`）。只给内置插件 | push / `Host::push` / `[[pushes]]` |
+| 推送（架构） | `kotone-plugin-api` 的 `Push`（`trigger` = 清单 `[[pushes]]` 的 id、`key`、`card` / `line` / `voice`、`note`、`alert`）经 `Host::push` 发，结果 `Posted` / `Updated` / `Unchanged` / `Off`；`Host::push_done` 说这一条结束了（悬浮窗收起那一行）。清单 `[[pushes]]`（`PushSpec`：时机、做什么、样子、`priority`、`enabled_by_default`、`needs`）由宿主画开关、执行开关（照 Android 的通知渠道）。同一个 `插件:key` 再推一次就是更新，原地改 `Notice` 里的 `push`（Notice 不发给模型，前缀不变，ADR 043 D5）。语音推送谁先说由宿主排（`kotone_agent::push_voice`）。只给内置插件；本体的自动化程序里的 `push(text)` 由宿主合成插件 `automation` 的一行推送（`agent::post_automation_push`，`trigger` = 自动化 id，key 每条都是新的，不经清单核对，ADR 045） | push / `Host::push` / `[[pushes]]` |
 | 命令 / 热键表 | 命令：能绑热键的一件事，`<来源>.<命令 id>`（本体的 `kotone.call`、插件 `plugin.toml` 里 `[[commands]]` 登记的 `voice-input.talk`）。热键表：config.json 的 `hotkeys.bindings`，每条 键 + 命令，或者玩家自己加的（带 `id`、可选 `label`：`say` 跟她说一句、`tool: automation.run` 运行自动化，以后还有调工具、打开页面，ADR 040 第 3 期）；热键的旧字段（`hotkey.key`、`channelCycleHotkey`……、快捷指令 `quickMessages` 前 8 条）是它的镜像（ADR 040 D1、D5、D8）。界面上不说“命令”，行名就是命令的名字；自己加的行名是玩家起的名字，没起就是要做的事 | command / hotkey table |
 
 ## 游戏陪玩的核心概念（ADR 028）
@@ -89,7 +89,7 @@
 | 呼叫键 / Call key | `assistant.hotkey`；0.1.x 升级用户为 `assistant.companionBindings.hotkey` | 按一下就呼叫，通话中再按 = 挂断。新用户默认 `Ctrl + ~`，升级用户默认空。不再叫“陪玩热键”“呼叫热键”。 |
 | 语音输入 / Voice input | `hotkey`, `Orchestrator`（`purpose = input`） | 说话，原话打进游戏聊天框。**不经过 Agent**。状态显示在**输入条**里（以前叫悬浮窗）。是一个插件（`plugins/voice-input`，ADR 038）：从左侧栏「插件 → 语音输入」打开它的页面，分页 输入 / 文字处理 / 历史（分页 ID `general` / `processing` / `history`）；关掉插件时语音输入热键、输入条一起停。语音识别和往游戏聊天里打字属于本体，语音输入借用它们；她替你在游戏聊天里发言（`game_chat.send`）在本体，关掉语音输入不影响；每个游戏的聊天键留在游戏配置（ADR 039）。 |
 | 语音输入热键 / Voice input hotkey | `hotkey.key` | 按下说话的那个键（原“录制热键”）。 |
-| 停下 / Stop | `stop::stop_everything`, `automationStopHotkey` | 停止角色正在做的事和所有自动化。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘「停下」。不取消语音输入的录音（那是 Esc）。 |
+| 停下 / Stop | `stop::stop_everything`, `automationStopHotkey` | 停止角色正在做的事和所有自动化（运行中的全停，等待中绑了游戏窗口的取消，等待中的提醒留着，ADR 045 D6）。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘「停下」。不取消语音输入的录音（那是 Esc）。 |
 | 启动 / Start | `runtime::start`, `runtimeToggleHotkey`, `ui.autoStart` | **只和本地语音识别有关**：把本地识别模型加载进内存。本地识别有 未启动 / 准备中 / 已启动 / 出问题了 四种状态；在线识别打开 Kotone 就就绪，界面上看不到“启动”。 |
 | 悬浮窗 / Floating window | `floating/mod.rs`（窗口 `floating`）、`bubble.rs`（她那一行的状态）、`assistant.bubble`、`agent.autoCards.popup` | ADR 043 D6（2026-11-26 晚修订）：角上是她的头像 + 进度条（`floating/model.rs` 管时间：气泡 6 秒、聊天小窗 10 秒，从最后一次变化算），旁边是气泡（她在听、在想、说了一句短话；推送的一行）或聊天小窗（聊天页的 `AgentChat` + `buildTurns` + `ChatTurn` 紧凑样子）；放哪个只由界面的 `routes/floating/shape.ts`（`floatingShape`）定。不可聚焦、`SW_SHOWNA`、不进截图；窗口只留头像和旁边那一块（界面报的 `boxes`，`SetWindowRgn`），透明的地方不挡游戏的点击；拖动是 Kotone 自己跟着光标挪；记住的位置相对工作区（`assistant.bubble.position`）。关掉后只用声音和弹幕，不借用输入条。原来的气泡窗口 `companion`、消息提示窗口 `message-popup` 去掉了。 |
 | 输入条 / Input bar | `overlay.rs`, `overlay.*`（窗口 `overlay`） | 只属于语音输入：识别进度、频道、没准备好的提示（以前叫悬浮窗；代码名不改）。 |
@@ -125,11 +125,11 @@
 | --- | --- | --- |
 | 提醒助手 / Reminder assistant | `assistant`, `voice_reminder`, `danmaku_reminder` | 面向屏幕前用户本人，通过独立热键或文字入口让 AI 提出受限的提醒计划；不向第三人喊话或注入游戏。语音入口要等语音识别准备好（本地识别要先启动），文字入口不依赖。0.2 起只有 0.1.x 升级用户保留（「提醒助手」页）。 |
 | 助手交互模式 / Assistant interaction mode | `AssistantInteractionMode`, `assistant.interactionMode` | 与游戏输入独立的对讲机、录音笔、说一句就走三种模式，默认对讲机，热键默认未绑定；录音笔确认提交给助手，其余模式按各自结束规则提交，不走游戏发送出口。旧助手独奏配置兼容为对讲机。 |
-| 提醒 / Reminder | `ReminderIntent`, `Reminder`, `ReminderScheduler` | 一次性的内容、到期时间、输出方式和状态；输出采用简短正文，不附称呼或开场白。本机保存，应用未退出时调度，停止语音运行时不停止既有提醒；不等于系统级闹钟。 |
+| 提醒 / Reminder | `ReminderIntent`, `Reminder`, `schedule_reminder`, `automation::reminder_source` | 一次性的内容、到期时间、输出方式和状态；输出采用简短正文，不附称呼或开场白。本机保存，应用未退出时调度，停止语音运行时不停止既有提醒；不等于系统级闹钟。2026-11-27 起（ADR 045 D3）提醒是“晚一会儿开始、只说一句”的程序：`say(args.text)` / `toast(args.text)` / `say(args.text, { toast = true })`，不绑游戏窗口、不占名额，停下时等待中的提醒留着；以前的 `ReminderScheduler`、播报的投递循环已经并进自动化调度器。 |
 | 语音播报 / Text to speech (TTS) | `SpeechOutput`, `SpeechRequest`, `SpeechVoice` | 文本转成可听语音，默认 Windows SAPI 声音，无需下载 Kotone TTS 模型；Kokoro 中文模型可选、手动下载。与 STT、提示音分开。 |
-| 自动化 / Automation | `automation.*`、`kotone-script` | 替用户持续或稍后做事：**定义**（名字、入参、动作）+ **触发**（立即 / 延迟 / 指定时刻 / 热键）+ **执行记录**。动作是“播报”或“程序”（沙盒 Luau）。提醒是“延迟 + 播报”的自动化（ADR-013）。用户可见处不叫“脚本”。 |
-| 执行记录 / Automation run | `automation.runs` | 一次执行：入参、目标窗口、到期时间、状态（等待中 / 运行中 / 完成 / 失败 / 取消 / 错过）、日志。最多执行一次，不自动重试，错过不补。 |
-| 漂浮弹幕 / Danmaku | `DeliveryKind::Danmaku`, `DanmakuPresentation`, `ReminderDelivery` | 到期时从右向左滑动的单行桌面文字，可带小表情前缀；窗口透明、无底板、点击穿透。速度以 CSS 像素/秒定义，按实际条宽计算时长；不是聊天室消息，不能保证覆盖独占全屏游戏。 |
+| 自动化 / Automation | `automation.*`、`kotone-script`、`AutomationBody::Program`、`ProgramUses` | 替用户持续或稍后做事：**定义**（名字、入参、动作）+ **触发**（立即 / 延迟 / 指定时刻 / 定时 / 热键 / 游戏事件）+ **执行记录**。动作只有“程序”（沙盒 Luau，ADR 045）：说一句、弹幕、推送、交给她是程序里的函数 `say(text, { toast })` / `toast` / `push` / `ask`，不写就安静；旧的“播报”“让她做”（`speak` / `prompt`）读进来转成等价的程序，工具 `automation.save` 照旧收这两种旧写法。按源码判断用不用游戏窗口（`ProgramUses::of` → `usesWindow`）：用到的绑窗口、占“同时 3 个”的名额、看 `mode`；会不会叫她（`asks`）：每次一次 AI 调用，不当 `saved.*` 工具给她。提醒是“延迟 + 只说一句”的程序（ADR 013、045）。用户可见处不叫“脚本”。 |
+| 执行记录 / Automation run | `automation.runs`、`RunAction::Program` | 一次执行（都是程序，旧的播报记录打开时换成提醒形状的程序）：入参、目标窗口（只有用到游戏窗口的有，其余为 `null`）、触发它的游戏事件（对外只露 `type` 和 `game`）、到期时间、状态（等待中 / 运行中 / 完成 / 失败 / 取消 / 错过）、日志。最多执行一次，不自动重试，错过不补。 |
+| 漂浮弹幕 / Danmaku | `DeliveryKind::Danmaku`, `DanmakuPresentation`、程序里的 `toast()`（`ReminderDelivery` 端口 2026-11-27 删了，ADR 045） | 到期时从右向左滑动的单行桌面文字，可带小表情前缀；窗口透明、无底板、点击穿透。速度以 CSS 像素/秒定义，按实际条宽计算时长；不是聊天室消息，不能保证覆盖独占全屏游戏。 |
 
 ## 本机工具服务
 
