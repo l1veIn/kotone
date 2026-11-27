@@ -15,9 +15,7 @@ export type RunAction =
   | {
     kind: "program"; name: string; source?: string; automationId?: string | null;
     args?: Record<string, unknown>; target?: RunTarget | null;
-  }
-  /** 琴音替玩家打进游戏聊天框的一句话（只作记录） */
-  | { kind: "chat"; text: string; sent: boolean; profile?: string };
+  };
 
 export interface ProgramReport { outcome: "finished" | "stopped" | "limit" | "error"; keys: number; durationMs: number; log: string[] }
 

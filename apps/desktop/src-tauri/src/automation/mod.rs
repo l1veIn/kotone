@@ -22,8 +22,8 @@ use kotone_core::automation::library::{
     ParamKind,
 };
 use kotone_core::automation::{
-    AutomationScheduler, ChatAction, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction,
-    RunStatus, RunTarget, SpeakAction, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
+    AutomationScheduler, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction, RunStatus,
+    RunTarget, SpeakAction, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
 };
 use kotone_core::reminders::DeliveryKind;
 use kotone_core::tools::{WindowIdentity, WindowInfo, WindowObserver};
@@ -489,16 +489,6 @@ pub fn schedule_reminder(
     let due = kotone_core::automation::now_ms() + delay_seconds.saturating_mul(1_000);
     let run = scheduler(app)?.schedule_speak(session, SpeakAction { text, delivery }, due)?;
     Ok(scheduled_json(&run, None))
-}
-
-/// 内置 Agent 的“发到游戏聊天”：记一条执行记录（ADR 014“已确认”：替玩家发了什么要看得到）。
-pub fn record_chat(
-    app: &AppHandle,
-    session: &str,
-    action: ChatAction,
-    result: Result<(), String>,
-) -> Result<Run, String> {
-    scheduler(app)?.record_chat(session, action, result)
 }
 
 /// 已保存的自动化（按名字排序；库不可用时为空）。

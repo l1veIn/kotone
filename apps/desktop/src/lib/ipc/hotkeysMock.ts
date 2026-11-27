@@ -175,7 +175,7 @@ function toolCall(b: HotkeyBinding): [string, Record<string, unknown>] | null {
 
 export const MOCK_TOOLS: BindableTool[] = [
   { name: "game_chat.send", title: "把一段话发到当前游戏的聊天", description: "把一段话发到当前游戏的聊天（默认队伍频道）。",
-    plugin: null, pluginName: null, thirdParty: false, sideEffects: ["input", "records-run"], decision: "run", reason: "",
+    plugin: null, pluginName: null, thirdParty: false, sideEffects: ["input"], decision: "run", reason: "",
     parameters: { type: "object", required: ["text"], properties: {
       text: { type: "string", description: "要发的话" }, channel: { type: "string", enum: ["team", "all"], description: "频道" } } } },
   { name: "settings.update", title: "改设置", description: "改设置。", plugin: null, pluginName: null, thirdParty: false,

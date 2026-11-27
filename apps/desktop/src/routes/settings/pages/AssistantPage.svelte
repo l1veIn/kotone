@@ -111,7 +111,8 @@
         </p>
         {#if chat.runningHere}<span class="flex shrink-0 items-center gap-1.5 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" role="status"><span class="size-1.5 animate-pulse rounded-full bg-primary"></span>{m.companion_page_answering()}</span>{/if}
       </div>
-      <div class="hidden min-w-0 lg:block"><OpenRunsSummary {onOpenAutomation} /></div>
+      <!-- 进行中的自动化：图标 + 数字，没有就不显示；很小，任何宽度都放得下 -->
+      <OpenRunsSummary {onOpenAutomation} />
       <!-- 右侧栏开关（ADR 031：网页与后台在做的事） -->
       <button type="button" data-testid="right-sidebar-toggle" aria-pressed={$rightSidebarOpen}
         aria-label={$rightSidebarOpen ? m.companion_page_right_sidebar_hide() : m.companion_page_right_sidebar_show_label()} title={$rightSidebarOpen ? m.companion_page_right_sidebar_hide() : m.companion_page_right_sidebar_show_title()}

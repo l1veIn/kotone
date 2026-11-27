@@ -215,7 +215,7 @@ fn shout_spec() -> ToolSpec {
         }}),
     )
     .needs(&["client"])
-    .side_effects(&["input", "records-run"])
+    .side_effects(&["input"])
     .instant();
     // 页面用不着：发话只在她、外部 Agent、热键调的时候（宿主只在这几种调用里让插件经入口发）
     spec.visibility = vec![kotone_plugin_api::Visibility::Model];
@@ -293,7 +293,7 @@ mod tests {
         }
         // 一键喊话：和 game_chat.send 一样的副作用（默认允许，绑热键时不问）
         let shout = specs.iter().find(|s| s.name == TOOL_SHOUT).unwrap();
-        assert_eq!(shout.side_effects, ["input", "records-run"]);
+        assert_eq!(shout.side_effects, ["input"]);
         let game = specs.iter().find(|s| s.name == TOOL_GAME).unwrap();
         assert!(!game.for_model());
         let history = specs.iter().find(|s| s.name == TOOL_HISTORY).unwrap();

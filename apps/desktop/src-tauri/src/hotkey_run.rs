@@ -5,8 +5,10 @@
 //! - 运行自动化、调工具：不用听，随应用登记，识别没在跑也照样按（P4），在 `route_named_hotkey` 里直接到这里。按的时候
 //!   **不问**（绑的时候问过了，D9），但照现在的权限、插件开关再判一次（[`crate::hotkey_bind::state`]，规则可能刚改过）。
 //!   运行自动化跑那个已保存的自动化（发起方 `hotkey`）；工具服务的经进程内的工具服务，插件的经 `Caller::Hotkey`（第三方的
-//!   也能调），`game_chat.send` 照“替玩家发言”的前台规矩（前台要是游戏，`Speaker::Automation`）。成了弹幕一行、不出声
-//!   （P2），没成照快捷指令以前的做法说一句原因（原则 21）。同一条上一次还没做完时再按，这次不做（不排队、不补发，ADR 032）。
+//!   也能调），`game_chat.send` 照“替玩家发言”的前台规矩（前台要是游戏，`Speaker::Automation`）。调工具的成了弹幕一行
+//!   工具回的结果、不出声（P2）；运行自动化的成了不出声也不弹（2026-11-27 玩家：播报、弹幕、发到聊天都是程序里的函数，
+//!   要不要通知由程序自己决定），只记下结果。没成都照快捷指令以前的做法说一句原因（原则 21：程序根本没跑起来，它没法自己说）。
+//!   同一条上一次还没做完时再按，这次不做（不排队、不补发，ADR 032）。
 //! - 打开页面：打开 Kotone 窗口到这一页，窗口拿到前面（玩家自己按的）；游戏独占全屏时不拿、放在后面闪任务栏，用语音
 //!   说一句（P1，[`crate::attention::show_for_player`]）。第三方插件的页面打开左侧栏「插件」里那个插件的页面。
 //!
@@ -127,12 +129,14 @@ pub(crate) fn press_command(app: &AppHandle, command: &str) -> bool {
     true
 }
 
-/// 调工具 / 运行自动化：后台跑，上一次没做完不叠加，做完记结果、告诉玩家。
+/// 调工具 / 运行自动化：后台跑，上一次没做完不叠加，做完记结果；调工具的成了弹一行结果，运行自动化的成了不出声也不弹
+/// （要不要通知由那个程序自己决定）；都是没成才说原因。
 fn run_tool(app: &AppHandle, id: &str, name: String, binding: Binding) {
     if !running().lock().unwrap().insert(id.to_string()) {
         kotone_core::log::log(&format!("hotkey {id}: 上一次还没做完，这次不做"));
         return;
     }
+    let automation = matches!(binding.action(), Some(Action::Automation { .. }));
     let app = app.clone();
     let id = id.to_string();
     tauri::async_runtime::spawn(async move {
@@ -142,7 +146,11 @@ fn run_tool(app: &AppHandle, id: &str, name: String, binding: Binding) {
             Ok(line) => {
                 kotone_core::log::log(&format!("hotkey {id}: ok: {line}"));
                 record(&id, true, &line);
-                // 成了：弹幕一行、不出声（P2）
+                // 运行自动化：程序跑起来了就够了，播报、弹幕、发到聊天都是程序里的事（2026-11-27 玩家）
+                if automation {
+                    return;
+                }
+                // 调工具：弹幕一行、不出声（P2），那是工具回的结果，查询类的没有它就什么都看不到
                 let _ = crate::assistant::deliver_text(
                     &app,
                     format!("{}：{line}", name.trim_end()),
@@ -296,7 +304,7 @@ mod tests {
         );
     }
 
-    /// 弹幕里那一句：工具回的第一行；对象里找 text / note / message；太长截掉。
+    /// 调工具的热键弹幕里那一句（也是 lastRun 的 message）：工具回的第一行；对象里找 text / note / message；太长截掉。
     #[test]
     fn the_line_the_player_sees() {
         assert_eq!(

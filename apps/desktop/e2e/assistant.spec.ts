@@ -9,8 +9,11 @@ test("chat is home and keeps the draft across the role tabs and 设置; speech l
   await expect(page.getByTestId("assistant-tasks")).toBeVisible();
   await expect(page.getByTestId("assistant-nav-chat")).toHaveCount(0);
   await expect(page.getByTestId("assistant-settings")).toHaveCount(0);
-  // 进行中的提醒与自动化只在这里显示概况（预览数据：1 条提醒等待中、1 个自动化运行中）
-  await expect(page.getByTestId("assistant-open-summary")).toContainText("1 条提醒、1 个自动化");
+  // 进行中的自动化在顶栏只是图标 + 数字（预览数据：1 条提醒等待中、1 个自动化运行中，提醒也算），没有那一长句
+  const openRuns = page.getByTestId("assistant-open-summary");
+  await expect(openRuns).toHaveText("2");
+  await expect(openRuns).toHaveAttribute("aria-label", "进行中的自动化 2 个");
+  await expect(page.getByText("没有进行中的提醒或自动化")).toHaveCount(0);
   await page.getByTestId("assistant-request").fill("5 分钟后提醒我打野有闪");
   await screenshot(page, { path: testInfo.outputPath("assistant-tasks.png"), animations: "disabled" });
   // 角色页（角色 · 记忆 · 技能）：聊天藏起来但草稿还在
@@ -30,7 +33,7 @@ test("chat is home and keeps the draft across the role tabs and 设置; speech l
   // 去设置转一圈回来，草稿还在
   await openChat(page);
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
-  await page.getByTestId("assistant-open-summary").getByRole("button", { name: "在「自动化」里查看 →" }).click();
+  await page.getByRole("button", { name: "进行中的自动化 2 个" }).click();
   await expect(page.getByTestId("automation-page")).toBeVisible();
   // 呼叫琴音在角色页的「唤醒」，声音与弹幕在「交互」（原「设置 → 怎么叫她 / 她怎么回答」，交接第十一节第 8 条）
   await openSettingsTab(page, "call");

@@ -27,11 +27,10 @@
     if (run.action.kind === "speak") {
       return run.action.delivery.map((kind) => (kind === "voice" ? m.auto_delivery_voice() : m.auto_delivery_danmaku())).join(" + ");
     }
-    if (run.action.kind === "chat") return run.action.sent ? m.auto_run_chat_sent() : m.auto_run_chat_typed();
     return run.action.target?.label ?? "";
   }
 
-  const badgeText = { speak: m.auto_kind_speak(), program: m.auto_kind_program(), chat: m.auto_kind_chat() } as const;
+  const badgeText = { speak: m.auto_kind_speak(), program: m.auto_kind_program() } as const;
 
   function when(run: AutomationRun): string {
     if (run.status === "pending") {

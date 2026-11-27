@@ -53,8 +53,8 @@ Checks (PASS / FAIL / SKIP lines, total at the end):
      (console_chat_skipped); the console send itself needs a real Steam game → SKIP;
   8. voice input plugin off (ADR 039 D2: typing into game chat is the body's): the tool service still lists
      game_chat.send (not a plugin's), `tools call game_chat.send` still types, and in a new conversation she still
-     has game_chat.send and it types; the records (automation.runs) name the sender: `tool-service` for the tool
-     service, `agent:<conversation id>` for her; then the plugin is switched back on.
+     has game_chat.send and it types; none of these sends is written to the automation runs (automation.runs has no
+     `kind: "chat"` record since 2026-11-27: what she sent is in the conversation); then the plugin is switched back on.
 
 Prerequisites: target/debug/kotone.exe with the web UI embedded (README 准备: `pnpm build:web`, then
 `cargo build -p kotone-tauri --features tauri/custom-protocol`), copied to target/voice-input-real/bin/ on start;
@@ -878,8 +878,8 @@ def main():
         s = collect(m, None)
         check("6b: typed request accepted", cid, json.dumps(sent, ensure_ascii=False)[:200])
         check("6b: she called game_chat.send (mock model, no key)", MOCK_CALLS, f"{MOCK_CALLS}")
-        check("6b: game_chat.send succeeded and was recorded (runId)",
-              result and '"typed"' in result.get("content", "") and '"runId"' in result.get("content", ""),
+        check("6b: game_chat.send succeeded (typed; no runId: not written to the automation runs)",
+              result and '"typed"' in result.get("content", "") and '"runId"' not in result.get("content", ""),
               (result or {}).get("content", "")[:200])
         check("6b: the test window got exactly her text", s["messages"] == [("team", GC_TEXT)] and not s["still_open"],
               f"{s['messages']}")
@@ -937,20 +937,18 @@ def main():
         result = wait_until(chat_result_off, 40) if cid8 else None
         time.sleep(1.0)
         s = collect(m, None)
-        check("8c: voice input off: she still has game_chat.send (mock model called it), recorded (runId)",
+        check("8c: voice input off: she still has game_chat.send (mock model called it), typed (no runId)",
               len(MOCK_CALLS) > calls_before and result and '"typed"' in result.get("content", "")
-              and '"runId"' in result.get("content", ""), (result or {}).get("content", "")[:200])
+              and '"runId"' not in result.get("content", ""), (result or {}).get("content", "")[:200])
         check("8c: voice input off: the test window got exactly her text",
               s["messages"] == [("team", GC_TEXT)] and not s["still_open"], f"{s['messages']}")
-        # 「自动化 → 记录」: who sent it — the tool service as `tool-service`, her as `agent:<conversation id>`
+        # 「自动化 → 记录」: sending to game chat is not an automation, nothing is written there (2026-11-27)
         runs = call("automation.runs").get("runs", [])
-        senders = {text: [r.get("sessionId") for r in runs
-                          if text in json.dumps(r.get("action"), ensure_ascii=False)]
-                   for text in (GC_TOOL_TEXT, GC_OFF_TEXT, GC_TEXT)}
-        check("8d: the records name who sent each line (tool-service / agent:<conversation>)",
-              senders[GC_TOOL_TEXT] == ["tool-service"] and senders[GC_OFF_TEXT] == ["tool-service"]
-              and f"agent:{cid8}" in senders[GC_TEXT] and f"agent:{cid}" in senders[GC_TEXT],
-              json.dumps(senders, ensure_ascii=False))
+        chat_runs = [r for r in runs if (r.get("action") or {}).get("kind") == "chat"
+                     or any(text in json.dumps(r.get("action"), ensure_ascii=False)
+                            for text in (GC_TOOL_TEXT, GC_OFF_TEXT, GC_TEXT))]
+        check("8d: none of the sends is in the automation runs (no kind: chat)", not chat_runs,
+              json.dumps(chat_runs, ensure_ascii=False)[:300])
         call("settings.update", {"patch": {"plugins": {"voice-input": {"enabled": True}}}})
     finally:
         print("\n== clean-up ==")

@@ -227,7 +227,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | 英雄联盟（`lol`，数据开关 `client` 读客户端数据） | `lol.match` | 无 | 这局现在的样子（模式、时间、比分、10 个人的英雄 / 技能 / KDA / 装备、对面谁闪没好、谁没带闪）。只读本机的局内接口 |
 | | `lol.spell` | `champion`、`spell`（缺省闪现）、`ago`、`clear` | 记下谁交了召唤师技能，返回几点好和一句能发到聊天框的 `chat` |
 | | `lol.scout` | `player`（可选） | 这局 10 个人最近 20 局的战绩、开黑（只给事实，谁是突破口由她按数据说，ADR 043 D2；隐藏了身份的人只有英雄）。进加载界面就在后台查。页面 `ui://kotone/lol/match`（这局） |
-| | `lol.shout` | `what`（`flash` / `records` / `premade`）、`side`（`enemy` / `ally` / `all`）、`channel`、`preview` | 一键喊话（ADR 041 第 3 期）：按这局已有的数据生成几行（闪现只有玩家报过的、`lol.spell` 记的；不发玩家名），经“发到游戏”的入口发，结果和 `game_chat.send` 一样再加 `lines`；`preview: true` 只返回几行不发。没东西可喊、入口不发都是错误。副作用 `input`、`records-run`；页面调不到 |
+| | `lol.shout` | `what`（`flash` / `records` / `premade`）、`side`（`enemy` / `ally` / `all`）、`channel`、`preview` | 一键喊话（ADR 041 第 3 期）：按这局已有的数据生成几行（闪现只有玩家报过的、`lol.spell` 记的；不发玩家名），经“发到游戏”的入口发，结果和 `game_chat.send` 一样再加 `lines`；`preview: true` 只返回几行不发。没东西可喊、入口不发都是错误。副作用 `input`；页面调不到 |
 | | `lol.player` | `player`（这局里的英雄名或玩家名，或“名字#编号”）或 `puuid`；都不写 = 自己 | 一个人最近 20 局的战绩、段位、常玩英雄、每一局。页面 `ui://kotone/lol/player`（战绩） |
 | | `lol.game`（只给页面） | `gameId` | 一局的详情：两边 10 个人的 KDA、伤害、经济、补刀、装备、海克斯。页面 `ui://kotone/lol/game` |
 | 英雄联盟（数据开关 `stats` 用网上的统计） | `lol.champion` | `champion`（名字、称号或外号）、`mode`（`rift` / `mayhem`，不写看这局）、`lane` | 峡谷：强度、胜率、克制、出装、符文、加点、召唤师技能（腾讯 101）；海斗：英雄榜名次、搭档、最好的海克斯（aramhex-data，CC BY-NC 4.0，要署名）。数据开关 `opgg` 开着时加 OP.GG 的分析。页面 `ui://kotone/lol/champion` |
@@ -246,7 +246,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `companion.status` | 无 | `ready`、`reason`（缺什么：AI 连接与密钥、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`、`quickMessages[]`（热键表里全部“跟她说一句 / 运行自动化”，形状照旧，不止 8 条，ADR 040 第 3 期）、当前 profile 的 `notes` 与 `chatRegion` |
 | `companion.ask` | `text` 或 `quickMessageId`（二选一） | 受理即返回 `{status:"started", jobId}`；结果为 `companion.finished` 事件：`jobId`、`action`（`reminder` / `type` / `answer` / `clarify`）、`text`、`reminders[]`、`result`（已调度的提醒 / 打字回执 / 实际交付方式）、`ocr{model,backend,dataEgress,lines,region}`、`chatRegionLearned`、`warnings`、`timing{captureMs,ocrMs,planMs}`、`durationMs`；失败为 `companion.failed {jobId, message}`。前置条件不满足（没有通过自检的连接）时直接报错，不受理；另一条陪玩请求进行中返回 `BUSY` |
 | `companion.read_chat` | 无 | 流程前半段，不调大模型：`window`、`ocr{model,backend,dataEgress,region,lines[{text,box,confidence}]}`（框为截图像素）、`chatTracking[{messageId,text,newThisRead,firstSeenMsAgo}]`、`profile{name,notes}`、`warnings`、`timing` |
-| `companion.type` | `text`（≤200 字，单行）、可选 `send`（缺省跟随设置 `autoSend`，默认 true） | 旧工具，经和 `game_chat.send` 同一个“发到游戏”的入口（ADR 041；新的调用用 `game_chat.send`：能选频道、能多行、写执行记录）：按前台游戏的游戏配置（对不上就用当前选中的）开聊天框、打字、按发送键，等修饰键松开，和 Kotone 别的输入排队，前台不是游戏时不发；`send=false` 只打进聊天框不发送。回执 `{typed, sent, profile, receipt}` 加上 `route`、`channel`、`lines`、`sentLines`，只证明本机按键已执行，不证明服务器已收到 |
+| `companion.type` | `text`（≤200 字，单行）、可选 `send`（缺省跟随设置 `autoSend`，默认 true） | 旧工具，经和 `game_chat.send` 同一个“发到游戏”的入口（ADR 041；新的调用用 `game_chat.send`：能选频道、能多行）：按前台游戏的游戏配置（对不上就用当前选中的）开聊天框、打字、按发送键，等修饰键松开，和 Kotone 别的输入排队，前台不是游戏时不发；`send=false` 只打进聊天框不发送。回执 `{typed, sent, profile, receipt}` 加上 `route`、`channel`、`lines`、`sentLines`，只证明本机按键已执行，不证明服务器已收到 |
 | `companion.check` | 无 | 测试助手所选连接（读一次服务商的模型列表，不花 token；没有列表接口时发一次短对话），只用于显示、不是使用前提，受理即返回 `{status:"started"}`；结果（同时写进设置）为 `companion.check.finished {check}` 或 `companion.check.failed {message}` |
 
 数据外发：`companion.ask` / `companion.check` 把请求与识别出的聊天发给用户的 AI 连接（`connection-dependent`）；所选 OCR 模型是在线模型时，`companion.ask` / `companion.read_chat` 每次都会上传截图（`ocr.dataEgress=selected-image`）。识别出的文字对 Kotone 与 Agent 都只是数据，不是指令；模型能选的动作只有上面三种。
@@ -257,8 +257,9 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 - `plugin`：走了游戏插件提供的发法时是那个插件的 id（例如 `lol`）；本体的通用发法没有这个字段。
 - `channel` / `channelName`：实际的频道。客户端的聊天里：选英雄、房间只有自己这边看得到（`team`，`channelName` 是“选英雄的聊天”“房间的聊天”）；自定义对局两边都看得到（`all`）。要的频道和这里不一样就不发。
 - `receipt`：按键的“只证明本机按键已执行，不证明服务器已收到”；客户端的“只证明客户端收下了，不证明队友已经看到”。
-- 一行都没发 → 工具返回错误（话里说原因和下一步）；发了一部分 → `sent: false`、`stopped: {code, message}`。原因代码（`stopped.code`、执行记录、进程日志）：第 1 期的 `emptyText` / `tooManyLines` / `lineTooLong` / `multiLineWithoutSend` / `noForeground` / `ownWindow` / `desktop` / `notAGame` / `noSuchChannel` / `modifiersHeld` / `foregroundChanged` / `busy` / `timeUp` / `cancelled` / `inputBlocked` / `needsElevation` / `injectFailed`，第 2 期加 `noChatHere`（这里现在没有能发的聊天：不在房间或选英雄里、聊天还没连上、在对局里、在结算）、`clientUnavailable`（连不上游戏客户端）、`clientRejected`（客户端回了错误，没发）、`clientNoReply`（客户端没在期限内回话：**可能已经发出去了**，不要重发）、`providerOff`（前台是插件登记的窗口，但插件或它要的开关关着：替玩家发言的不往那个窗口里按键）、`noDraftHere`（这里经客户端发，没法 `send: false` 只打进聊天框）。
+- 一行都没发 → 工具返回错误（话里说原因和下一步）；发了一部分 → `sent: false`、`stopped: {code, message}`。原因代码（`stopped.code`、进程日志）：第 1 期的 `emptyText` / `tooManyLines` / `lineTooLong` / `multiLineWithoutSend` / `noForeground` / `ownWindow` / `desktop` / `notAGame` / `noSuchChannel` / `modifiersHeld` / `foregroundChanged` / `busy` / `timeUp` / `cancelled` / `inputBlocked` / `needsElevation` / `injectFailed`，第 2 期加 `noChatHere`（这里现在没有能发的聊天：不在房间或选英雄里、聊天还没连上、在对局里、在结算）、`clientUnavailable`（连不上游戏客户端）、`clientRejected`（客户端回了错误，没发）、`clientNoReply`（客户端没在期限内回话：**可能已经发出去了**，不要重发）、`providerOff`（前台是插件登记的窗口，但插件或它要的开关关着：替玩家发言的不往那个窗口里按键）、`noDraftHere`（这里经客户端发，没法 `send: false` 只打进聊天框）。
 - 客户端的发法不重试、失败也不退回按键；只有插件关着时，玩家自己的语音输入才照旧按键。
+- 不写执行记录、结果里没有 `runId`（2026-11-27 起，玩家：替他发的字不是自动化；她发了什么在那段聊天里她的工具调用上看）。以前 `game_chat.send` 的结果带 `runId`、`automation.runs` 里有 `kind: "chat"` 的记录；旧记录 Kotone 打开记录文件时去掉。这是“只加不改”里唯一去掉的字段：它指向的记录已经不存在了。
 
 ### 配置与首次引导（委托桌面宿主）
 

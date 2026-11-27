@@ -74,6 +74,8 @@ Needs a person at the keyboard (the isolated instance with --keep, or your own K
      nothing runs; 「设置 → 热键」 shows the row waiting for confirmation.
   b. After confirming it: press it → the tool runs, one danmaku line with its answer, no voice.
   c. A hotkey bound to automation.run with a deleted automation: press it → she says it failed and where to look.
+     With a saved automation that does not call say()/toast(): press it → it runs, no danmaku line, no voice
+     (2026-11-27: whether to tell the player is up to the program); 「设置 → 热键」 / hotkeys.status shows lastRun.
   d. A hotkey bound to a page (ui://kotone/settings/models), Kotone behind a borderless game or a normal window:
      press it → Kotone comes to front on that page. With a game in exclusive fullscreen: Kotone stays behind,
      the taskbar button flashes, she says the page is open and to switch the game to a borderless window.

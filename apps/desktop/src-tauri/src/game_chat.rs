@@ -5,7 +5,7 @@
 //! - 本体工具 `game_chat.send`（她：发起方 `agent:<对话 id>`；外部 Agent：`tool-service`）、旧工具
 //!   `companion.type`、旧陪玩流程的“帮忙打字”都从这里进入口；
 //! - 在阻塞线程里跑入口，看门狗只防系统调用被安全软件挂住；
-//! - `game_chat.send` 写执行记录（「自动化 → 记录」）；
+//! - 不写执行记录：替玩家发的字不是自动化，她发了什么在那段聊天里看（2026-11-27 玩家，ADR 014 §3 的修订）；
 //! - 把内置插件登记的发法（清单 `[[send_to_game]]`，ADR 041 D3）包成入口的 [`ChatProvider`]（[`providers`]）：
 //!   前台是插件登记的窗口时入口交给插件（英雄联盟客户端：选英雄、房间里走客户端的聊天接口，不按键）。只从内置插件表建，
 //!   第三方插件（`remote_plugins`）拿不到这个能力（D7）。
@@ -162,7 +162,7 @@ fn receipt(outcome: &ChatOutcome, send: bool) -> String {
 
 /// 本体用 ToolSpec 登记的工具（[`kotone_agent::body`]，ADR 039 D2）在桌面端的实现：她
 /// （`BuiltinHost::body_tool`）和外部 Agent（工具服务、MCP，`tool_config::invoke_until`）都走这里。
-/// `caller` 是执行记录的发起方（她：`agent:<对话 id>`；工具服务：`tool-service`）；`deadline` 是工具服务的期限。
+/// `caller` 是发起方（她：`agent:<对话 id>`；工具服务：`tool-service`；只写进日志）；`deadline` 是工具服务的期限。
 pub async fn body_tool(
     app: &AppHandle,
     tool: &str,
@@ -225,51 +225,21 @@ pub fn stop_sends() -> usize {
     list.len()
 }
 
-/// 经入口发，并写一条执行记录（`game_chat.send`）。没发出去返回原因（一个键都没按，或者卡住了）；
-/// 发了一部分照实说哪几行没发。“停下”能停掉还没发的行（[`stop_sends`]）。
+/// 经入口发（`game_chat.send`、插件的一键喊话）。没发出去返回原因（一个键都没按，或者卡住了）；
+/// 发了一部分照实说哪几行没发。“停下”能停掉还没发的行（[`stop_sends`]）。`session` 是发起方，只写进日志。
+///
+/// 不写执行记录（2026-11-27 玩家：那不是自动化）：她发了什么在那段聊天里她的工具调用上看。
 pub async fn send_to_game_chat(
     app: &AppHandle,
     session: &str,
     request: ChatRequest,
 ) -> Result<Value, String> {
-    let text = request.text.clone();
     let send = request.send;
     let _sending = Sending::start(&request.cancel);
-    let result = send_logged(app, request).await;
-    let (profile, sent, recorded) = match &result {
-        Ok(outcome) => (
-            outcome.game.clone(),
-            send && outcome.sent_lines > 0,
-            match &outcome.stopped {
-                None => Ok(()),
-                Some(stopped) => Err(format!(
-                    "发了 {} 行，后面 {} 行没发：{stopped}",
-                    outcome.sent_lines,
-                    outcome.lines.len() - outcome.sent_lines
-                )),
-            },
-        ),
-        Err(failure) => (selected_game(app), false, Err(failure.to_string())),
-    };
-    let record = crate::automation::record_chat(
-        app,
-        session,
-        kotone_core::automation::ChatAction {
-            text,
-            sent,
-            profile,
-        },
-        recorded,
-    );
-    if let Err(e) = &record {
-        kotone_core::log::log(&format!("game_chat: chat record failed: {e}"));
-    }
-    let outcome = result.map_err(|failure| failure.to_string())?;
-    let mut value = result_json(&outcome, send);
-    if let Ok(run) = record {
-        value["runId"] = json!(run.id);
-    }
-    Ok(value)
+    let outcome = send_logged(app, session, request)
+        .await
+        .map_err(|failure| failure.to_string())?;
+    Ok(result_json(&outcome, send))
 }
 
 /// 给她 / 外部 Agent 的结果：以前的 `{typed, sent, profile, receipt}` 照旧（外部 Agent、脚本认这几个字段），
@@ -300,19 +270,23 @@ pub async fn type_into_chat(
     let mut request = ChatRequest::new(text, speaker);
     request.send = send;
     request.deadline = deadline.map(service_deadline);
-    let outcome = send_logged(app, request)
+    let outcome = send_logged(app, "companion.type", request)
         .await
         .map_err(|failure| failure.to_string())?;
     Ok(result_json(&outcome, send))
 }
 
-/// 发，并把结果记进日志（不记文字）。
-async fn send_logged(app: &AppHandle, request: ChatRequest) -> Result<ChatOutcome, ChatFailure> {
+/// 发，并把结果记进日志（不记文字）。`from` 是发起方（`agent:<对话 id>`、`tool-service`、`hotkey`、`plugin:<id>`……）。
+async fn send_logged(
+    app: &AppHandle,
+    from: &str,
+    request: ChatRequest,
+) -> Result<ChatOutcome, ChatFailure> {
     let speaker = request.speaker;
     let result = send(app, request).await;
     match &result {
         Ok(o) => kotone_core::log::log(&format!(
-            "game_chat: {speaker:?} route={} game={} channel={} lines={}/{} stopped={:?}",
+            "game_chat: {from} {speaker:?} route={} game={} channel={} lines={}/{} stopped={:?}",
             o.route.as_str(),
             o.game,
             o.channel,
@@ -321,17 +295,11 @@ async fn send_logged(app: &AppHandle, request: ChatRequest) -> Result<ChatOutcom
             o.stopped.as_ref().map(ChatFailure::code)
         )),
         Err(failure) => kotone_core::log::log(&format!(
-            "game_chat: {speaker:?} not sent ({})",
+            "game_chat: {from} {speaker:?} not sent ({})",
             failure.code()
         )),
     }
     result
-}
-
-/// 当前选中的游戏配置 id（没发出去时记录里写它，和以前一样）。
-fn selected_game(app: &AppHandle) -> String {
-    let settings = app.state::<SharedState>().settings.read().unwrap().clone();
-    crate::companion::active_profile(&settings).id
 }
 
 #[cfg(test)]

@@ -69,8 +69,8 @@ pub struct SpeakAction {
     pub delivery: Vec<DeliveryKind>,
 }
 
-/// 替玩家打进游戏聊天框的一句话（内置 Agent 的“发到游戏聊天”，ADR 014 §3）。
-/// 执行时直接完成，只留一条记录，让玩家在「记录」里看到替他发了什么。
+/// 旧版（rc.13 及以前）替玩家打进游戏聊天框的一句话也记一条执行记录（ADR 014 §3）。**只为读旧记录，不再写**：
+/// 那不是自动化，她发了什么在那段聊天里看（2026-11-27 玩家）；[`AutomationScheduler::open`] 读到就去掉并存盘。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatAction {
@@ -131,7 +131,7 @@ impl ProgramAction {
 pub enum RunAction {
     Speak(SpeakAction),
     Program(ProgramAction),
-    /// 只作记录，从不等待或调度。
+    /// 只为读旧记录（`kind: "chat"`），不再写；`open` 时去掉，[`AutomationScheduler::runs`] 里不会有。
     Chat(ChatAction),
 }
 
@@ -211,14 +211,7 @@ impl Run {
         match &self.action {
             RunAction::Speak(s) => validate_content(&s.text, &s.delivery),
             RunAction::Program(p) => p.validate(),
-            RunAction::Chat(c) => {
-                let chars = c.text.trim().chars().count();
-                if chars == 0 || chars > 200 {
-                    Err("聊天内容为空或超过 200 字".into())
-                } else {
-                    Ok(())
-                }
-            }
+            RunAction::Chat(_) => Err("发到游戏聊天不再记进执行记录".into()),
         }
     }
 }
@@ -312,16 +305,23 @@ fn clip(message: impl Into<String>) -> String {
 
 impl AutomationScheduler {
     pub fn open(path: PathBuf, delivery: Arc<dyn ReminderDelivery>) -> Result<Arc<Self>, String> {
+        let mut dropped_chat = false;
         let mut stored = match std::fs::read(&path) {
             Ok(bytes) => {
                 if bytes.len() > 8 * 1024 * 1024 {
                     return Err("自动化记录文件超过大小上限".into());
                 }
-                let stored: StoredRuns = serde_json::from_slice(&bytes)
+                let mut stored: StoredRuns = serde_json::from_slice(&bytes)
                     .map_err(|e| format!("自动化记录无法读取，已保留原文件：{e}"))?;
                 if stored.version != STORE_VERSION {
                     return Err("自动化记录版本暂不支持，已保留原文件".into());
                 }
+                // 旧版替玩家发到游戏聊天也记了一条（`kind: "chat"`）：不是自动化，去掉、下面存盘（旧版读去掉以后的文件照旧）
+                let before = stored.runs.len();
+                stored
+                    .runs
+                    .retain(|run| !matches!(run.action, RunAction::Chat(_)));
+                dropped_chat = stored.runs.len() != before;
                 if stored.runs.len() > MAX_HISTORY {
                     return Err("自动化记录超过上限".into());
                 }
@@ -334,7 +334,7 @@ impl AutomationScheduler {
             Err(e) => return Err(format!("读取自动化记录失败：{e}")),
         };
         let now = now_ms();
-        let mut recovered = false;
+        let mut recovered = dropped_chat;
         for run in &mut stored.runs {
             if run.status == RunStatus::Running {
                 run.status = RunStatus::Failed;
@@ -642,53 +642,6 @@ impl AutomationScheduler {
                     started_at_ms: None,
                     finished_at_ms: None,
                     report: None,
-                };
-                next.runs.push(run.clone());
-                next.trim_history()?;
-                self.persist(&next)?;
-                state.stored = next;
-                Ok(run)
-            })
-            .ok_or_else(|| "自动化调度已关闭".to_string())??;
-        self.notify_changed();
-        Ok(run)
-    }
-
-    /// 记一条“替玩家打进游戏聊天框”的执行记录（已经执行完：成功为 finished，失败为 failed）。
-    /// 不调度、不触发结束回调（发起方已经知道结果），只通知列表变化。
-    pub fn record_chat(
-        &self,
-        session_id: &str,
-        mut action: ChatAction,
-        result: Result<(), String>,
-    ) -> Result<Run, String> {
-        action.text = action.text.trim().to_string();
-        let now = now_ms();
-        let (status, message) = match result {
-            Ok(()) => (RunStatus::Finished, None),
-            Err(error) => (RunStatus::Failed, Some(error)),
-        };
-        let run = Run {
-            id: String::new(),
-            session_id: session_id.into(),
-            action: RunAction::Chat(action),
-            created_at_ms: now,
-            due_at_ms: now,
-            status,
-            message,
-            started_at_ms: Some(now),
-            finished_at_ms: Some(now),
-            report: None,
-        };
-        run.validate()?;
-        let run = self
-            .shutdown
-            .run_if_active(|| -> Result<Run, String> {
-                let mut state = self.state.lock().unwrap();
-                let mut next = state.stored.clone();
-                let run = Run {
-                    id: next.allocate_id()?,
-                    ..run
                 };
                 next.runs.push(run.clone());
                 next.trim_history()?;

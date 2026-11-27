@@ -175,7 +175,7 @@ impl BuiltinHost for FakeBuiltin {
             .unwrap()
             .push(("body".into(), json!({"tool": tool, "args": arguments})));
         Ok(kotone_plugin_api::ToolResult::content(
-            json!({"typed": "gg", "sent": true, "runId": "run-2"}),
+            json!({"typed": "gg", "sent": true, "receipt": "已按发送键发到队伍"}),
         ))
     }
 }
@@ -585,7 +585,7 @@ fn hotkeys_ask_once_when_bound() {
         .insert("settings.get".into(), crate::permissions::Rule::Ask);
     let chat = entry(&f, "game_chat.send");
     assert!(matches!(
-        binding_decision(&rules, chat, &json!({}), Some(&["input", "records-run"])),
+        binding_decision(&rules, chat, &json!({}), Some(&["input"])),
         BindingDecision::Refused { .. }
     ));
     assert!(matches!(
@@ -1715,7 +1715,7 @@ async fn game_chat_send_is_the_bodys_and_stays_without_any_plugin() {
     );
     let out = call(&port, "game_chat.send", json!({"text": "gg"})).await;
     assert!(!out.is_error && !out.untrusted, "{}", out.content);
-    assert!(out.content.contains("runId") && out.display.is_none());
+    assert!(out.content.contains("typed") && out.display.is_none());
     assert_eq!(
         builtin.calls.lock().unwrap().clone(),
         vec![(

@@ -557,40 +557,45 @@ async fn a_saved_spoken_automation_is_delivered_like_a_reminder() {
         .is_err());
 }
 
+/// 旧版（rc.13 及以前）替玩家发到游戏聊天也记了一条 `kind: "chat"`：照旧读得进来，打开时去掉并存盘，
+/// 别的记录和编号不动（2026-11-27 玩家：那不是自动化）。
 #[test]
-fn chat_records_are_kept_finished_and_never_scheduled() {
+fn old_chat_records_are_dropped_when_opened() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("automation-runs.json");
-    let (queue, launcher, finished) = open_with_launcher(path.clone());
-    let chat = |text: &str| ChatAction {
-        text: text.into(),
-        sent: true,
-        profile: "lol".into(),
-    };
-    let ok = queue
-        .record_chat("agent:c-1", chat(" 我去下路 "), Ok(()))
+    let old = r#"{"version":1,"nextId":4,"importedReminders":true,"runs":[
+        {"id":"run-1","sessionId":"tool","action":{"kind":"speak","text":"该喝水了","delivery":["voice"]},
+         "createdAtMs":1,"dueAtMs":2,"status":"finished","startedAtMs":2,"finishedAtMs":3},
+        {"id":"run-2","sessionId":"agent:c-1","action":{"kind":"chat","text":"我去下路","sent":true,"profile":"lol"},
+         "createdAtMs":4,"dueAtMs":4,"status":"finished","startedAtMs":4,"finishedAtMs":4},
+        {"id":"run-3","sessionId":"tool-service","action":{"kind":"chat","text":"gg","sent":false},
+         "createdAtMs":5,"dueAtMs":5,"status":"failed","message":"打字超时","startedAtMs":5,"finishedAtMs":5}
+    ]}"#;
+    std::fs::write(&path, old).unwrap();
+    let queue =
+        AutomationScheduler::open(path.clone(), Arc::new(RecordingDelivery::default())).unwrap();
+    let runs = queue.runs();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].id, "run-1");
+    assert!(runs.iter().all(|r| !matches!(r.action, RunAction::Chat(_))));
+    // 已经存了去掉以后的（格式不变，旧版读它照旧）；编号接着往下
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(!saved.contains(r#""kind":"chat""#), "{saved}");
+    let stored: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(stored["nextId"], 4);
+    assert_eq!(stored["importedReminders"], true);
+    let next = queue
+        .schedule_speak(
+            "tool",
+            SpeakAction {
+                text: "买装备".into(),
+                delivery: vec![DeliveryKind::Danmaku],
+            },
+            now_ms() + 60_000,
+        )
         .unwrap();
-    assert_eq!(ok.status, RunStatus::Finished);
-    assert_eq!(ok.title(), "我去下路");
-    let failed = queue
-        .record_chat("agent:c-1", chat("gg"), Err("打字超时".into()))
-        .unwrap();
-    assert_eq!(failed.status, RunStatus::Failed);
-    assert_eq!(failed.message.as_deref(), Some("打字超时"));
-    assert!(queue.record_chat("agent:c-1", chat("  "), Ok(())).is_err());
-    assert!(queue
-        .record_chat("agent:c-1", chat(&"字".repeat(201)), Ok(()))
-        .is_err());
-    // 不启动程序、不触发结束回调、不占“进行中”。
-    assert!(launcher.launched.lock().unwrap().is_empty());
-    assert!(finished.lock().unwrap().is_empty());
-    assert_eq!(queue.running_programs(), 0);
-    // 重启后还在。
+    assert_eq!(next.id, "run-4");
     drop(queue);
     let reopened = AutomationScheduler::open(path, Arc::new(RecordingDelivery::default())).unwrap();
-    let runs = reopened.runs();
-    assert_eq!(runs.len(), 2);
-    assert!(runs
-        .iter()
-        .any(|r| matches!(&r.action, RunAction::Chat(c) if c.text == "我去下路" && c.sent)));
+    assert_eq!(reopened.runs().len(), 2);
 }

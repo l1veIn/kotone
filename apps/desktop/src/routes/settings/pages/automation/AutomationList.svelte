@@ -60,7 +60,7 @@
   const open = (r: AutomationRun) => r.status === "pending" || r.status === "running";
   const automationOf = (r: AutomationRun) => (r.action.kind === "program" ? r.action.automationId ?? null : null);
   /** 不属于已保存自动化的、还没结束的执行。 */
-  const loose = $derived(runs.filter((r) => open(r) && r.action.kind !== "chat"
+  const loose = $derived(runs.filter((r) => open(r)
     && !automations.some((a) => a.id === automationOf(r))).sort((a, b) => a.dueAtMs - b.dueAtMs));
   const sorted = $derived([...automations].sort((a, b) => Number(b.id === BUILTIN_REMIND_ID) - Number(a.id === BUILTIN_REMIND_ID)
     || a.name.localeCompare(b.name, getLocale())));

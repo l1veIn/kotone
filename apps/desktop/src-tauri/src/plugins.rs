@@ -369,7 +369,7 @@ impl Host for DesktopHost {
     }
 
     /// 发到游戏（ADR 041 第 3 期）：只给内置插件、插件开着、有人在调它的工具（[`DesktopHost::speaker`]）时；
-    /// 交给和 `game_chat.send` 同一个入口（[`crate::game_chat::send_to_game_chat`]：前台、频道、锁、修饰键、执行记录
+    /// 交给和 `game_chat.send` 同一个入口（[`crate::game_chat::send_to_game_chat`]：前台、频道、锁、修饰键
     /// 都在那里），“停下”能停掉还没发完的几行。
     fn send_to_game(
         &self,
