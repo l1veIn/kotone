@@ -1383,11 +1383,27 @@ mod tests {
 
     // ---------- ADR 046：程序里调工具 ----------
 
-    /// 存进一个临时的库（事件目录照默认设置合并，插件登记的 `lol.death` 也认得）。
+    /// 存进一个临时的库（事件目录照默认设置合并）。本体的代码里不写插件登记的事件名（kotone-plugin-api 的
+    /// tests/event_boundaries.rs），要事件触发的测试用假想的 demo 游戏：目录里多登记一种 `demo.death`。
     pub(super) fn saved(draft: Value) -> (tempfile::TempDir, AutomationLibrary, Automation) {
         let dir = tempfile::tempdir().unwrap();
         let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
-        let events = crate::games::event_catalog(&Settings::default());
+        let mut events = crate::games::event_catalog(&Settings::default());
+        events
+            .add(kotone_core::games::CatalogEntry {
+                spec: kotone_core::games::EventSpec {
+                    kind: "demo.death".into(),
+                    label: "有英雄阵亡".into(),
+                    data: BTreeMap::new(),
+                    needs: Vec::new(),
+                    private: Vec::new(),
+                },
+                adapter: "demo".into(),
+                plugin: Some(("demo".into(), "示例".into())),
+                games: vec!["demo".into()],
+                off: None,
+            })
+            .unwrap();
         let draft: AutomationDraft = serde_json::from_value(draft).unwrap();
         let automation = library.save(draft, CreatedBy::Companion, &events).unwrap();
         (dir, library, automation)

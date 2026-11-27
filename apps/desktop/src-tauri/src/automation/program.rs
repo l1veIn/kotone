@@ -948,7 +948,8 @@ mod tests {
         (report, host)
     }
 
-    /// 验收场景（ADR 046 末尾）：“队友都倒了放首歌”。存得进来（`lol.death` 是英雄联盟插件登记的事件）；不用游戏窗口、
+    /// 验收场景（ADR 046 末尾）：“队友都倒了放首歌”。本体的代码里不写插件登记的事件名，英雄联盟的“有英雄阵亡”换成
+    /// 假想的 demo 游戏的 `demo.death`（字段照英雄联盟插件登记的，见 `automation::tests::saved`）。存得进来；不用游戏窗口、
     /// 不会叫她；`music` 默认允许、不用确认。最后一个队友倒下（我还活着）那一件触发它，对面死了、还剩两个队友、我死了
     /// 都不触发，60 秒里不再触发。程序调到 `music`（`action = "play"`，`query` 是参数的缺省值），拿到的只有 `{status}`：
     /// 没登录时弹一句，放上了什么都不说。
@@ -958,7 +959,7 @@ mod tests {
             "name": "队友都倒了放首歌",
             "params": [{"name": "song", "label": "放什么", "type": "text", "maxLength": 100, "default": "Legends Never Die"}],
             "action": {"kind": "program", "source": "local r = tool(\"music\", { action = \"play\", query = args.song })\nif not r then\n  log(\"没放成\")\nelseif r.status == \"need_login\" then\n  toast(\"网易云音乐还没登录，没放成\")\nend"},
-            "on": {"event": ["lol.death"], "game": "lol", "match": {"team": "ally", "meAlive": true, "alliesAlive": 1}, "cooldownSeconds": 60}
+            "on": {"event": ["demo.death"], "game": "demo", "match": {"team": "ally", "meAlive": true, "alliesAlive": 1}, "cooldownSeconds": 60}
         }));
         let source = automation.action.source();
         let uses = automation.action.uses();
@@ -977,12 +978,12 @@ mod tests {
 
         let death = |data: Value| GameEvent {
             id: "e-1".into(),
-            kind: "lol.death".into(),
-            game: "lol".into(),
+            kind: "demo.death".into(),
+            game: "demo".into(),
             match_id: "m-1".into(),
             time: 0,
             game_time: Some(900.0),
-            source: "lol/live-client".into(),
+            source: "demo/live".into(),
             data: data.as_object().unwrap().clone(),
         };
         let fields = |team: &str, me: bool, allies: u32, me_alive: bool| {
