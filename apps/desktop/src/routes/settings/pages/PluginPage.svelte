@@ -6,13 +6,14 @@
   // 再点一次或点插件名回到 App；App 一直挂着（iframe 不重新加载、点到哪还在哪）。
   // 风险和许可（ADR 043 D8）：插件有风险提示或许可说明时，设置里栏上多一个小链接“风险和许可”，打开一个弹窗（PluginRiskDialog）；
   // 这一版还没看过、又看到它有风险的开关开着（默认就开着的，或者刚在这里打开的）时自己弹一次。只是提示，不动开关。
+  // 第三方插件也有这个弹窗（“它是别人写的程序”和它清单里的 `risk`，ADR 047）；写了 `risk` 的第一次点开时弹一次。
   // App 的位置是通用的：现在放内置插件的页面（plugins/<id>/ui，登记在 lib/pluginUi.ts）；以后的第三方插件
   // （别的仓库的 MCP App）在这里用沙盒 iframe 显示它的 `ui://` 资源，宿主不给它套样式。
   import { onMount } from "svelte";
   import { ChevronLeft, Settings2, ShieldAlert } from "@lucide/svelte";
   import { errText, settingsStore, toast } from "$lib/stores/ui";
   import { openTarget } from "$lib/stores/navigation";
-  import { hasRiskNotes, listPlugins, pluginName, pluginsStore, riskUnseen, riskyOn } from "$lib/plugins";
+  import { hasRiskNotes, listPlugins, pluginName, pluginsStore, riskUnseen, riskyOn, thirdPartyRisk } from "$lib/plugins";
   import { PLUGIN_UI } from "$lib/pluginUi";
   import PluginPushes from "$lib/components/plugins/PluginPushes.svelte";
   import PluginRiskDialog from "$lib/components/plugins/PluginRiskDialog.svelte";
@@ -42,15 +43,19 @@
   });
   const openSettings = () => (showSettings = true);
 
-  /** 有“风险和许可”要看（数据开关的风险提示、许可和出处）。 */
-  const hasRisk = $derived(!!plugin && hasRiskNotes(plugin.manifest));
+  /** 第三方插件：弹窗里总有“它是别人写的程序”，可能还有它清单里自己写的风险说明（ADR 047）。 */
+  const thirdParty = $derived(thirdPartyRisk(plugin).thirdParty);
+  /** 有“风险和许可”要看（数据开关的风险提示、许可和出处；第三方插件总有）。 */
+  const hasRisk = $derived(!!plugin && (hasRiskNotes(plugin.manifest) || thirdParty));
   let riskOpen = $state(false);
   /** 这次打开插件页已经自己弹过一次（记“看过”没存上时也不再弹第二次）。 */
   let riskShown = false;
   // 第一次看到有风险的开关开着（默认开着的、刚打开的；设置读到了才算）：弹一次，弹窗自己记下看过
   $effect(() => {
     if (riskShown || !plugin || !$settingsStore) return;
-    if (riskUnseen($settingsStore, plugin.manifest) && riskyOn($settingsStore, plugin.manifest)) {
+    // 第三方插件自己写了风险说明：第一次点开它时弹一次（只有“别人写的程序”那一段的不弹：加的时候信任提示里说过）
+    const declared = !!thirdPartyRisk(plugin).risk;
+    if (riskUnseen($settingsStore, plugin.manifest, declared) && (riskyOn($settingsStore, plugin.manifest) || declared)) {
       riskShown = true;
       riskOpen = true;
     }

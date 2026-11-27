@@ -206,6 +206,23 @@ impl ServerSpec {
         matches!(self.launch, Launch::Stdio { .. })
     }
 
+    /// 连的网址（子进程的没有）。
+    pub fn url(&self) -> Option<&str> {
+        match &self.launch {
+            Launch::Http { url, .. } => Some(url),
+            Launch::Stdio { .. } => None,
+        }
+    }
+
+    /// 在本机：子进程，或者网址是 127.0.0.1 / localhost / [::1]（观察项的间隔下限按这个分，插件标准 0.1）。
+    pub fn is_local(&self) -> bool {
+        match &self.launch {
+            Launch::Stdio { .. } => true,
+            Launch::Http { url, .. } => crate::manifest::url_host(url)
+                .is_some_and(|host| crate::manifest::local_host(&host)),
+        }
+    }
+
     /// 所有要填进去的地方（参数、环境变量、网址、请求头）。
     fn fields(&self) -> Vec<&str> {
         match &self.launch {

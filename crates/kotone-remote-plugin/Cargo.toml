@@ -20,8 +20,9 @@ sha2 = "0.10"
 [dev-dependencies]
 # 进程内的 Streamable HTTP 测试服务器
 kotone-mcp = { workspace = true, features = ["test-support"] }
-# examples/remote_test_server.rs：测试用的“别人写的” stdio 服务器（和 kotone-mcp 锁同一个版本）
-rmcp = { version = "=3.11.0", default-features = false, features = ["server", "transport-io"] }
+# examples/remote_test_server.rs：测试用的“别人写的” stdio 服务器（和 kotone-mcp 锁同一个版本）；
+# client：测 2026-07-28（`server/discover`）下照样读得到 Kotone 清单
+rmcp = { version = "=3.11.0", default-features = false, features = ["server", "client", "transport-io"] }
 # 权限：用 kotone-agent 的判定核对“没标只读的第一次问、总是允许、只读的信任前也问”
 kotone-agent.workspace = true
 kotone-core.workspace = true

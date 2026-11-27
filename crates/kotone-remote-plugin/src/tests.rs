@@ -546,3 +546,232 @@ fn third_party_plugins_never_provide_send_to_game() {
         assert!(m.send_to_game.is_empty(), "{m:?}");
     }
 }
+
+// ---- Kotone 清单（插件标准 0.1）----
+
+/// stdio：服务器的 `kotone://manifest` 不在 `resources/list` 里，宿主照样 `resources/read` 读到；读到的原文记在磁盘上，
+/// 下次（没连上）建插件时 `games` 就跟着清单；连上前建的插件 `games_stale`，换一个（同一个连接）就对了。
+#[tokio::test]
+async fn a_stdio_server_gives_its_manifest_without_listing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = ServerSpec::parse(&json!({"command": server_exe().to_string_lossy()})).unwrap();
+    let plugin = Arc::new(RemotePlugin::new(
+        "rt",
+        Ok(spec.clone()),
+        Some(dir.path().to_path_buf()),
+        "0.2.0-test",
+    ));
+    assert!(plugin.manifest().games.is_empty(), "还没连过：没有清单");
+    assert_eq!(
+        plugin.kotone_manifest().source,
+        crate::manifest::Source::None
+    );
+    let mut changes = plugin.server().manifest_changes();
+    let host: Arc<dyn Host> = Arc::new(TestHost::default());
+    plugin.server().connect(&host, true).await.unwrap();
+    assert!(changes.has_changed().unwrap(), "清单到了要告诉宿主");
+    changes.mark_unchanged();
+    assert!(
+        !plugin
+            .server()
+            .known()
+            .resources
+            .iter()
+            .any(|r| r.uri == "kotone://manifest"),
+        "测试服务器没在列表里列它"
+    );
+    let effective = plugin.kotone_manifest();
+    assert_eq!(effective.source, crate::manifest::Source::Server);
+    assert_eq!(effective.manifest.games, ["lol"]);
+    assert_eq!(effective.manifest.events[0].name, "echoed");
+    assert_eq!(effective.manifest.watches[0].tool, "echo");
+    assert_eq!(effective.manifest.risk.as_deref(), Some("测试用的风险说明"));
+    assert!(effective.unknown.is_empty() && effective.problems.is_empty());
+
+    // 连上前建的 Manifest 还是空的：宿主换一个，同一个连接
+    assert!(plugin.games_stale());
+    let fresh = plugin.refreshed();
+    assert_eq!(fresh.manifest().games, ["lol"]);
+    assert!(!fresh.games_stale());
+    assert!(Arc::ptr_eq(fresh.server(), plugin.server()));
+    assert_eq!(fresh.server().status(), Status::Connected);
+
+    // 再连一次：清单没变，不再告诉宿主
+    plugin.server().connect(&host, true).await.unwrap();
+    assert!(!changes.has_changed().unwrap());
+    plugin.server().disconnect().await;
+
+    // 重开 Kotone（没连）：从磁盘上记着的原文读
+    let reopened = RemotePlugin::new("rt", Ok(spec), Some(dir.path().to_path_buf()), "0.2.0-test");
+    assert_eq!(reopened.manifest().games, ["lol"]);
+    assert_eq!(reopened.server().status(), Status::NotConnected);
+    assert_eq!(
+        reopened.kotone_manifest().source,
+        crate::manifest::Source::Server
+    );
+}
+
+/// HTTP：服务器给了清单（在资源里）就用它；没给就用 Kotone 带的预设（按服务器自报的名字认，
+/// `kotone-mcp` 测试服务器叫 `kotone-test-server`）；玩家本地的 `manifest.json` 只加不覆盖。
+#[tokio::test]
+async fn http_servers_with_and_without_a_manifest() {
+    use crate::manifest::Source;
+    use kotone_mcp::testing::{handler, text_reply, TestServer};
+    let tools = json!([{"name": "notes", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}}]);
+    let reply = || handler(|_, _| async move { text_reply("ok") });
+    let host: Arc<dyn Host> = Arc::new(TestHost::default());
+
+    // 给了：新标准、不认识的字段照样读，提示列出来
+    let given = TestServer::start(
+        tools.clone(),
+        json!([{"uri": "kotone://manifest", "name": "manifest", "mimeType": "application/json",
+                "text": json!({"standard": "0.3", "games": ["cs2"], "colour": "red",
+                               "events": [{"name": "round_won", "label": "赢了一回合"}]}).to_string()}]),
+        reply(),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let spec = ServerSpec::parse(&json!({"url": given.url()})).unwrap();
+    let plugin = RemotePlugin::new("given", Ok(spec), Some(dir.path().to_path_buf()), "t");
+    let plugin = Arc::new(plugin);
+    plugin.server().connect(&host, true).await.unwrap();
+    let e = plugin.kotone_manifest();
+    assert_eq!(
+        e.source,
+        Source::Server,
+        "服务器给了就不用预设（它也叫 kotone-test-server）"
+    );
+    assert_eq!(e.manifest.games, ["cs2"]);
+    assert!(e.newer_standard);
+    assert_eq!(e.unknown[0].text, "colour");
+    assert!(e.manifest.watches.is_empty());
+    // 玩家本地加一个事件和观察项
+    std::fs::write(
+        dir.path().join(crate::manifest::LOCAL_FILE),
+        json!({"events": [{"name": "mine", "label": "我加的"}, {"name": "round_won", "label": "同名"}],
+               "watches": [{"event": "mine", "tool": "notes", "compare": "new"}]})
+        .to_string(),
+    )
+    .unwrap();
+    let e = plugin.kotone_manifest();
+    assert!(e.local);
+    assert_eq!(e.manifest.events.len(), 2);
+    assert_eq!(e.manifest.events[0].label, "赢了一回合", "同名的不覆盖");
+    assert_eq!(e.manifest.watches.len(), 1);
+    assert!(e.problems.iter().any(|n| n.from == Source::Local));
+
+    // 没给：用预设
+    let bare = TestServer::start(tools, json!([]), reply()).await;
+    let spec = ServerSpec::parse(&json!({"url": bare.url()})).unwrap();
+    let plugin = Arc::new(RemotePlugin::new("bare", Ok(spec), None, "t"));
+    assert_eq!(
+        plugin.kotone_manifest().source,
+        Source::None,
+        "没连过：不知道它叫什么，认不出预设"
+    );
+    plugin.server().connect(&host, true).await.unwrap();
+    assert!(plugin.server().known().manifest.is_none());
+    let e = plugin.kotone_manifest();
+    assert_eq!(e.source, Source::Preset);
+    assert_eq!(e.manifest.games, ["generic"]);
+    assert_eq!(e.manifest.watches[0].event, "note_added");
+    assert!(e.problems.is_empty(), "没给不是问题：{:?}", e.problems);
+    assert!(plugin.games_stale());
+}
+
+/// 服务器给的清单读不出来（不是对象）：当没给（预设补上），插件页说一句。
+#[tokio::test]
+async fn a_broken_server_manifest_counts_as_none() {
+    use kotone_mcp::testing::{handler, text_reply, TestServer};
+    let server = TestServer::start(
+        json!([{"name": "x", "inputSchema": {"type": "object"}}]),
+        json!([{"uri": "kotone://manifest", "name": "manifest", "mimeType": "application/json", "text": "[1, 2]"}]),
+        handler(|_, _| async move { text_reply("ok") }),
+    )
+    .await;
+    let spec = ServerSpec::parse(&json!({"url": server.url()})).unwrap();
+    let plugin = Arc::new(RemotePlugin::new("broken", Ok(spec), None, "t"));
+    let host: Arc<dyn Host> = Arc::new(TestHost::default());
+    plugin.server().connect(&host, true).await.unwrap();
+    let e = plugin.kotone_manifest();
+    assert_eq!(e.source, crate::manifest::Source::Preset);
+    assert_eq!(e.problems[0].from, crate::manifest::Source::Server);
+    assert!(e.problems[0].text.contains("JSON 对象"), "{:?}", e.problems);
+}
+
+/// MCP 2026-07-28（无状态、没有握手，先 `server/discover`）：rmcp 3.11 的客户端用 `Discover` 连同一种服务器，
+/// `resources/read kotone://manifest` 照样读得到——清单不靠握手，两版协议下拿法一样。
+/// （Kotone 的客户端 `kotone-mcp` 现在还只发 `initialize`，见它的 `client.rs`；换成 Auto 时清单不用改。）
+#[tokio::test]
+async fn the_manifest_reads_the_same_over_2026_07_28() {
+    use rmcp::model::{
+        ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+        ServerCapabilities, ServerConfig,
+    };
+    use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RequestContext};
+    use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
+
+    #[derive(Clone, Default)]
+    struct Modern {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+    impl ServerHandler for Modern {
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_resources().build())
+        }
+        async fn read_resource(
+            &self,
+            request: ReadResourceRequestParams,
+            context: RequestContext<RoleServer>,
+        ) -> Result<ReadResourceResponse, ErrorData> {
+            self.seen.lock().unwrap().push(
+                context
+                    .protocol_version()
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            );
+            if request.uri != "kotone://manifest" {
+                return Err(ErrorData::resource_not_found(request.uri.clone(), None));
+            }
+            let result: ReadResourceResult = serde_json::from_value(json!({"contents": [{
+                "uri": "kotone://manifest", "mimeType": "application/json",
+                "text": "{\"games\": [\"lol\"]}"
+            }]}))
+            .unwrap();
+            Ok(result.into())
+        }
+    }
+
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let handler = Modern::default();
+    let seen = handler.seen.clone();
+    tokio::spawn(async move {
+        if let Ok(running) = handler.serve(tokio::io::split(server_io)).await {
+            let _ = running.waiting().await;
+        }
+    });
+    let client = ()
+        .serve_with_lifecycle(
+            tokio::io::split(client_io),
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("2026-07-28 的 server/discover 连得上");
+    let result = client
+        .peer()
+        .read_resource(ReadResourceRequestParams::new(
+            crate::manifest::MANIFEST_URI.to_string(),
+        ))
+        .await
+        .unwrap();
+    let text = serde_json::to_value(&result.contents[0]).unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let parsed = crate::manifest::parse_text(&text).unwrap();
+    assert_eq!(parsed.manifest.games, ["lol"]);
+    assert_eq!(seen.lock().unwrap().as_slice(), ["2026-07-28"]);
+    let _ = client.cancel().await;
+}

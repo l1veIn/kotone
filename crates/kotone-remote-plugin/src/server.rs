@@ -7,6 +7,9 @@
 //! - **工具清单记在磁盘上**（`<KOTONE_HOME>/plugins/<id>/remote-cache.json`）：Kotone 重开以后不用先把每个服务器
 //!   都起一遍就知道它有哪些工具；配置变了（指纹不同）就不认旧的。
 //! - **`tools/list_changed`**：服务器说工具变了就重新列，从下一段对话起生效（琴音的工具清单一段对话里不变）。
+//! - **Kotone 清单**（插件标准 0.1，[`crate::manifest`]）：每次连上都 `resources/read kotone://manifest`（不看
+//!   `resources/list` 列没列、不看握手的返回），读到的原文和工具清单一起记在磁盘上，没连上时也能显示；
+//!   读不到（资源不存在、方法不存在、超时）= 它没给。变了的话 [`Server::manifest_changes`] 的计数加一。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -19,12 +22,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::config::ServerSpec;
+use crate::manifest::{self, Effective};
 use crate::tools::{self, short_text};
 
 /// 连不上以后多久之内不再自己重试。
 pub const RETRY_AFTER: Duration = Duration::from_secs(15);
 /// 记工具清单的文件（在插件自己的目录里）。
 pub const CACHE_FILE: &str = "remote-cache.json";
+/// 读 `kotone://manifest` 最多等多久：不认这个资源又不回话的服务器不能把连接拖到请求超时（60 秒）。
+pub const MANIFEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 服务器说的自己（握手时的 `serverInfo`）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -70,6 +76,13 @@ pub struct Known {
     pub resources: Vec<kotone_mcp::Resource>,
     #[serde(default)]
     pub server: Option<About>,
+    /// 服务器给的 Kotone 清单的原文（`kotone://manifest`；没给 = None）。存原文不存读出来的样子：
+    /// 以后的 Kotone 认识更多字段时照样从原文读。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
+    /// 服务器给了、但用不了的原因（太大、不是文字），原文不存。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_error: Option<String>,
 }
 
 /// 连接的状态（插件卡片上显示）。
@@ -98,12 +111,16 @@ pub struct Server {
     id: String,
     spec: Result<ServerSpec, String>,
     fingerprint: String,
+    /// 插件自己的目录（工具清单的缓存、玩家本地的 `manifest.json`）。
+    dir: Option<PathBuf>,
     cache: Option<PathBuf>,
     /// 磁盘上记着的工具清单是另一份配置连出来的：那份配置的指纹（[`Server::replaced_fingerprint`]）。
     replaced: Option<String>,
     version: String,
     state: Mutex<State>,
     client: tokio::sync::Mutex<Option<Arc<McpClient>>>,
+    /// 服务器给的清单变了一次就加一（宿主据此重建插件的 `Manifest`：`games` 跟着清单）。
+    manifest_changed: tokio::sync::watch::Sender<u64>,
 }
 
 /// `ui://` 地址 → 回环代理路径里的一段（`r` + 16 位十六进制，FNV-1a 64）：别人的 `ui://` 地址什么字都可能有，
@@ -129,7 +146,7 @@ impl Server {
             .as_ref()
             .map(ServerSpec::fingerprint)
             .unwrap_or_default();
-        let cache = data_dir.map(|dir| dir.join(CACHE_FILE));
+        let cache = data_dir.as_ref().map(|dir| dir.join(CACHE_FILE));
         let stored = cache
             .as_ref()
             .and_then(|path| std::fs::read_to_string(path).ok())
@@ -146,6 +163,7 @@ impl Server {
             id: id.to_string(),
             spec,
             fingerprint,
+            dir: data_dir,
             cache,
             replaced,
             version: version.to_string(),
@@ -162,6 +180,7 @@ impl Server {
                 secrets: Vec::new(),
             }),
             client: tokio::sync::Mutex::new(None),
+            manifest_changed: tokio::sync::watch::channel(0).0,
         }
     }
 
@@ -202,6 +221,27 @@ impl Server {
 
     pub fn known(&self) -> Known {
         self.state.lock().unwrap().known.clone()
+    }
+
+    /// 生效的 Kotone 清单（[`manifest::merge`]）：服务器上次给的（记在磁盘上的原文）→ 没给时 Kotone 带的预设
+    /// （按网址、服务器自报的名字认）→ 加上玩家本地的 `manifest.json`。每次现读本地文件（玩家手改了马上看得到）。
+    pub fn kotone_manifest(&self) -> Effective {
+        let known = self.known();
+        let server = match (known.manifest, known.manifest_error) {
+            (Some(text), _) => Some(manifest::parse_text(&text)),
+            (None, Some(error)) => Some(Err(error)),
+            (None, None) => None,
+        };
+        let url = self.spec.as_ref().ok().and_then(ServerSpec::url);
+        let name = known.server.as_ref().map(|about| about.name.as_str());
+        let preset = manifest::preset_for(url, name).map(|(_, parsed)| parsed);
+        let local = self.dir.as_deref().and_then(manifest::read_local);
+        manifest::merge(server, preset, local)
+    }
+
+    /// 服务器给的清单（或者它自报的名字，预设按它认）每变一次，这里的数加一。
+    pub fn manifest_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.manifest_changed.subscribe()
     }
 
     /// 知道它有哪些工具了（连上过，或者磁盘上记着）。
@@ -389,12 +429,24 @@ impl Server {
         };
         // 不是每个服务器都有资源（没有时回“方法不存在”）
         let resources = client.list_resources().await.unwrap_or_default();
+        let (manifest, manifest_error) = read_manifest(&client).await;
+        let before = self.known();
+        let server = About::from(client.server_info());
+        let changed = before.manifest != manifest
+            || before.manifest_error != manifest_error
+            || before.server.as_ref().map(|s| &s.name) != Some(&server.name);
         self.remember(Known {
             fingerprint: self.fingerprint.clone(),
             tools,
             resources,
-            server: Some(About::from(client.server_info())),
+            server: Some(server),
+            manifest,
+            manifest_error,
         });
+        if changed {
+            self.manifest_changed
+                .send_modify(|n| *n = n.wrapping_add(1));
+        }
         {
             let mut state = self.state.lock().unwrap();
             state.status = Status::Connected;
@@ -552,6 +604,38 @@ impl Server {
             text: item.text.unwrap_or_default(),
             ui,
         })
+    }
+}
+
+/// 读服务器给的 Kotone 清单（`resources/read kotone://manifest`）：`(原文, 用不了的原因)`。
+/// 资源不存在（-32002）、方法不存在、别的错、超时 = 没给（两个都是 None），不算连接出错。
+async fn read_manifest(client: &McpClient) -> (Option<String>, Option<String>) {
+    let read = tokio::time::timeout(
+        MANIFEST_TIMEOUT,
+        client.read_resource(manifest::MANIFEST_URI),
+    )
+    .await;
+    let Ok(Ok(contents)) = read else {
+        return (None, None);
+    };
+    let item = contents
+        .iter()
+        .find(|c| c.uri == manifest::MANIFEST_URI && c.text.is_some())
+        .or_else(|| contents.iter().find(|c| c.text.is_some()));
+    match item.and_then(|c| c.text.as_ref()) {
+        Some(text) if text.len() > manifest::MAX_BYTES => (
+            None,
+            Some(format!(
+                "服务器给的清单太大了（{} KiB，最多 64 KiB），当没给",
+                text.len().div_ceil(1024)
+            )),
+        ),
+        Some(text) => (Some(text.clone()), None),
+        None if contents.is_empty() => (None, None),
+        None => (
+            None,
+            Some("服务器给的清单不是文字（要是 application/json 的文字内容），当没给".into()),
+        ),
     }
 }
 

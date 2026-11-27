@@ -1,0 +1,23 @@
+{
+  "match": { "name": "kotone-test-server" },
+  "manifest": {
+    "standard": "0.1",
+    "games": ["generic"],
+    "events": [
+      {
+        "name": "note_added",
+        "label": "测试服务器多了一条记录",
+        "data": { "id": "记录的 id", "text": "记录的内容" }
+      }
+    ],
+    "watches": [
+      {
+        "event": "note_added",
+        "tool": "notes",
+        "everySeconds": 30,
+        "compare": "new",
+        "list": "notes"
+      }
+    ]
+  }
+}

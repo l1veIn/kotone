@@ -13,6 +13,10 @@
 //!   另列成“有问题的配置”（[`status`]），插件页上说清原因。`mcp.json` 读不出来时也在那里说一句。
 //! - 配置变了（指纹不同）或删掉了：“总是允许”的规则（`agent.permissions.rules` 里 `<id>.*`）跟着清掉，
 //!   和信任一样不留给换上来的那份配置（[`forget_rules`]）。
+//! - **Kotone 清单**（插件标准 0.1，`kotone_remote_plugin::manifest`）：插件卡片要的 [`describe`] 带上生效的清单、
+//!   从哪来、不认识的字段和问题；`games` 进插件的 `Manifest`（游戏页靠它）。清单是连上以后才到的：服务器给的
+//!   清单变了（[`watch_manifest`]）或者玩家点“重新读 mcp.json”时，`games` 对不上的插件换一个（同一个连接，
+//!   `RemotePlugin::refreshed`）。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -315,6 +319,13 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
                 }
         });
         match same {
+            // 清单里的 games 变了：换一个插件（同一个连接，不断开）
+            Some(plugin) if plugin.games_stale() => {
+                kotone_core::log::log(&format!(
+                    "第三方插件 {id} 的清单变了，重新登记它挂在哪个游戏上"
+                ));
+                next.push(Arc::new(plugin.refreshed()));
+            }
             Some(plugin) => next.push(plugin.clone()),
             None => {
                 let plugin = Arc::new(RemotePlugin::new(&id, spec, Some(data_dir(&id)), &version));
@@ -323,9 +334,10 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
             }
         }
     }
+    // 换过的插件和原来的用同一个连接：按连接看谁真的不要了
     let gone: Vec<Arc<RemotePlugin>> = old
         .into_iter()
-        .filter(|p| !next.iter().any(|n| Arc::ptr_eq(n, p)))
+        .filter(|p| !next.iter().any(|n| Arc::ptr_eq(n.server(), p.server())))
         .collect();
     *table().write().unwrap() = next;
     for plugin in gone {
@@ -348,9 +360,69 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
     for plugin in started {
         let id = plugin.manifest().id.clone();
         kotone_core::log::log(&format!("第三方插件 {id} 登记了"));
+        watch_manifest(app, &plugin);
         plugin.start(host(app, &id));
     }
     Ok(())
+}
+
+/// 服务器给的清单变了（连上以后才知道）：`games` 和插件表里那个对不上就重新读一遍（[`reload`] 换掉它）。
+/// 连接（`Server`）没了这个任务就结束。
+fn watch_manifest(app: &AppHandle, plugin: &Arc<RemotePlugin>) {
+    let mut changes = plugin.server().manifest_changes();
+    let server = Arc::downgrade(plugin.server());
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while changes.changed().await.is_ok() {
+            let Some(server) = server.upgrade() else {
+                break;
+            };
+            let Some(current) = plugins()
+                .into_iter()
+                .find(|p| Arc::ptr_eq(p.server(), &server))
+            else {
+                break;
+            };
+            if current.games_stale() {
+                if let Err(error) = reload(&app) {
+                    kotone_core::log::log(&format!(
+                        "第三方插件 {} 的清单变了，但 mcp.json 读不出来：{error}",
+                        current.manifest().id
+                    ));
+                }
+            }
+        }
+    });
+}
+
+/// 给插件页的 Kotone 清单：生效的清单（`standard`、`games`、`events`、`watches`、`risk`）、从哪来、本地文件加了没有、
+/// 标准比这一版新、不认识的字段、问题，再加上这台电脑上没有的游戏（`unknownGames`，插件页提示）和本地文件在哪。
+fn describe_manifest(plugin: &RemotePlugin) -> Value {
+    let games: Vec<String> = kotone_core::profile::list()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    let local = data_dir(&plugin.manifest().id).join(kotone_remote_plugin::manifest::LOCAL_FILE);
+    manifest_view(&plugin.kotone_manifest(), &games, &local)
+}
+
+/// [`describe_manifest`] 的样子（`games`：这台电脑上有的游戏 id）。
+fn manifest_view(
+    effective: &kotone_remote_plugin::manifest::Effective,
+    games: &[String],
+    local: &std::path::Path,
+) -> Value {
+    let unknown_games: Vec<&String> = effective
+        .manifest
+        .games
+        .iter()
+        .filter(|game| !games.contains(game))
+        .collect();
+    let mut out = serde_json::to_value(effective).unwrap_or_else(|_| json!({}));
+    out["unknownGames"] = json!(unknown_games);
+    out["hostStandard"] = json!(kotone_remote_plugin::manifest::HOST_STANDARD);
+    out["localPath"] = json!(local.display().to_string());
+    out
 }
 
 /// 权限里这个第三方插件的工具的规则（`<id>.<工具>`，“总是允许这个工具”记在这里）、绑热键时的确认（ADR 040 D9）和
@@ -444,7 +516,7 @@ pub fn offers(
 }
 
 /// 插件卡片要的（`plugins_list` 每项的 `remote`）：怎么连、要哪些 Key（填了没有）、信任没有、连接状态、
-/// 服务器说的自己（剥掉看不见的字符）、它的 MCP App 页面。
+/// 服务器说的自己（剥掉看不见的字符）、它的 MCP App 页面、Kotone 清单（`kotoneManifest`，[`describe_manifest`]）。
 pub fn describe(plugin: &RemotePlugin) -> Value {
     let id = &plugin.manifest().id;
     let server = plugin.server();
@@ -465,6 +537,7 @@ pub fn describe(plugin: &RemotePlugin) -> Value {
         }
     }
     out["fingerprint"] = json!(server.fingerprint());
+    out["kotoneManifest"] = describe_manifest(plugin);
     // 一页工具列表（没有 MCP App 的第三方插件，点卡片看到的就是它）：服务器说的名字、说明（剥过字、限长）、
     // 标没标只读、给谁
     let known = server.known();
@@ -606,6 +679,57 @@ mod tests {
             offers_off[0].tools.iter().all(|t| t.instant),
             "关掉的不算数"
         );
+    }
+
+    /// 插件卡片带上 Kotone 清单：生效的字段（camelCase，和标准一样）、从哪来、不认识的字段、这台电脑上没有的游戏。
+    #[test]
+    fn describe_carries_the_kotone_manifest() {
+        use kotone_remote_plugin::manifest::{self, Source};
+        let server = manifest::parse_text(
+            &json!({"standard": "0.2", "games": ["lol", "zzz"], "colour": 1, "risk": "会改游戏文件",
+                    "events": [{"name": "done", "label": "跑完了", "data": {"status": "状态"}}],
+                    "watches": [{"event": "done", "tool": "status", "everySeconds": 5,
+                                 "compare": "changed", "field": "status", "to": "finished"}]})
+            .to_string(),
+        );
+        let effective = manifest::merge(Some(server), None, None);
+        let view = manifest_view(
+            &effective,
+            &["lol".to_string(), "cs2".to_string()],
+            std::path::Path::new("C:/k/plugins/x/manifest.json"),
+        );
+        assert_eq!(view["source"], "server");
+        assert_eq!(effective.source, Source::Server);
+        assert_eq!(view["newerStandard"], true);
+        assert_eq!(view["hostStandard"], "0.1");
+        assert_eq!(view["manifest"]["standard"], "0.2");
+        assert_eq!(view["manifest"]["risk"], "会改游戏文件");
+        assert_eq!(view["manifest"]["events"][0]["data"]["status"], "状态");
+        assert_eq!(
+            view["manifest"]["watches"][0],
+            json!({"event": "done", "tool": "status", "arguments": {}, "everySeconds": 5,
+                   "compare": "changed", "field": "status", "to": ["finished"]})
+        );
+        assert_eq!(
+            view["unknown"],
+            json!([{"from": "server", "text": "colour"}])
+        );
+        assert_eq!(view["unknownGames"], json!(["zzz"]));
+        assert_eq!(view["local"], false);
+        // 没有清单的第三方插件：来源是 none，什么提示都没有
+        let none = manifest_view(
+            &manifest::merge(None, None, None),
+            &[],
+            std::path::Path::new("x"),
+        );
+        assert_eq!(none["source"], "none");
+        assert_eq!(none["unknown"], json!([]));
+        assert_eq!(none["problems"], json!([]));
+        assert!(none["manifest"].get("risk").is_none());
+        // 卡片本身也带上它
+        let plugin = test_plugin("described", 1);
+        assert_eq!(describe(&plugin)["kotoneManifest"]["source"], "none");
+        assert!(plugin.manifest().games.is_empty());
     }
 
     #[test]

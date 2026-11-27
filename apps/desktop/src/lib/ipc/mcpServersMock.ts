@@ -4,10 +4,11 @@
  * 重新连接 / 填 Key。加进来的服务器“连上”以后有两个工具（`<id>.echo` 标了只读、`<id>.add` 没标）。
  * 测试可以在页面加载前放 `window.__kotoneMcpSeed`（服务器列表）当作手改 `mcp.json` 加的（没信任），
  * 放 `window.__kotoneMcpFileSeed`（`{fileError?, problems?}`）当作 `mcp.json` 读不出来、有没加进来的项。
+ * 服务器可以带 `kotoneManifest`（它的 Kotone 清单、不认识的字段、问题，照后端 `describe_manifest`）。
  * 不连任何真的服务器。
  */
 import type { PluginInfo } from "../plugins";
-import type { McpCandidate, McpFileStatus, McpImportSource, McpProblem, RemoteInfo, TrustFacts } from "../mcpServers";
+import type { KotoneManifestInfo, McpCandidate, McpFileStatus, McpImportSource, McpProblem, RemoteInfo, TrustFacts } from "../mcpServers";
 import { getSettings } from "./browserMock";
 
 interface MockServer {
@@ -22,6 +23,19 @@ interface MockServer {
   app?: boolean;
   title?: string;
   icon?: string;
+  /** 它的 Kotone 清单（插件标准 0.1；没写 = 没有清单）。`manifest` 里没写的字段用默认值。 */
+  kotoneManifest?: Partial<Omit<KotoneManifestInfo, "manifest">> & { manifest?: Partial<KotoneManifestInfo["manifest"]> };
+}
+
+/** 照后端 `remote_plugins::describe_manifest`：没写的用默认值（没有清单）。 */
+function kotoneManifest(s: MockServer): KotoneManifestInfo {
+  const seed = s.kotoneManifest ?? {};
+  return {
+    source: "none", local: false, newerStandard: false, unknown: [], problems: [], unknownGames: [], hostStandard: "0.1",
+    localPath: `C:\\Users\\me\\.kotone\\plugins\\${s.id}\\manifest.json`,
+    ...seed,
+    manifest: { standard: "0.1", games: [], events: [], watches: [], risk: null, ...seed.manifest },
+  };
 }
 
 let servers: MockServer[] | null = null;
@@ -243,11 +257,12 @@ export async function remotePlugins(): Promise<PluginInfo[]> {
       keys: "error" in f ? [] : f.keys.map((name) => ({ name, filled: name in s.keys })),
       fingerprint: "mock",
       toolList: tools.map((t) => ({ ...t, visibility: [...t.visibility] })),
+      kotoneManifest: kotoneManifest(s),
       ...("error" in f ? { configError: f.error } : { config: f }),
     };
     return {
       manifest: {
-        id: s.id, name: s.id, description: "error" in f ? f.error : f.summary, games: [], adapter: null,
+        id: s.id, name: s.id, description: "error" in f ? f.error : f.summary, games: kotoneManifest(s).manifest.games, adapter: null,
         enabledByDefault: true, sources: [], pages: [], agent: { overview: "", rule: "" },
       },
       enabled,

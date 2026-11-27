@@ -1,12 +1,14 @@
 <script lang="ts">
   // 第三方插件的设置（插件页顶栏的“设置”，和内置插件同一个位置）：连接（运行什么 / 连哪里）、Key（`${input:名字}`
-  // 的值，存进 Windows 的安全存储，不进 mcp.json）、信任（它说只读的工具要不要先问）、风险、删掉。
-  import { ShieldAlert, Trash2 } from "@lucide/svelte";
+  // 的值，存进 Windows 的安全存储，不进 mcp.json）、信任（它说只读的工具要不要先问）、Kotone 清单（插件标准 0.1：从哪来，
+  // 给作者看的小字：不认识的字段、清单的问题、标准比这一版新）、删掉。
+  // 风险不在这里摆（ADR 043：一个插件一个弹窗）：顶栏的“风险和许可”里是“它是别人写的程序”和它清单里的 `risk`。
+  import { Trash2 } from "@lucide/svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import McpTrustFacts from "./McpTrustFacts.svelte";
-  import { reconnectServer, remoteOf, removeServer, setServerKey, trustServer } from "$lib/mcpServers";
+  import { reconnectServer, remoteOf, removeServer, setServerKey, trustServer, type ManifestNote } from "$lib/mcpServers";
   import type { PluginPageProps } from "$lib/pluginUi";
   import { openTarget } from "$lib/stores/navigation";
   import { errText, toast } from "$lib/stores/ui";
@@ -18,6 +20,24 @@
   let values = $state<Record<string, string>>({});
   let busy = $state(false);
   let confirmingRemove = $state(false);
+  const kotone = $derived(remote?.kotoneManifest ?? null);
+  /** 有清单，或者有要给作者看的（给了但读不出来、本地文件坏了）：才有“Kotone 清单”这一节。 */
+  const showManifest = $derived(!!kotone && (kotone.source !== "none" || kotone.unknown.length > 0 || kotone.problems.length > 0));
+
+  const sourceText = (source: string, standard: string) =>
+    ({
+      server: m.system_mcp_manifest_from_server({ standard }),
+      preset: m.system_mcp_manifest_from_preset(),
+      local: m.system_mcp_manifest_from_local(),
+    })[source] ?? m.system_mcp_manifest_none();
+  /** 提示出在哪一层（服务器给的 / Kotone 带的 / 你的 manifest.json）。 */
+  const where = (note: ManifestNote) =>
+    ({
+      server: m.system_mcp_manifest_note_server(),
+      preset: m.system_mcp_manifest_note_preset(),
+      local: m.system_mcp_manifest_note_local(),
+      none: "",
+    })[note.from];
 
   async function run(action: () => Promise<void>) {
     busy = true;
@@ -87,12 +107,40 @@
     {/if}
   </section>
 
-  <section class="space-y-2">
-    <h2 class="m-0 text-sm font-semibold text-foreground">{m.system_mcp_settings_risk()}</h2>
-    <div class="flex gap-2 rounded-xl border border-warning/45 bg-warning/10 p-3 text-xs leading-relaxed text-foreground" data-testid="remote-plugin-risk">
-      <ShieldAlert class="mt-0.5 size-4 shrink-0 text-warning" /><span>{m.system_mcp_risk()}</span>
-    </div>
-  </section>
+  {#if kotone && showManifest}
+    <section class="space-y-1.5" data-testid="remote-plugin-manifest" data-source={kotone.source}>
+      <h2 class="m-0 text-sm font-semibold text-foreground">{m.system_mcp_manifest_title()}</h2>
+      <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="remote-plugin-manifest-source">
+        {sourceText(kotone.source, kotone.manifest.standard)}{#if kotone.local && kotone.source !== "local"}{m.system_mcp_manifest_local_added()}{/if}
+      </p>
+      <!-- 下面是给插件作者看的小字 -->
+      {#if kotone.newerStandard}
+        <p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="remote-plugin-manifest-newer">
+          {m.system_mcp_manifest_newer({ standard: kotone.manifest.standard, host: kotone.hostStandard })}</p>
+      {/if}
+      {#if kotone.unknownGames.length}
+        <p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="remote-plugin-manifest-unknown-games">
+          {m.system_mcp_manifest_unknown_games({ games: kotone.unknownGames.join(m.system_mcp_manifest_separator()) })}</p>
+      {/if}
+      {#if kotone.unknown.length}
+        <p class="m-0 break-all text-[11px] leading-relaxed text-muted-foreground" data-testid="remote-plugin-manifest-unknown">
+          {m.system_mcp_manifest_unknown({ fields: kotone.unknown.map((n) => (n.from === "local" ? m.system_mcp_manifest_field_in({ field: n.text, where: where(n) }) : n.text)).join(m.system_mcp_manifest_separator()) })}</p>
+      {/if}
+      {#if kotone.problems.length}
+        <div class="space-y-0.5" data-testid="remote-plugin-manifest-problems">
+          <p class="m-0 text-[11px] text-muted-foreground">{m.system_mcp_manifest_problems()}</p>
+          <ul class="m-0 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted-foreground">
+            {#each kotone.problems as note, i (i)}
+              <li class="break-all" data-testid="remote-plugin-manifest-problem" data-from={note.from}>{m.system_mcp_manifest_problem({ where: where(note), text: note.text })}</li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+      {#if kotone.source === "local" || kotone.local || kotone.problems.some((n) => n.from === "local")}
+        <p class="m-0 break-all text-[11px] text-muted-foreground" data-testid="remote-plugin-manifest-path">{m.system_mcp_manifest_path({ path: kotone.localPath })}</p>
+      {/if}
+    </section>
+  {/if}
 
   <section>
     <Button size="sm" variant="ghost" class="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={busy}

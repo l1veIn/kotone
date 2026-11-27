@@ -5,12 +5,14 @@
   // 什么时候弹由用它的地方定：插件页（PluginPage）第一次看到这个插件有风险的开关开着时（默认就开着的、刚打开的），
   // 游戏配置页里英雄联盟那一节刚打开“读客户端数据”时；以后从插件「设置」里的“风险和许可”打开。
   // 弹出来就记下看过（`plugins.<id>.riskSeen`），同一版不再自己弹。
+  // 第三方插件（ADR 047：它的清单里可以写 `risk`）用同一个弹窗：风险一节先是“它是别人写的程序”，再是它自己写的风险说明；
+  // 这两段以前在它的设置里单独一节，现在都收进这里（一个插件一个弹窗）。
   import { TriangleAlert } from "@lucide/svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { settingsStore } from "$lib/stores/ui";
   import {
-    markRiskSeen, noticeBody, noticeTitle, pluginName, riskUnseen, sourceEnabled, sourceName, sourceRisk, type PluginInfo,
+    markRiskSeen, noticeBody, noticeTitle, pluginName, riskUnseen, sourceEnabled, sourceName, sourceRisk, thirdPartyRisk, type PluginInfo,
   } from "$lib/plugins";
   import { openExternal } from "$lib/ipc";
   import { m } from "$lib/paraglide/messages.js";
@@ -21,6 +23,9 @@
   const id = $derived(manifest.id);
   const risks = $derived(manifest.sources.filter((s) => s.risk));
   const notices = $derived(manifest.notices ?? []);
+  /** 第三方插件：它是别人写的程序（总有），它自己写的风险说明（清单的 `risk`，可能没有）。 */
+  const thirdParty = $derived(thirdPartyRisk(plugin).thirdParty);
+  const declared = $derived(thirdPartyRisk(plugin).risk);
 
   /** 文字里的网址（`github.com/LeagueAkari/LeagueAkari/issues/523`、`developer.riotgames.com/docs/lol`）：小写域名 + 路径。 */
   const LINK = /((?:https:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}\/[\w.\-/#%?=&]*[\w/])/;
@@ -35,7 +40,7 @@
   // 弹出来就记下看过（保存失败只是下次再弹一次）
   let marking = false;
   $effect(() => {
-    if (!open || marking || !riskUnseen($settingsStore, manifest)) return;
+    if (!open || marking || !riskUnseen($settingsStore, manifest, thirdParty)) return;
     marking = true;
     markRiskSeen(id)
       .catch((error) => console.warn("风险和许可没记上", error))
@@ -55,12 +60,25 @@
       <Dialog.Description>{m.system_plugins_risk_intro()}</Dialog.Description>
     </Dialog.Header>
 
-    {#if risks.length}
+    {#if risks.length || thirdParty}
       <section class="space-y-2" data-testid="plugin-risk-risks">
         <h3 class="m-0 flex items-center gap-1.5 text-xs font-semibold text-foreground">
           <TriangleAlert class="size-3.5 text-warning" />{m.system_plugins_risk_section()}
         </h3>
         <ul class="m-0 list-none space-y-2.5 p-0">
+          {#if thirdParty}
+            <li class="space-y-1" data-testid={`plugin-risk-${id}-third-party`}>
+              <p class="m-0 text-[13px] font-medium text-foreground">{m.system_plugins_risk_third_party()}</p>
+              <p class="m-0 text-xs leading-relaxed text-muted-foreground">{m.system_mcp_risk()}</p>
+            </li>
+            {#if declared}
+              <li class="space-y-1" data-testid={`plugin-risk-${id}-declared`}>
+                <p class="m-0 text-[13px] font-medium text-foreground">{m.system_plugins_risk_declared()}</p>
+                <!-- 别人写的字：原样显示，不把里面的网址变成能点的链接 -->
+                <p class="m-0 whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground">{declared}</p>
+              </li>
+            {/if}
+          {/if}
           {#each risks as source (source.id)}
             {@const on = sourceEnabled($settingsStore, manifest, source.id)}
             <li class="space-y-1" data-testid={`plugin-risk-${id}-${source.id}`} data-on={on}>

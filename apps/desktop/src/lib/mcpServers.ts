@@ -7,6 +7,8 @@
 // - 卡片和插件页：开关照旧是设置 `plugins.<id>.enabled`；点卡片进它的 MCP App（有 `ui://` 页面的）或一页工具列表，
 //   顶栏的“设置”里是连接、Key、信任、删除（[`REMOTE_UI`] 登记进 `PLUGIN_UI`，和内置插件同一个容器）；
 // - 确认卡片：第三方工具多一个“总是允许这个工具”（权限里这个工具一条“允许”）或“信任这个插件”（它说只读的工具不再问）；
+// - Kotone 清单（插件标准 0.1，`docs/plugin-standard.md`）：`remote.kotoneManifest` 是生效的清单、从哪来、不认识的字段和
+//   问题；`risk` 和第三方插件本身的风险一起进它的“风险和许可”弹窗（ADR 043，一个插件一个弹窗），给作者看的提示在设置里；
 // - `mcp.json` 的情况（`mcp_servers_status`）：读不出来的原因、没加进来的项（名字和 Kotone 自带的撞了、不能当 id），
 //   插件页的第三方一组里说一句人话。插件清单本身还是一个数组，这些另外读。
 // 浏览器预览（dev:web、Playwright）用 ipc/mcpServersMock。
@@ -57,6 +59,39 @@ export interface RemoteTool {
   page?: string | null;
 }
 
+/** Kotone 清单从哪来：服务器自己给的、Kotone 带的预设、只有你本地的 manifest.json、没有。 */
+export type ManifestSource = "server" | "preset" | "local" | "none";
+
+/** 一条给作者看的提示和它出在哪一层（后端 `manifest::Note`）。 */
+export interface ManifestNote {
+  from: ManifestSource;
+  text: string;
+}
+
+/** 第三方插件的 Kotone 清单（后端 `remote_plugins::describe_manifest`，字段照标准 0.1）。 */
+export interface KotoneManifestInfo {
+  source: ManifestSource;
+  manifest: {
+    standard: string;
+    games: string[];
+    events: { name: string; label: string; data: Record<string, string> }[];
+    /** 观察项（第 2 期才运行）。 */
+    watches: Record<string, unknown>[];
+    risk?: string | null;
+  };
+  /** 你本地的 manifest.json 加了东西进来。 */
+  local: boolean;
+  /** 清单写的标准比这一版 Kotone 新。 */
+  newerStandard: boolean;
+  unknown: ManifestNote[];
+  problems: ManifestNote[];
+  /** 这台电脑上没有的游戏 id。 */
+  unknownGames: string[];
+  hostStandard: string;
+  /** 本地 manifest.json 在哪。 */
+  localPath: string;
+}
+
 /** `plugins_list` 每项的 `remote`（后端 `remote_plugins::describe`）。 */
 export interface RemoteInfo {
   status: "notConnected" | "connecting" | "connected" | "failed";
@@ -71,6 +106,7 @@ export interface RemoteInfo {
   keys: { name: string; filled: boolean }[];
   fingerprint: string;
   toolList?: RemoteTool[];
+  kotoneManifest?: KotoneManifestInfo;
 }
 
 export type RemotePluginInfo = PluginInfo & { remote: RemoteInfo };

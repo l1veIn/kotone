@@ -4,6 +4,11 @@
 //! 清单从配置合成：id 是玩家给的短名（`mcp.json` 里的键），名字也是它（服务器自己说的名字是别人写的，
 //! 只在卡片上显示，不进她的系统提示），没有数据开关、默认开。
 //!
+//! 挂在哪个游戏上（`games`）跟着 Kotone 清单（插件标准 0.1，[`crate::manifest`]）。清单是连上以后才到的，
+//! `Plugin::manifest()` 又只能给 `&Manifest`：所以建插件时从磁盘上记着的清单（和预设、本地文件）取 `games`；
+//! 连上以后清单变了，宿主看 [`RemotePlugin::games_stale`]，用 [`RemotePlugin::refreshed`] 换一个新的
+//! （同一个连接，不断开）。
+//!
 //! 第三方插件拿到的宿主能力比内置的窄（ADR 038“不做”：给插件的权力是单向门）：远程插件只用宿主的
 //! 开关、设置（信任记在这里）、凭据库（Key）和后台任务；没有替玩家按键、停下琴音、免问、往聊天里发
 //! 推送（ADR 039 D3、ADR 043）。宿主给它的是一份更窄的 `Host`（桌面端 `remote_plugins.rs` 的 `RemoteHost`），
@@ -59,22 +64,48 @@ pub struct RemotePlugin {
 }
 
 impl RemotePlugin {
-    /// `data_dir`：插件自己的目录（`<KOTONE_HOME>/plugins/<id>`，记工具清单）；`version`：Kotone 的版本。
+    /// `data_dir`：插件自己的目录（`<KOTONE_HOME>/plugins/<id>`，记工具清单、放玩家本地的 `manifest.json`）；
+    /// `version`：Kotone 的版本。
     pub fn new(
         id: &str,
         spec: Result<ServerSpec, String>,
         data_dir: Option<PathBuf>,
         version: &str,
     ) -> Self {
+        let mut manifest = manifest(id, &spec);
+        let server = Arc::new(Server::new(id, spec, data_dir, version));
+        manifest.games = server.kotone_manifest().manifest.games;
         Self {
-            manifest: manifest(id, &spec),
-            server: Arc::new(Server::new(id, spec, data_dir, version)),
+            manifest,
+            server,
             switch: Mutex::new(None),
         }
     }
 
     pub fn server(&self) -> &Arc<Server> {
         &self.server
+    }
+
+    /// 生效的 Kotone 清单（见 [`Server::kotone_manifest`]）。
+    pub fn kotone_manifest(&self) -> crate::manifest::Effective {
+        self.server.kotone_manifest()
+    }
+
+    /// 清单里的 `games` 和建插件时的不一样了（连上以后服务器给了 / 改了清单，玩家改了本地文件）：
+    /// 宿主该用 [`RemotePlugin::refreshed`] 换一个。
+    pub fn games_stale(&self) -> bool {
+        self.server.kotone_manifest().manifest.games != self.manifest.games
+    }
+
+    /// 同一个连接（同一个 [`Server`]，不断开、不重连）、照现在的清单重新合成 `Manifest` 的插件。
+    pub fn refreshed(&self) -> Self {
+        let mut manifest = self.manifest.clone();
+        manifest.games = self.server.kotone_manifest().manifest.games;
+        Self {
+            manifest,
+            server: self.server.clone(),
+            switch: Mutex::new(*self.switch.lock().unwrap()),
+        }
     }
 
     /// 对一下开关和信任：开关从关到开 → 连；启动时开着、还不知道它有哪些工具 → 连（不然琴音不知道它能做什么）；

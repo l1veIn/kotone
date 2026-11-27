@@ -4,7 +4,8 @@
 //! - 工具：`echo {text}`（标了只读，结果带 `structuredContent`，用 `ui://remote-test/page` 显示）、`add`（没标只读）、
 //!   `refresh`（只给页面）、`hidden`（结果里藏着看不见的字符）、`change_tools`（之后多一个 `extra`，
 //!   发 `notifications/tools/list_changed`）、`exit`（进程马上退出：测掉线）、`bad name`（名字不合规矩）；
-//! - 资源：`ui://remote-test/page`（MCP App，`_meta.ui.csp` 声明一个 CDN）；
+//! - 资源：`ui://remote-test/page`（MCP App，`_meta.ui.csp` 声明一个 CDN）；`kotone://manifest`（Kotone 清单，
+//!   插件标准 0.1）**不在** `resources/list` 里，只能 `resources/read`（宿主不该靠列表找它）；
 //! - `serverInfo` 带 title 和图标。
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -131,6 +132,23 @@ impl ServerHandler for Server {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
+        if request.uri == "kotone://manifest" {
+            let manifest = json!({
+                "standard": "0.1",
+                "games": ["lol"],
+                "events": [{"name": "echoed", "label": "回了一句", "data": {"echo": "回的话"}}],
+                "watches": [{"event": "echoed", "tool": "echo", "arguments": {"text": "hi"},
+                             "compare": "changed", "field": "echo"}],
+                "risk": "测试用的风险说明",
+            });
+            let result: ReadResourceResult = serde_json::from_value(json!({"contents": [{
+                "uri": "kotone://manifest",
+                "mimeType": "application/json",
+                "text": manifest.to_string(),
+            }]}))
+            .unwrap();
+            return Ok(result.into());
+        }
         if request.uri != PAGE {
             return Err(ErrorData::resource_not_found(request.uri.clone(), None));
         }

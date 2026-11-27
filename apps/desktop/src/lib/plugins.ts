@@ -211,9 +211,22 @@ export function hasRiskNotes(manifest: PluginManifest): boolean {
   return manifest.sources.some((s) => s.risk) || (manifest.notices?.length ?? 0) > 0;
 }
 
-/** 这一版的“风险和许可”还没看过（插件有这些东西才算）。 */
-export function riskUnseen(settings: Settings | null | undefined, manifest: PluginManifest): boolean {
-  return hasRiskNotes(manifest) && (configOf(settings, manifest.id).riskSeen ?? 0) < RISK_REVISION;
+/**
+ * 这一版的“风险和许可”还没看过（插件有这些东西才算）。`extra`：清单以外还有要放进弹窗的（第三方插件：它是别人写的
+ * 程序，还有它自己写的风险说明）。
+ */
+export function riskUnseen(settings: Settings | null | undefined, manifest: PluginManifest, extra = false): boolean {
+  return (hasRiskNotes(manifest) || extra) && (configOf(settings, manifest.id).riskSeen ?? 0) < RISK_REVISION;
+}
+
+/**
+ * 第三方插件（`plugins_list` 里带 `remote` 的，见 mcpServers.ts）在“风险和许可”里要放的：它是第三方插件（总有），
+ * 它自己在 Kotone 清单里写的风险说明（`risk`，ADR 047；没写是 null）。放在这里而不是 mcpServers.ts：弹窗
+ * （PluginRiskDialog）也被内置插件的页面用，从这里拿不会绕成循环引用。
+ */
+export function thirdPartyRisk(plugin: PluginInfo | null | undefined): { thirdParty: boolean; risk: string | null } {
+  const remote = (plugin as { remote?: { kotoneManifest?: { manifest?: { risk?: string | null } } } } | null | undefined)?.remote;
+  return { thirdParty: !!remote, risk: remote?.kotoneManifest?.manifest?.risk?.trim() || null };
 }
 
 /** 有风险的数据开关里现在有开着的（插件也开着）：第一次打开插件页、第一次打开这样的开关时弹“风险和许可”。 */

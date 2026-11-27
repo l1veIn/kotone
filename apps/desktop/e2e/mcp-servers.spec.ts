@@ -116,7 +116,16 @@ test("a third-party plugin opens to its status and tool list; settings fill the 
   await app.getByTestId("remote-plugin-open-settings").click();
   const settings = page.getByTestId("remote-plugin-settings");
   await expect(settings.getByTestId("remote-plugin-facts-url")).toHaveText("https://weather.example.com/mcp");
-  await expect(settings.getByTestId("remote-plugin-risk")).toContainText("别人写的程序");
+  // 风险不在设置里摆（ADR 043：一个插件一个弹窗）：顶栏的“风险和许可”
+  await expect(settings.getByTestId("remote-plugin-risk")).toHaveCount(0);
+  await page.getByTestId("plugin-risk-link").click();
+  const risk = page.getByTestId("plugin-risk-dialog-weather");
+  await expect(risk.getByTestId("plugin-risk-weather-third-party")).toContainText("别人写的程序");
+  await expect(risk.getByTestId("plugin-risk-weather-declared")).toHaveCount(0);
+  await risk.getByTestId("plugin-risk-ok").click();
+  await expect(risk).toHaveCount(0);
+  // 没有 Kotone 清单：没有“Kotone 清单”这一节
+  await expect(settings.getByTestId("remote-plugin-manifest")).toHaveCount(0);
   const key = settings.locator('[data-key="token"]');
   await expect(key).toHaveAttribute("data-filled", "false");
   await key.getByTestId("remote-plugin-key-input").fill("k-123");
@@ -143,6 +152,61 @@ test("a third-party plugin opens to its status and tool list; settings fill the 
   await page.getByTestId("remote-plugin-remove-confirm").click();
   await expect(page.getByTestId("plugins-page")).toBeVisible();
   await expect(page.getByTestId("plugins-card-weather")).toHaveCount(0);
+});
+
+// 插件标准 0.1（ADR 047 第 1 期）：第三方插件的 Kotone 清单。它自己写的风险说明进“风险和许可”弹窗（第一次点开时弹一次）；
+// 设置里“Kotone 清单”一节说清从哪来，给作者看的小字：不认识的字段、清单的问题、标准比这一版新、这台电脑上没有的游戏。
+test("a third-party manifest's risk goes into the risk dialog and its unknown fields are listed for the author", async ({ page }, testInfo) => {
+  await openPlugins(page, [{
+    id: "zzz",
+    entry: { type: "http", url: "http://127.0.0.1:23001/mcp" },
+    status: "connected",
+    trusted: true,
+    kotoneManifest: {
+      source: "server",
+      local: true,
+      newerStandard: true,
+      unknownGames: ["zzz"],
+      unknown: [{ from: "server", text: "colour" }, { from: "server", text: "watches[0].retry" }, { from: "local", text: "oops" }],
+      problems: [{ from: "server", text: "events[1]：name 要是 snake_case（小写字母开头，小写字母、数字、下划线），丢掉" }],
+      manifest: {
+        standard: "0.2",
+        games: ["zzz"],
+        events: [{ name: "run_finished", label: "一条龙跑完了", data: {} }],
+        risk: "一条龙会替你操作游戏窗口，跑的时候别动鼠标。 https://example.com/zzz-od",
+      },
+    },
+  }]);
+  await page.getByTestId("plugins-card-zzz-open").click();
+  // 写了风险说明：第一次点开时弹一次，第三方插件那一段在前，它写的那段原样显示（里面的网址不变成链接）
+  const risk = page.getByTestId("plugin-risk-dialog-zzz");
+  await expect(risk).toBeVisible();
+  await expect(risk.getByTestId("plugin-risk-zzz-third-party")).toContainText("别人写的程序");
+  await expect(risk.getByTestId("plugin-risk-zzz-declared")).toContainText("跑的时候别动鼠标");
+  await expect(risk.getByTestId("plugin-risk-zzz-declared").getByRole("button")).toHaveCount(0);
+  await screenshot(page, { path: testInfo.outputPath("mcp-manifest-risk.png"), animations: "disabled" });
+  await risk.getByTestId("plugin-risk-ok").click();
+  await expect(risk).toHaveCount(0);
+
+  await page.getByTestId("plugin-settings-button").click();
+  const section = page.getByTestId("remote-plugin-manifest");
+  await expect(section).toHaveAttribute("data-source", "server");
+  await expect(section.getByTestId("remote-plugin-manifest-source")).toContainText("它自己给了一份 Kotone 清单（照插件标准 0.2 写的）");
+  await expect(section.getByTestId("remote-plugin-manifest-source")).toContainText("本地 manifest.json");
+  await expect(section.getByTestId("remote-plugin-manifest-newer")).toContainText("这一版 Kotone 照 0.1 读");
+  await expect(section.getByTestId("remote-plugin-manifest-unknown-games")).toContainText("zzz");
+  await expect(section.getByTestId("remote-plugin-manifest-unknown")).toHaveText(
+    "这份清单里 Kotone 不认识的字段：colour、watches[0].retry、oops（你的 manifest.json）（插件按更新的标准写的，或者拼错了），先不用。");
+  await expect(section.getByTestId("remote-plugin-manifest-problem")).toHaveCount(1);
+  await expect(section.getByTestId("remote-plugin-manifest-problem")).toContainText("服务器给的：events[1]");
+  await expect(section.getByTestId("remote-plugin-manifest-path")).toContainText("plugins\\zzz\\manifest.json");
+  await screenshot(page, { path: testInfo.outputPath("mcp-manifest-notes.png"), animations: "disabled" });
+
+  // 看过一次：再点开不再自己弹
+  await page.getByTestId("plugin-page-back").click();
+  await page.getByTestId("plugins-card-zzz-open").click();
+  await expect(page.getByTestId("remote-plugin-page")).toBeVisible();
+  await expect(page.getByTestId("plugin-risk-dialog-zzz")).toHaveCount(0);
 });
 
 // 审查后改的（2026-11-25）：mcp.json 里和内置插件撞名（手抄来的 `lol`）、不能当 id 的项不进插件表，在第三方一组里说原因，

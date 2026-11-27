@@ -12,6 +12,9 @@
 //! - **它的 MCP App**：`ui://` 不限于 `ui://kotone/`，按“哪个服务器给的”记归属（[`Server::owns_uri`]），
 //!   页面从服务器的 `resources/read` 取，CSP 用服务器声明的（[`Server::read_app`]）。
 //!
+//! - **Kotone 清单**（[`manifest`]，插件标准 0.1，ADR 047）：服务器的 `kotone://manifest` → Kotone 带的预设 →
+//!   玩家本地的 `manifest.json`；插件挂在哪个游戏上（`Manifest::games`）跟着它。
+//!
 //! 宿主那一半（插件表、给第三方的那份更窄的宿主能力、她的工具清单的数量上限、不进工具服务、
 //! 界面用的命令）在桌面端 `remote_plugins.rs`。
 //!
@@ -21,6 +24,7 @@
 
 mod config;
 pub mod import;
+pub mod manifest;
 mod plugin;
 pub mod sanitize;
 mod server;
