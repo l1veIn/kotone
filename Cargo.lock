@@ -2684,6 +2684,7 @@ dependencies = [
  "kotone-plugin-music",
  "kotone-plugin-voice-input",
  "kotone-postprocess",
+ "kotone-remote-plugin",
  "kotone-stt",
  "kotone-tools",
  "png 0.17.16",

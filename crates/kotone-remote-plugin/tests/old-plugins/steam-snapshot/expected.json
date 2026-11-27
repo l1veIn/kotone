@@ -1,0 +1,26 @@
+{
+  "plugin": "steam",
+  "unknown": [],
+  "problems": [],
+  "events": [
+    {
+      "type": "steam.recently_played",
+      "data": {
+        "from": 1799990000,
+        "to": 1800000100,
+        "appid": 1145360,
+        "name": "Hades"
+      }
+    },
+    {
+      "type": "steam.achievement_unlocked",
+      "data": {
+        "appid": 620,
+        "game": "Portal 2",
+        "name": "你这个怪物",
+        "description": "Reunite with GLaDOS",
+        "unlockedAt": 1800000050
+      }
+    }
+  ]
+}

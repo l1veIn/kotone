@@ -26,6 +26,8 @@ kotone-ocr.workspace = true
 kotone-plugin-music.workspace = true
 # listen 子命令：听写听到以后（文字处理、打字、识别记录）在语音输入插件里
 kotone-plugin-voice-input.workspace = true
+# plugin check 子命令：插件作者发布前的检查（和宿主读第三方插件用同一份代码，ADR 047 D4 第 7 条）
+kotone-remote-plugin.workspace = true
 base64 = "0.22"
 serde.workspace = true
 clap = { version = "4", features = ["derive"] }

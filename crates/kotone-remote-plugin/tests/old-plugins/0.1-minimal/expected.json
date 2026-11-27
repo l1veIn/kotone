@@ -1,0 +1,15 @@
+{
+  "plugin": "farm",
+  "unknown": [],
+  "problems": [],
+  "events": [
+    {
+      "type": "farm.farm_finished",
+      "data": {
+        "from": "running",
+        "to": "finished",
+        "message": "今天的体力用完了"
+      }
+    }
+  ]
+}

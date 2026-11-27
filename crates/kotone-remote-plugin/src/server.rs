@@ -271,25 +271,10 @@ impl Server {
             .collect()
     }
 
-    /// 它的 MCP App 页面：`(ui:// 地址, 标题)`，来自 `resources/list` 里的 `ui://` 资源和工具的 `_meta.ui.resourceUri`。
+    /// 它的 MCP App 页面：`(ui:// 地址, 标题)`（[`app_pages`]）。
     pub fn app_pages(&self) -> Vec<(String, String)> {
         let known = self.known();
-        let mut pages: Vec<(String, String)> = Vec::new();
-        for resource in &known.resources {
-            if resource.uri.starts_with("ui://") && !pages.iter().any(|(u, _)| *u == resource.uri) {
-                let title = resource.title.as_deref().unwrap_or(&resource.name);
-                pages.push((resource.uri.clone(), short_text(title, 40)));
-            }
-        }
-        for tool in &known.tools {
-            if let Some(uri) = tools::ui_meta(tool).1 {
-                if !pages.iter().any(|(u, _)| *u == uri) {
-                    let title = tool.title.as_deref().unwrap_or(&tool.name);
-                    pages.push((uri, short_text(title, 40)));
-                }
-            }
-        }
-        pages
+        app_pages(&known.resources, &known.tools)
     }
 
     /// 这个 `ui://` 地址是不是这个服务器给的（归属按“哪个服务器给的”记，不按地址的写法）。
@@ -628,9 +613,31 @@ impl Server {
     }
 }
 
+/// 一个服务器的 MCP App 页面：`(ui:// 地址, 标题)`，来自 `resources/list` 里的 `ui://` 资源和工具的 `_meta.ui.resourceUri`
+/// （检查命令 [`crate::check`] 也照这个找页面）。
+pub fn app_pages(resources: &[kotone_mcp::Resource], tools: &[Tool]) -> Vec<(String, String)> {
+    let mut pages: Vec<(String, String)> = Vec::new();
+    for resource in resources {
+        if resource.uri.starts_with("ui://") && !pages.iter().any(|(u, _)| *u == resource.uri) {
+            let title = resource.title.as_deref().unwrap_or(&resource.name);
+            pages.push((resource.uri.clone(), short_text(title, 40)));
+        }
+    }
+    for tool in tools {
+        if let Some(uri) = tools::ui_meta(tool).1 {
+            if !pages.iter().any(|(u, _)| *u == uri) {
+                let title = tool.title.as_deref().unwrap_or(&tool.name);
+                pages.push((uri, short_text(title, 40)));
+            }
+        }
+    }
+    pages
+}
+
 /// 读服务器给的 Kotone 清单（`resources/read kotone://manifest`）：`(原文, 用不了的原因)`。
 /// 资源不存在（-32002）、方法不存在、别的错、超时 = 没给（两个都是 None），不算连接出错。
-async fn read_manifest(client: &McpClient) -> (Option<String>, Option<String>) {
+/// 检查命令（[`crate::check`]）用的也是这一个。
+pub async fn read_manifest(client: &McpClient) -> (Option<String>, Option<String>) {
     let read = tokio::time::timeout(
         MANIFEST_TIMEOUT,
         client.read_resource(manifest::MANIFEST_URI),

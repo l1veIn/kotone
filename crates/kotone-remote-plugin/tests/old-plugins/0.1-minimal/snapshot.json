@@ -1,0 +1,70 @@
+{
+  "about": "按插件标准 0.1 写的最小插件（手写，照 docs/plugin-standard.md 第六节“一个最小例子”）：一个只读工具、一个没标只读的工具、一个事件、一个观察项。",
+  "serverInfo": {
+    "name": "my-farm",
+    "version": "1.0.0"
+  },
+  "tools": [
+    {
+      "name": "farm_status",
+      "description": "现在刷到哪了",
+      "inputSchema": {
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "start_farm",
+      "description": "开始自动刷本",
+      "inputSchema": {
+        "type": "object"
+      }
+    }
+  ],
+  "resources": [],
+  "reads": {
+    "kotone://manifest": [
+      {
+        "uri": "kotone://manifest",
+        "mimeType": "application/json",
+        "text": "{\n  \"standard\": \"0.1\",\n  \"games\": [\n    \"genshin\"\n  ],\n  \"events\": [\n    {\n      \"name\": \"farm_finished\",\n      \"label\": \"自动刷本跑完了\",\n      \"data\": {\n        \"message\": \"它说的原话\"\n      }\n    }\n  ],\n  \"watches\": [\n    {\n      \"event\": \"farm_finished\",\n      \"tool\": \"farm_status\",\n      \"everySeconds\": 30,\n      \"compare\": \"changed\",\n      \"field\": \"status\",\n      \"to\": \"finished\"\n    }\n  ],\n  \"risk\": \"它会替你操作游戏窗口：跑的时候别动鼠标键盘。\"\n}"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "tool": "farm_status",
+      "arguments": {},
+      "results": [
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "还在跑"
+            }
+          ],
+          "structuredContent": {
+            "status": "running",
+            "message": "还在刷第 3 次"
+          },
+          "isError": false
+        },
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "跑完了"
+            }
+          ],
+          "structuredContent": {
+            "status": "finished",
+            "message": "今天的体力用完了"
+          },
+          "isError": false
+        }
+      ]
+    }
+  ]
+}

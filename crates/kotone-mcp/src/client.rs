@@ -3,7 +3,8 @@
 //! 握手用 `initialize`（协议 2025-11-25；服务器只会旧版本的，回它自己的版本，照样能用）。Goose 用 rmcp 的
 //! `Auto`（先发 2026-07-28 的 `server/discover`，不认再退回 `initialize`）；这里先不用：现在几乎所有服务器都还是旧版，
 //! 而不认识 `server/discover` 又不回话的 stdio 服务器要等 10 秒才退回，正好撞上启动超时。等服务器普遍到 2026-07-28 再换
-//! （双向门：只改 [`McpClient::connect`] 里的一行）。
+//! （双向门：只改 [`McpClient::connect`] 里的一行）。插件作者的检查命令（`kotone-cli plugin check`）另用
+//! [`Handshake::Discover`] 试一次 2026-07-28（不退回），宿主不用它。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,12 +13,12 @@ use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, ProtocolVersion,
     ReadResourceRequestParams,
 };
-use rmcp::service::{NotificationContext, RunningService};
+use rmcp::service::{ClientLifecycleMode, ClientServiceExt, NotificationContext, RunningService};
 use rmcp::{ClientHandler, Peer, RoleClient, ServiceExt};
 use serde_json::Value;
 use tokio::sync::{watch, Mutex};
 
-use crate::config::{ServerConfig, Transport};
+use crate::config::{Handshake, ServerConfig, Transport};
 use crate::error::{McpError, Stage};
 use crate::stdio::{self, ServerProcess};
 use crate::types::{convert, Resource, ResourceContents, ServerInfo, Tool, ToolCallResult};
@@ -77,15 +78,17 @@ impl McpClient {
             } => {
                 let spawned = stdio::spawn(command, args, env, cwd.as_deref())?;
                 let mut process = spawned.process;
-                let started =
-                    tokio::time::timeout(startup, handler.serve((spawned.stdout, spawned.stdin)))
-                        .await;
+                let started = tokio::time::timeout(
+                    startup,
+                    start(handler, (spawned.stdout, spawned.stdin), config.handshake),
+                )
+                .await;
                 let failure = match started {
                     Ok(Ok(running)) => {
                         let process_id = process.id();
                         return Ok(Self::new(running, Some(process), process_id, config, rx));
                     }
-                    Ok(Err(error)) => McpError::from(error),
+                    Ok(Err(error)) => error,
                     Err(_) => timed_out,
                 };
                 let note = process.failure_note().await;
@@ -95,9 +98,11 @@ impl McpClient {
             Transport::Http { url, headers } => {
                 let transport =
                     crate::http_transport::transport(url, headers, &config.client_name)?;
-                match tokio::time::timeout(startup, handler.serve(transport)).await {
+                match tokio::time::timeout(startup, start(handler, transport, config.handshake))
+                    .await
+                {
                     Ok(Ok(running)) => Ok(Self::new(running, None, None, config, rx)),
-                    Ok(Err(error)) => Err(McpError::from(error)),
+                    Ok(Err(error)) => Err(error),
                     Err(_) => Err(timed_out),
                 }
             }
@@ -229,6 +234,32 @@ impl McpClient {
             process.shutdown().await;
         }
     }
+}
+
+/// 开始会话：`initialize` 照旧走 rmcp 的 `serve`（宿主一直是这条路）；2026-07-28 用 `server/discover`，不退回。
+async fn start<T, E, A>(
+    handler: Handler,
+    transport: T,
+    handshake: Handshake,
+) -> Result<RunningService<RoleClient, Handler>, McpError>
+where
+    T: rmcp::transport::IntoTransport<RoleClient, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let started = match handshake {
+        Handshake::Initialize => handler.serve(transport).await,
+        Handshake::Discover => {
+            handler
+                .serve_with_lifecycle(
+                    transport,
+                    ClientLifecycleMode::Discover {
+                        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                    },
+                )
+                .await
+        }
+    };
+    started.map_err(McpError::from)
 }
 
 /// 把启动失败时子进程的说明接在错误后面。

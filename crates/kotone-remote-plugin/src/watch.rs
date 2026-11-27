@@ -359,7 +359,7 @@ pub fn camel(key: &str) -> String {
 }
 
 /// 结果里的这个键对上事件 `data` 里登记的哪个字段（一样，或者 camelCase 以后一样）。
-fn registered(fields: &BTreeMap<String, String>, key: &str) -> Option<String> {
+pub(crate) fn registered(fields: &BTreeMap<String, String>, key: &str) -> Option<String> {
     if fields.contains_key(key) {
         return Some(key.to_string());
     }

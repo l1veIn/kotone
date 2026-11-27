@@ -1,0 +1,334 @@
+{
+  "about": "真实插件的快照：github.com/l1veIn/kotone-plugin-steam 提交 fe30159dafb5c85fd86518b3f45b739f4fc75da9（0.1.0）的 exe，STEAM_DIR 指向它 tests/common 合成的假 Steam 目录（STEAM_LANGUAGE=schinese），2026-11-28 录。calls 的第二份结果是改了假数据以后录的：Hades 的 LastPlayed 改成 1800000100、Portal 2 多解锁 ACH_YOU_MONSTER（1800000050）。只有假数据。",
+  "calls": [
+    {
+      "arguments": {
+        "limit": 1
+      },
+      "results": [
+        {
+          "content": [
+            {
+              "text": "最近玩的 Steam 游戏：\n1. Hades（1145360）· 刚刚 · 近两周 10 小时 · 总共 50 小时",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "appid": 1145360,
+            "games": [
+              {
+                "appid": 1145360,
+                "installed": true,
+                "lastPlayed": 1799990000,
+                "name": "Hades",
+                "playtime2WeeksMinutes": 600,
+                "playtimeMinutes": 3000
+              }
+            ],
+            "lastPlayed": 1799990000,
+            "name": "Hades"
+          }
+        },
+        {
+          "content": [
+            {
+              "text": "最近玩的 Steam 游戏：\n1. Hades（1145360）· 刚刚 · 近两周 10 小时 · 总共 50 小时",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "appid": 1145360,
+            "games": [
+              {
+                "appid": 1145360,
+                "installed": true,
+                "lastPlayed": 1800000100,
+                "name": "Hades",
+                "playtime2WeeksMinutes": 600,
+                "playtimeMinutes": 3000
+              }
+            ],
+            "lastPlayed": 1800000100,
+            "name": "Hades"
+          }
+        }
+      ],
+      "tool": "recent"
+    },
+    {
+      "arguments": {
+        "limit": 20
+      },
+      "results": [
+        {
+          "content": [
+            {
+              "text": "最近解锁的 Steam 成就：\n- Hades · 钓鱼（刚刚）\n- Portal 2 · 醒来（刚刚）\n- Portal 2 · 激光（时间不知道）",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "achievements": [
+              {
+                "apiName": "ACH_FISH",
+                "appid": 1145360,
+                "description": "Catch a fish",
+                "game": "Hades",
+                "id": "1145360:ACH_FISH",
+                "name": "钓鱼",
+                "unlockedAt": 1799995000
+              },
+              {
+                "apiName": "ACH_WAKE_UP",
+                "appid": 620,
+                "description": "Survive the manual override",
+                "game": "Portal 2",
+                "id": "620:ACH_WAKE_UP",
+                "name": "醒来",
+                "unlockedAt": 1799000000
+              },
+              {
+                "apiName": "ACH_LASER",
+                "appid": 620,
+                "description": "Complete the first Thermal Discouragement Beam test",
+                "game": "Portal 2",
+                "id": "620:ACH_LASER",
+                "name": "激光",
+                "unlockedAt": null
+              }
+            ]
+          }
+        },
+        {
+          "content": [
+            {
+              "text": "最近解锁的 Steam 成就：\n- Portal 2 · 你这个怪物（刚刚）\n- Hades · 钓鱼（刚刚）\n- Portal 2 · 醒来（刚刚）\n- Portal 2 · 激光（时间不知道）",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "achievements": [
+              {
+                "apiName": "ACH_YOU_MONSTER",
+                "appid": 620,
+                "description": "Reunite with GLaDOS",
+                "game": "Portal 2",
+                "id": "620:ACH_YOU_MONSTER",
+                "name": "你这个怪物",
+                "unlockedAt": 1800000050
+              },
+              {
+                "apiName": "ACH_FISH",
+                "appid": 1145360,
+                "description": "Catch a fish",
+                "game": "Hades",
+                "id": "1145360:ACH_FISH",
+                "name": "钓鱼",
+                "unlockedAt": 1799995000
+              },
+              {
+                "apiName": "ACH_WAKE_UP",
+                "appid": 620,
+                "description": "Survive the manual override",
+                "game": "Portal 2",
+                "id": "620:ACH_WAKE_UP",
+                "name": "醒来",
+                "unlockedAt": 1799000000
+              },
+              {
+                "apiName": "ACH_LASER",
+                "appid": 620,
+                "description": "Complete the first Thermal Discouragement Beam test",
+                "game": "Portal 2",
+                "id": "620:ACH_LASER",
+                "name": "激光",
+                "unlockedAt": null
+              }
+            ]
+          }
+        }
+      ],
+      "tool": "achievements"
+    }
+  ],
+  "reads": {
+    "kotone://manifest": [
+      {
+        "mimeType": "application/json",
+        "text": "{\n  \"events\": [\n    {\n      \"data\": {\n        \"appid\": \"最近玩的游戏的 appid\",\n        \"from\": \"上一次的最近玩时间（Unix 秒）\",\n        \"name\": \"最近玩的游戏名\",\n        \"to\": \"这一次的最近玩时间（Unix 秒）\"\n      },\n      \"label\": \"玩了一个 Steam 游戏（最近玩的记录变了）\",\n      \"name\": \"recently_played\"\n    },\n    {\n      \"data\": {\n        \"appid\": \"游戏的 appid\",\n        \"description\": \"成就的说明\",\n        \"game\": \"游戏名\",\n        \"name\": \"成就名\",\n        \"unlockedAt\": \"解锁时间（Unix 秒，可能为空）\"\n      },\n      \"label\": \"解锁了一个 Steam 成就\",\n      \"name\": \"achievement_unlocked\"\n    }\n  ],\n  \"games\": [],\n  \"standard\": \"0.1\",\n  \"watches\": [\n    {\n      \"arguments\": {\n        \"limit\": 1\n      },\n      \"compare\": \"changed\",\n      \"event\": \"recently_played\",\n      \"everySeconds\": 120,\n      \"field\": \"lastPlayed\",\n      \"tool\": \"recent\"\n    },\n    {\n      \"arguments\": {\n        \"limit\": 20\n      },\n      \"compare\": \"new\",\n      \"event\": \"achievement_unlocked\",\n      \"everySeconds\": 120,\n      \"id\": \"id\",\n      \"list\": \"achievements\",\n      \"tool\": \"achievements\"\n    }\n  ]\n}",
+        "uri": "kotone://manifest"
+      }
+    ],
+    "ui://steam/library": [
+      {
+        "_meta": {
+          "ui": {
+            "prefersBorder": true
+          }
+        },
+        "mimeType": "text/html;profile=mcp-app",
+        "text": "<!doctype html>\n<html lang=\"zh-CN\" data-display=\"inline\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<title>Steam 库</title>\n<style>\n/* 颜色、字体照宿主给的变量（MCP Apps 的 hostContext.styles.variables），没给就用下面的 */\n:root {\n  --bg: var(--color-background-primary, #ffffff);\n  --bg2: var(--color-background-secondary, #f4f5f7);\n  --bg3: var(--color-background-tertiary, #e9ebef);\n  --text: var(--color-text-primary, #16181d);\n  --muted: var(--color-text-secondary, #5f6672);\n  --faint: var(--color-text-tertiary, #8a909b);\n  --border: var(--color-border-primary, #e2e5ea);\n  --ring: var(--color-ring-primary, #3a6fd8);\n  --ok: var(--color-text-success, #1f8a4c);\n  --danger: var(--color-text-danger, #c0392b);\n  --radius: var(--border-radius-md, 8px);\n  --radius-lg: var(--border-radius-lg, 12px);\n  --font: var(--font-sans, system-ui, \"Segoe UI\", \"Microsoft YaHei UI\", \"PingFang SC\", sans-serif);\n  --sm: var(--font-text-sm-size, 13px);\n  --md: var(--font-text-md-size, 14px);\n  color-scheme: light;\n}\n:root[data-theme=\"dark\"] {\n  --bg: var(--color-background-primary, #16181d);\n  --bg2: var(--color-background-secondary, #1f2228);\n  --bg3: var(--color-background-tertiary, #2a2e36);\n  --text: var(--color-text-primary, #eceef2);\n  --muted: var(--color-text-secondary, #a4abb6);\n  --faint: var(--color-text-tertiary, #7b828d);\n  --border: var(--color-border-primary, #30343c);\n  --ring: var(--color-ring-primary, #7aa2ff);\n  --ok: var(--color-text-success, #5fd08f);\n  --danger: var(--color-text-danger, #ff7a6b);\n  color-scheme: dark;\n}\n* { box-sizing: border-box; }\nhtml, body { margin: 0; background: var(--bg); color: var(--text); font: var(--md)/1.5 var(--font); }\nbody { padding: 14px 16px 16px; }\nbutton { font: inherit; color: inherit; }\nheader { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }\nh1 { font-size: 16px; font-weight: 600; margin: 0; }\n.count { color: var(--muted); font-size: var(--sm); }\n.spacer { flex: 1; }\n.seg { display: inline-flex; background: var(--bg2); border-radius: var(--radius); padding: 2px; }\n.seg button { border: 0; background: transparent; padding: 3px 10px; border-radius: calc(var(--radius) - 2px); cursor: pointer; color: var(--muted); font-size: var(--sm); }\n.seg button[aria-pressed=\"true\"] { background: var(--bg); color: var(--text); box-shadow: var(--shadow-hairline, 0 0 0 1px var(--border)); }\n.btn { border: 1px solid var(--border); background: var(--bg); padding: 3px 10px; border-radius: var(--radius); cursor: pointer; font-size: var(--sm); }\n.btn:hover, .row:hover { background: var(--bg2); }\nbutton:focus-visible, input:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }\ninput[type=\"search\"] { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: var(--radius); padding: 3px 10px; font: inherit; font-size: var(--sm); width: 160px; }\n.list { display: flex; flex-direction: column; gap: 2px; }\n.row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; background: transparent; padding: 7px 8px; border-radius: var(--radius); cursor: pointer; }\n.tile { flex: none; width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; font-size: 15px; color: #fff; }\n.main { min-width: 0; flex: 1; }\n.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }\n.meta { color: var(--muted); font-size: var(--sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n.side { flex: none; color: var(--faint); font-size: var(--sm); text-align: right; }\n.more { color: var(--muted); font-size: var(--sm); padding: 6px 8px; }\n.status { color: var(--muted); font-size: var(--sm); padding: 8px; }\n.status.error { color: var(--danger); }\n.detail h2 { font-size: 18px; margin: 0; }\n.sub { color: var(--muted); font-size: var(--sm); margin-top: 2px; word-break: break-all; }\n.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 14px 0; }\n.stat { background: var(--bg2); border-radius: var(--radius); padding: 8px 10px; }\n.stat .k { color: var(--muted); font-size: 12px; }\n.stat .v { font-weight: 600; margin-top: 2px; }\n.bar { height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; margin: 6px 0 10px; }\n.bar > i { display: block; height: 100%; background: var(--ok); }\n.ach { padding: 6px 0; border-top: 1px solid var(--border); }\n.ach .when { color: var(--faint); font-size: 12px; }\n.ach .desc { color: var(--muted); font-size: var(--sm); }\n.top { display: flex; align-items: flex-start; gap: 12px; }\n.top .tile { width: 48px; height: 48px; font-size: 20px; border-radius: 10px; }\n.section { font-weight: 600; margin-top: 4px; }\n.label { color: var(--muted); font-size: 12px; margin-bottom: 2px; }\n</style>\n</head>\n<body>\n<div id=\"app\"><div class=\"status\" id=\"boot\">…</div></div>\n<script>\n\"use strict\";\n// Steam 库（MCP App，规范 2026-01-26）。不引任何库：和宿主说话的那几条 JSON-RPC 自己写（ext-apps 的 App 做的事的一个小子集）。\n// 握手顺序照规范：ui/initialize → 宿主回话 → ui/notifications/initialized，之后宿主才推工具的输入、结果和上下文。\n// 页面不连任何网址；游戏名这些都是从文件里读来的字，一律用 textContent，不拼 HTML。\n(function () {\n  var VERSION = \"0.1.0\";\n  var PROTOCOL = \"2026-01-26\";\n\n  var STRINGS = {\n    zh: {\n      title: \"Steam 库\", count: \"{n} 个游戏\", recent: \"最近玩\", playtime: \"时长\", search: \"搜索\", refresh: \"刷新\",\n      open: \"打开\", back: \"← 返回\", more: \"还有 {n} 个\", loading: \"正在读……\", empty: \"没有装游戏\",\n      noMatch: \"没有名字里有“{q}”的游戏\", standalone: \"这是一个 MCP App 页面，要在支持 MCP Apps 的宿主（Kotone、Claude……）里打开。\",\n      never: \"没玩过\", justNow: \"刚刚\", minAgo: \"{n} 分钟前\", hourAgo: \"{n} 小时前\", yesterday: \"昨天\", dayAgo: \"{n} 天前\",\n      monthAgo: \"{n} 个月前\", yearAgo: \"{n} 年前\", minutes: \"{n} 分钟\", hours: \"{n} 小时\",\n      total: \"总时长\", twoWeeks: \"近两周\", lastPlayed: \"最近玩\", size: \"大小\", updated: \"最后更新\", notInstalled: \"没装\",\n      updating: \"在下载或更新\", achievements: \"成就\", noAch: \"本机没有这个游戏的成就缓存\", noAchAtAll: \"这个游戏没有成就\",\n      unknownTime: \"时间不知道\", recentUnlocked: \"最近解锁\", failed: \"没读到：{e}\"\n    },\n    en: {\n      title: \"Steam library\", count: \"{n} games\", recent: \"Recent\", playtime: \"Playtime\", search: \"Search\", refresh: \"Refresh\",\n      open: \"Open\", back: \"← Back\", more: \"{n} more\", loading: \"Reading…\", empty: \"No games installed\",\n      noMatch: \"No game named “{q}”\", standalone: \"This is an MCP App. Open it in a host that supports MCP Apps (Kotone, Claude…).\",\n      never: \"Never\", justNow: \"just now\", minAgo: \"{n} min ago\", hourAgo: \"{n} h ago\", yesterday: \"yesterday\", dayAgo: \"{n} days ago\",\n      monthAgo: \"{n} months ago\", yearAgo: \"{n} years ago\", minutes: \"{n} min\", hours: \"{n} h\",\n      total: \"Total\", twoWeeks: \"Past 2 weeks\", lastPlayed: \"Last played\", size: \"Size\", updated: \"Updated\", notInstalled: \"Not installed\",\n      updating: \"downloading or updating\", achievements: \"Achievements\", noAch: \"No achievement cache for this game on this PC\",\n      noAchAtAll: \"This game has no achievements\", unknownTime: \"time unknown\", recentUnlocked: \"Recently unlocked\", failed: \"Couldn't read: {e}\"\n    }\n  };\n  var lang = \"zh\";\n  function t(key, vars) {\n    var s = (STRINGS[lang] && STRINGS[lang][key]) || STRINGS.zh[key] || key;\n    if (vars) for (var k in vars) s = s.split(\"{\" + k + \"}\").join(String(vars[k]));\n    return s;\n  }\n\n  // ------------------------------------------------------------ 和宿主说话\n  var nextId = 1;\n  var pending = {};\n  function send(message) { window.parent.postMessage(message, \"*\"); }\n  function request(method, params, timeoutMs) {\n    var id = nextId++;\n    send({ jsonrpc: \"2.0\", id: id, method: method, params: params || {} });\n    return new Promise(function (resolve, reject) {\n      pending[id] = { resolve: resolve, reject: reject };\n      setTimeout(function () {\n        if (pending[id]) { delete pending[id]; reject(new Error(\"timeout: \" + method)); }\n      }, timeoutMs || 30000);\n    });\n  }\n  function notify(method, params) { send({ jsonrpc: \"2.0\", method: method, params: params || {} }); }\n  function respond(id, result) { send({ jsonrpc: \"2.0\", id: id, result: result }); }\n\n  var handlers = {};\n  window.addEventListener(\"message\", function (event) {\n    if (event.source !== window.parent) return;\n    var m = event.data;\n    if (!m || m.jsonrpc !== \"2.0\") return;\n    if (m.method === undefined && m.id !== undefined) {\n      var p = pending[m.id];\n      if (!p) return;\n      delete pending[m.id];\n      if (m.error) p.reject(new Error(m.error.message || \"error\"));\n      else p.resolve(m.result);\n      return;\n    }\n    if (typeof m.method !== \"string\") return;\n    var handler = handlers[m.method];\n    var result = handler ? handler(m.params || {}) : undefined;\n    if (m.id !== undefined) {\n      if (handler || m.method === \"ping\") respond(m.id, result || {});\n      else send({ jsonrpc: \"2.0\", id: m.id, error: { code: -32601, message: \"Method not found\" } });\n    }\n  });\n\n  function callTool(name, args) {\n    return request(\"tools/call\", { name: name, arguments: args || {} }).then(function (result) {\n      if (result && result.isError) throw new Error(resultText(result) || \"tool error\");\n      return result;\n    });\n  }\n  function resultText(result) {\n    var block = (result && result.content || []).filter(function (c) { return c.type === \"text\"; })[0];\n    return block ? String(block.text) : \"\";\n  }\n\n  // ------------------------------------------------------------ 宿主上下文\n  var context = {};\n  function applyContext(patch) {\n    if (!patch) return;\n    for (var k in patch) context[k] = patch[k];\n    var html = document.documentElement;\n    if (patch.theme === \"dark\" || patch.theme === \"light\") { html.dataset.theme = patch.theme; html.style.colorScheme = patch.theme; }\n    var vars = patch.styles && patch.styles.variables;\n    if (vars) for (var name in vars) if (vars[name]) html.style.setProperty(name, vars[name]);\n    var fonts = patch.styles && patch.styles.css && patch.styles.css.fonts;\n    if (fonts) {\n      var style = document.getElementById(\"host-fonts\") || document.head.appendChild(document.createElement(\"style\"));\n      style.id = \"host-fonts\";\n      style.textContent = fonts;\n    }\n    if (patch.locale) { lang = /^en\\b/i.test(patch.locale) ? \"en\" : \"zh\"; html.lang = lang === \"en\" ? \"en\" : \"zh-CN\"; }\n    if (patch.displayMode) html.dataset.display = patch.displayMode;\n  }\n  function display() { return context.displayMode || \"inline\"; }\n  function canFullscreen() {\n    return display() !== \"fullscreen\" && (context.availableDisplayModes || []).indexOf(\"fullscreen\") >= 0;\n  }\n\n  // ------------------------------------------------------------ 尺寸（宿主按它定聊天卡片的高度）\n  var lastW = 0, lastH = 0, scheduled = false;\n  function reportSize() {\n    if (scheduled) return;\n    scheduled = true;\n    requestAnimationFrame(function () {\n      scheduled = false;\n      var html = document.documentElement;\n      var saved = html.style.height;\n      html.style.height = \"max-content\";\n      var h = Math.ceil(html.getBoundingClientRect().height);\n      html.style.height = saved;\n      var w = Math.ceil(window.innerWidth);\n      if (w !== lastW || h !== lastH) { lastW = w; lastH = h; notify(\"ui/notifications/size-changed\", { width: w, height: h }); }\n    });\n  }\n\n  // ------------------------------------------------------------ 格式\n  function fmtMinutes(m) {\n    m = m || 0;\n    if (m < 60) return t(\"minutes\", { n: m });\n    var h = (m / 60).toFixed(1).replace(/\\.0$/, \"\");\n    return t(\"hours\", { n: h });\n  }\n  function fmtAgo(ts) {\n    if (!ts) return t(\"never\");\n    var d = Math.max(0, Math.floor(Date.now() / 1000) - ts);\n    if (d < 60) return t(\"justNow\");\n    if (d < 3600) return t(\"minAgo\", { n: Math.floor(d / 60) });\n    if (d < 86400) return t(\"hourAgo\", { n: Math.floor(d / 3600) });\n    if (d < 172800) return t(\"yesterday\");\n    if (d < 5184000) return t(\"dayAgo\", { n: Math.floor(d / 86400) });\n    if (d < 63072000) return t(\"monthAgo\", { n: Math.floor(d / 2592000) });\n    return t(\"yearAgo\", { n: Math.floor(d / 31536000) });\n  }\n  function fmtSize(b) {\n    if (b == null) return \"—\";\n    var gb = b / 1073741824;\n    return gb >= 1 ? gb.toFixed(1) + \" GB\" : Math.round(b / 1048576) + \" MB\";\n  }\n\n  // ------------------------------------------------------------ 画\n  function el(tag, props, children) {\n    var node = document.createElement(tag);\n    if (props) for (var k in props) {\n      if (k === \"text\") node.textContent = props[k];\n      else if (k === \"class\") node.className = props[k];\n      else if (k.slice(0, 2) === \"on\") node.addEventListener(k.slice(2), props[k]);\n      else node.setAttribute(k, props[k]);\n    }\n    (children || []).forEach(function (c) { if (c) node.appendChild(c); });\n    return node;\n  }\n  function tile(game) {\n    var name = String(game.name || \"?\");\n    var hue = (Number(game.appid) * 47) % 360;\n    var letter = Array.from(name.replace(/^the\\s+/i, \"\"))[0] || \"?\";\n    return el(\"div\", { class: \"tile\", style: \"background:hsl(\" + hue + \" 45% 45%)\", \"aria-hidden\": \"true\", text: letter.toUpperCase() });\n  }\n\n  var state = { games: null, sort: \"recent\", query: \"\", detail: null, error: \"\", loading: false };\n  var root = document.getElementById(\"app\");\n\n  function sorted() {\n    var list = (state.games || []).slice();\n    var q = state.query.trim().toLowerCase();\n    if (q) list = list.filter(function (g) { return String(g.name).toLowerCase().indexOf(q) >= 0; });\n    // 调用时按名字、大小排的（宿主推来的结果）：照服务器给的顺序，直到玩家点了“最近玩 / 时长”\n    if (state.sort !== \"recent\" && state.sort !== \"playtime\") return list;\n    var key = state.sort === \"playtime\" ? \"playtimeMinutes\" : \"lastPlayed\";\n    list.sort(function (a, b) { return (b[key] || 0) - (a[key] || 0) || String(a.name).localeCompare(String(b.name)); });\n    return list;\n  }\n\n  function render() {\n    root.textContent = \"\";\n    if (state.detail) renderDetail(state.detail);\n    else renderList();\n    reportSize();\n  }\n\n  function renderList() {\n    var header = el(\"header\", null, [\n      el(\"h1\", { text: t(\"title\") }),\n      state.games ? el(\"span\", { class: \"count\", text: t(\"count\", { n: state.games.length }) }) : null,\n      el(\"span\", { class: \"spacer\" }),\n      el(\"input\", { type: \"search\", placeholder: t(\"search\"), \"aria-label\": t(\"search\"), value: state.query,\n        oninput: function (e) { state.query = e.target.value; renderRows(); reportSize(); } }),\n      el(\"div\", { class: \"seg\", role: \"group\" }, [\"recent\", \"playtime\"].map(function (s) {\n        return el(\"button\", { type: \"button\", \"aria-pressed\": String(state.sort === s), text: t(s),\n          onclick: function () { state.sort = s; render(); } });\n      })),\n      el(\"button\", { type: \"button\", class: \"btn\", text: t(\"refresh\"), onclick: loadLibrary }),\n      canFullscreen() ? el(\"button\", { type: \"button\", class: \"btn\", text: t(\"open\"), onclick: openFullscreen }) : null\n    ]);\n    root.appendChild(header);\n    root.appendChild(el(\"div\", { class: \"list\", id: \"rows\" }));\n    renderRows();\n  }\n\n  function renderRows() {\n    var rows = document.getElementById(\"rows\");\n    if (!rows) return;\n    rows.textContent = \"\";\n    if (state.error) { rows.appendChild(el(\"div\", { class: \"status error\", text: state.error })); return; }\n    if (!state.games) { rows.appendChild(el(\"div\", { class: \"status\", text: t(\"loading\") })); return; }\n    var list = sorted();\n    if (!list.length) {\n      rows.appendChild(el(\"div\", { class: \"status\", text: state.query ? t(\"noMatch\", { q: state.query }) : t(\"empty\") }));\n      return;\n    }\n    var max = display() === \"inline\" ? 6 : list.length;\n    list.slice(0, max).forEach(function (g) {\n      var meta = [fmtMinutes(g.playtimeMinutes), fmtAgo(g.lastPlayed)];\n      if (g.fullyInstalled === false) meta.push(t(\"updating\"));\n      rows.appendChild(el(\"button\", { type: \"button\", class: \"row\", onclick: function () { loadGame(g.appid); } }, [\n        tile(g),\n        el(\"div\", { class: \"main\" }, [el(\"div\", { class: \"name\", text: g.name }), el(\"div\", { class: \"meta\", text: meta.join(\" · \") })]),\n        el(\"div\", { class: \"side\", text: fmtSize(g.sizeBytes) })\n      ]));\n    });\n    if (list.length > max) rows.appendChild(el(\"div\", { class: \"more\", text: t(\"more\", { n: list.length - max }) }));\n  }\n\n  function stat(k, v) { return el(\"div\", { class: \"stat\" }, [el(\"div\", { class: \"k\", text: k }), el(\"div\", { class: \"v\", text: v })]); }\n\n  function renderDetail(g) {\n    var a = g.achievements;\n    var sub = g.installed ? String(g.installPath || \"\") + (g.fullyInstalled === false ? \" · \" + t(\"updating\") : \"\") : t(\"notInstalled\");\n    root.appendChild(el(\"header\", null, [\n      el(\"button\", { type: \"button\", class: \"btn\", text: t(\"back\"), onclick: back }),\n      el(\"span\", { class: \"spacer\" }),\n      canFullscreen() ? el(\"button\", { type: \"button\", class: \"btn\", text: t(\"open\"), onclick: openFullscreen }) : null\n    ]));\n    root.appendChild(el(\"div\", { class: \"detail\" }, [\n      el(\"div\", { class: \"top\" }, [tile(g), el(\"div\", { class: \"main\" }, [\n        el(\"h2\", { text: g.name }),\n        el(\"div\", { class: \"sub\", text: \"appid \" + g.appid + \" · \" + sub })\n      ])]),\n      el(\"div\", { class: \"grid\" }, [\n        stat(t(\"total\"), fmtMinutes(g.playtimeMinutes)),\n        stat(t(\"twoWeeks\"), fmtMinutes(g.playtime2WeeksMinutes)),\n        stat(t(\"lastPlayed\"), fmtAgo(g.lastPlayed)),\n        g.installed ? stat(t(\"size\"), fmtSize(g.sizeBytes)) : null,\n        g.installed ? stat(t(\"updated\"), fmtAgo(g.lastUpdated)) : null\n      ]),\n      el(\"div\", { class: \"section\", text: t(\"achievements\") + (a && a.total ? \" \" + a.unlocked + \" / \" + a.total : \"\") }),\n      !a ? el(\"div\", { class: \"status\", text: t(\"noAch\") })\n        : !a.total ? el(\"div\", { class: \"status\", text: t(\"noAchAtAll\") })\n        : el(\"div\", null, [\n          el(\"div\", { class: \"bar\", role: \"progressbar\", \"aria-valuemin\": \"0\", \"aria-valuemax\": String(a.total), \"aria-valuenow\": String(a.unlocked) },\n            [el(\"i\", { style: \"width:\" + Math.round(100 * a.unlocked / a.total) + \"%\" })]),\n          a.recent && a.recent.length ? el(\"div\", { class: \"label\", text: t(\"recentUnlocked\") }) : null\n        ].concat((a.recent || []).map(function (x) {\n          return el(\"div\", { class: \"ach\" }, [\n            el(\"div\", null, [el(\"span\", { text: x.name }), el(\"span\", { class: \"when\", text: \"  \" + (x.unlockedAt ? fmtAgo(x.unlockedAt) : t(\"unknownTime\")) })]),\n            x.description ? el(\"div\", { class: \"desc\", text: x.description }) : null\n          ]);\n        })))\n    ]));\n  }\n\n  // ------------------------------------------------------------ 取数\n  function isLibrary(sc) { return sc && Array.isArray(sc.games) && typeof sc.total === \"number\"; }\n  function isGame(sc) { return sc && typeof sc.appid === \"number\" && \"installed\" in sc && \"achievements\" in sc; }\n\n  /** 一份工具结果（宿主推来的，或者自己调的）→ 页面。 */\n  function show(result) {\n    var sc = result && result.structuredContent;\n    if (result && result.isError) { state.error = t(\"failed\", { e: resultText(result) }); state.detail = null; }\n    else if (isGame(sc)) { state.detail = sc; state.error = \"\"; }\n    else if (isLibrary(sc)) { state.games = sc.games; state.sort = sc.sort || \"recent\"; state.detail = null; state.error = \"\"; }\n    else return false;\n    render();\n    return true;\n  }\n\n  function loadLibrary() {\n    state.error = \"\";\n    state.games = null;\n    render();\n    return callTool(\"library\", { sort: state.sort === \"playtime\" ? \"playtime\" : \"recent\", limit: 500 }).then(show, function (e) {\n      state.error = t(\"failed\", { e: e.message }); render();\n    });\n  }\n  function loadGame(appid) {\n    return callTool(\"game\", { appid: appid }).then(show, function (e) {\n      state.error = t(\"failed\", { e: e.message }); state.detail = null; render();\n    });\n  }\n  function back() {\n    state.detail = null;\n    if (!state.games) loadLibrary(); else render();\n  }\n  function openFullscreen() {\n    request(\"ui/request-display-mode\", { mode: \"fullscreen\" }).then(function (r) {\n      if (r && r.mode) applyContext({ displayMode: r.mode });\n      render();\n    }, function () {});\n  }\n\n  // ------------------------------------------------------------ 开始\n  // 宿主说了“是因为调工具才打开的”（toolInfo，或者推来了工具的输入）：最多等这么久它推结果，不来再自己取。\n  var RESULT_WAIT_MS = 4000;\n  // 宿主没带 toolInfo（规范里是可选的，ext-apps 的 basic-host 就不带）：先等这么久看它推不推，推了照上面等。\n  var HINT_WAIT_MS = 1000;\n  var gotResult = false, waiting = null;\n  function waitThenLoad(ms) {\n    clearTimeout(waiting);\n    waiting = setTimeout(function () { if (!gotResult) loadLibrary(); }, ms);\n  }\n  var hinting = false;\n  handlers[\"ui/notifications/tool-input\"] = function () { if (hinting && !gotResult) { hinting = false; waitThenLoad(RESULT_WAIT_MS); } };\n  handlers[\"ui/notifications/tool-result\"] = function (params) { if (show(params)) { gotResult = true; clearTimeout(waiting); } };\n  handlers[\"ui/notifications/tool-cancelled\"] = function () { if (!gotResult) loadLibrary(); };\n  // 只在看得见的东西变了时重画（容器尺寸这类一直在变，重画会丢掉搜索框的焦点）\n  var VISIBLE = [\"theme\", \"locale\", \"displayMode\", \"availableDisplayModes\"];\n  handlers[\"ui/notifications/host-context-changed\"] = function (params) {\n    applyContext(params);\n    if (VISIBLE.some(function (k) { return k in params; })) render();\n  };\n  handlers[\"ui/resource-teardown\"] = function () { return {}; };\n\n  if (window.parent === window) {\n    root.textContent = STRINGS.zh.standalone + \"\\n\" + STRINGS.en.standalone;\n    return;\n  }\n  request(\"ui/initialize\", {\n    protocolVersion: PROTOCOL,\n    appInfo: { name: \"kotone-plugin-steam\", version: VERSION },\n    appCapabilities: { availableDisplayModes: [\"inline\", \"fullscreen\"] }\n  }, 10000).then(function (init) {\n    applyContext(init && init.hostContext);\n    notify(\"ui/notifications/initialized\", {});\n    render();\n    new ResizeObserver(reportSize).observe(document.documentElement);\n    if (gotResult) return;\n    var host = init && init.hostInfo && init.hostInfo.name;\n    if (context.toolInfo) waitThenLoad(RESULT_WAIT_MS);\n    else if (host === \"Kotone\") loadLibrary();\n    else { hinting = true; waitThenLoad(HINT_WAIT_MS); }\n  }, function () {\n    root.textContent = STRINGS.zh.standalone + \"\\n\" + STRINGS.en.standalone;\n  });\n})();\n</script>\n</body>\n</html>\n",
+        "uri": "ui://steam/library"
+      }
+    ]
+  },
+  "resources": [
+    {
+      "description": "装了的游戏（按最近玩 / 时长排序），点一个看详情",
+      "mimeType": "text/html;profile=mcp-app",
+      "name": "steam-library",
+      "title": "Steam 库",
+      "uri": "ui://steam/library"
+    },
+    {
+      "description": "Kotone 插件标准 0.1 的清单：登记的事件和观察项（别的宿主可以不管它）",
+      "mimeType": "application/json",
+      "name": "kotone-manifest",
+      "title": "Kotone 清单",
+      "uri": "kotone://manifest"
+    }
+  ],
+  "serverInfo": {
+    "description": "只读本机 Steam 的库、时长、最近玩和成就",
+    "icons": [
+      {
+        "mimeType": "image/svg+xml",
+        "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMyYjNhNTUiLz48cmVjdCB4PSIxNCIgeT0iMTYiIHdpZHRoPSIxMCIgaGVpZ2h0PSIzNCIgcng9IjIiIGZpbGw9IiM4ZmIzZmYiLz48cmVjdCB4PSIyNyIgeT0iMTIiIHdpZHRoPSIxMCIgaGVpZ2h0PSIzOCIgcng9IjIiIGZpbGw9IiNjN2Q3ZmYiLz48cmVjdCB4PSI0MSIgeT0iMTgiIHdpZHRoPSIxMCIgaGVpZ2h0PSIzMiIgcng9IjIiIHRyYW5zZm9ybT0icm90YXRlKDEyIDQ2IDM0KSIgZmlsbD0iI2ZmZDI3YSIvPjxyZWN0IHg9IjEwIiB5PSI1MCIgd2lkdGg9IjQ0IiBoZWlnaHQ9IjQiIHJ4PSIyIiBmaWxsPSIjYzdkN2ZmIi8+PC9zdmc+"
+      }
+    ],
+    "name": "kotone-plugin-steam",
+    "title": "Steam",
+    "version": "0.1.0",
+    "websiteUrl": "https://github.com/l1veIn/kotone-plugin-steam"
+  },
+  "tools": [
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://steam/library"
+        },
+        "ui/resourceUri": "ui://steam/library"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Steam 库"
+      },
+      "description": "这台电脑上 Steam 装了哪些游戏：名字、appid、大小、装在哪、最后更新、总时长、最近玩。可按名字筛选、按最近玩 / 时长 / 名字 / 大小排序。只读本机文件。",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "description": "最多几个（默认 100）",
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "按名字筛选（包含这段字，不分大小写）",
+            "type": "string"
+          },
+          "sort": {
+            "description": "排序：recent 最近玩（默认）、playtime 时长、name 名字、size 大小",
+            "enum": [
+              "recent",
+              "playtime",
+              "name",
+              "size"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "library",
+      "title": "Steam 库"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://steam/library"
+        },
+        "ui/resourceUri": "ui://steam/library"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Steam 游戏详情"
+      },
+      "description": "一个 Steam 游戏的详情：装没装、大小、总时长、近两周时长、最近玩、成就进度和最近解锁的几个。用 appid 或名字找。",
+      "inputSchema": {
+        "properties": {
+          "appid": {
+            "description": "游戏的 appid",
+            "type": "integer"
+          },
+          "name": {
+            "description": "游戏名（不知道 appid 时用；不分大小写，可以只写一部分）",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "game",
+      "title": "Steam 游戏详情"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "最近玩的 Steam 游戏"
+      },
+      "description": "最近玩的 Steam 游戏（按最近玩排序，含没装的）。结果顶层的 appid、name、lastPlayed 是最近玩的那一个。",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "description": "最多几个（默认 10）",
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "recent",
+      "title": "最近玩的 Steam 游戏"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "最近解锁的 Steam 成就"
+      },
+      "description": "最近解锁的 Steam 成就（最近的在前）。给 appid 只看这个游戏（另带解锁了几个、一共几个）；不给就看所有游戏。数据来自 Steam 在本机的缓存：这台电脑上没玩过的游戏没有。",
+      "inputSchema": {
+        "properties": {
+          "appid": {
+            "description": "只看这个游戏",
+            "type": "integer"
+          },
+          "limit": {
+            "description": "最多几个（默认 20）",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "achievements",
+      "title": "最近解锁的 Steam 成就"
+    }
+  ]
+}

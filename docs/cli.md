@@ -34,6 +34,7 @@
 | `app status [--json]` | 桌面端是否在运行；运行时给出实例、版本、ASR 相位、启动方式与待处理用户请求数（未运行退出码 1） |
 | `app launch [--exe <kotone.exe>] [--wait-ms N] [--enable-tool-service] [--foreground]` | 后台启动桌面端（只驻留托盘、不开窗口、不抢焦点）并等待工具服务就绪；已在运行直接返回 |
 | `app quit [--wait-ms N]` | 等同托盘“退出”，等进程真正结束才返回 |
+| `plugin check (--command <exe> [-- 参数…] \| --url <地址> \| --config <mcp.json>) [--id <名字>] [--json] [--strict]` | 给插件作者：发布前检查一个按 [Kotone 插件标准](plugin-standard.md) 写的 MCP 服务器（清单、事件、工具、页面，每个观察项真调一次），✓ / ! / ✗ 三级，有 ✗ 退出码 1（`--strict` 时 ! 也算），参数不对退出码 2；`${input:名字}` 从环境变量 `KOTONE_INPUT_<名字>` 读 |
 | `mcp` | stdio MCP 服务器：把工具服务映射为 `kotone_*` 工具，供支持 MCP 的 Agent（DSH 插件即用它） |
 | `ocr status [--model-dir <目录>] [--json]` | 本地韩文 OCR 模型就绪检查：文件、大小、SHA-256 与本构建的 ONNX Runtime（不联网、不连接桌面） |
 | `ocr install [--model-dir <目录>] [--from-dir <目录>] [--json]` | 显式安装本地韩文 OCR 模型（PP-OCRv5 mobile，约 18.3 MB）；校验通过才发布 |

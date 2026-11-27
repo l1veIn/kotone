@@ -16,11 +16,13 @@
 //! - `profile`：list / use / detect（游戏 profile 管理与前台匹配）
 //! - `log`：识别历史 list / clear（core history 模块的 CLI 出口）
 //! - `tools`：连接已运行桌面实例的本机工具服务（status / list / call / artifact get）
+//! - `plugin check`：插件作者发布前检查第三方插件（插件标准 0.1，docs/plugin-standard.md 第七节）
 
 mod app;
 mod mcp;
 mod music;
 mod ocr;
+mod plugin;
 mod tools;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -193,6 +195,11 @@ enum Command {
     Music {
         #[command(subcommand)]
         action: music::MusicCommand,
+    },
+    /// 第三方插件（Kotone 插件标准 0.1）：check 发布前检查（连上、读清单、看工具和页面、试调观察项）
+    Plugin {
+        #[command(subcommand)]
+        action: plugin::PluginCommand,
     },
 }
 
@@ -381,6 +388,7 @@ async fn dispatch(cli: Cli) -> i32 {
         Command::Music { action } => music::run(action).await,
         Command::App { action } => app::run(action).await,
         Command::Mcp => mcp::run().await,
+        Command::Plugin { action } => plugin::run(action).await,
     }
 }
 

@@ -29,6 +29,7 @@ pnpm dev
 | 命令行与评测目标解析 | `crates/kotone-cli/src/main.rs`、`crates/kotone-stt/src/eval.rs` |
 | 本机 Agent 工具服务 | 端口 `crates/kotone-core/src/tools.rs`、`ocr.rs`；协议/存储/预处理/跟踪/服务端/客户端 `crates/kotone-tools`；OCR 后端与模型安装 `crates/kotone-ocr`；Windows 实现 `kotone-platform-windows/src/window_tools.rs`、`tool_host.rs`；桌面生命周期 `apps/desktop/src-tauri/src/tool_service.rs`；CLI `crates/kotone-cli/src/tools.rs`、`ocr.rs` |
 | 连外部 MCP 服务器（客户端） | `crates/kotone-mcp`（rmcp 上包一层：子进程 stdio、Streamable HTTP）；子进程的 Job Object `kotone-platform-windows/src/job.rs`；测试服务器 `kotone_mcp::testing`、`crates/kotone-mcp/examples/stdio_server.rs` |
+| 第三方插件的检查命令、兼容测试（插件标准） | 检查 `crates/kotone-remote-plugin/src/check.rs`，CLI `kotone-cli plugin check`（`crates/kotone-cli/src/plugin.rs`）；老插件快照 `crates/kotone-remote-plugin/tests/old-plugins/`，测试 `tests/old_plugins.rs`（快照不许为了让测试过而改，见 `docs/plugin-standard.md` 7.2） |
 
 **配置兼容（2026-11-16 起）**：用户可能不升级，或升级后又装回旧版。旧版本读到某个字段里不认识的值时，会把整份 `config.json` 当作损坏、改名备份并恢复默认（0.1.13 即如此）。因此：已有字段只写旧版本认识的值，不扩展它的取值范围、不改变写法；新能力一律用新字段（旧版本会忽略未知字段）。例如在线语音写 `assistant.ttsModelId` 而不是给 `assistant.speechEngine` 加新值；声音编号在界面与接口上是 `提供方/声音`，落盘仍是 `kokoro:zf_001` 与不带前缀的 Windows 语音；陪玩路由落盘仍是 `reminders`。代价：旧版本保存配置时会丢掉它不认识的新字段。`kotone-core` 有对应的回归测试。
 

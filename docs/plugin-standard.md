@@ -26,7 +26,7 @@ Kotone 自己只定第三节那份清单，不另定传输、工具格式、页�
 - 照 [MCP 规范](https://modelcontextprotocol.io/specification)。传输两种：**子进程（stdio）**、**Streamable HTTP**。旧的 HTTP+SSE 不支持。
 - 协议版本：**2025-11-25**（有 `initialize` 握手）和 **2026-07-28**（无状态，先 `server/discover`）。差别由宿主吸收，插件作者不用跟着动。
   - 现状（如实写）：Kotone 的 MCP 客户端（`crates/kotone-mcp`，基于官方 `rmcp` 3.11）现在只发 `initialize`（2025-11-25；服务器只会旧版本的，回它自己的版本也照样用）。只会 2026-07-28 的服务器要等客户端换成 rmcp 的 `Auto` 模式（先 `server/discover`，不认再退回）——那是 `kotone-mcp` 里一行的事，不影响本标准。
-  - 清单的拿法不靠握手（第 3.1 节），两版协议下一样。测试里用 rmcp 的 `Discover` 模式（2026-07-28）连过同样的服务器，`resources/read kotone://manifest` 照样读到（`crates/kotone-remote-plugin/src/tests.rs` 的 `the_manifest_reads_the_same_over_2026_07_28`）。
+  - 清单的拿法不靠握手（第 3.1 节），两版协议下一样。检查命令（第七节）两种握手各连一次。测试里用 rmcp 的 `Discover` 模式（2026-07-28）连过同样的服务器，`resources/read kotone://manifest` 照样读到（`crates/kotone-remote-plugin/src/tests.rs` 的 `the_manifest_reads_the_same_over_2026_07_28`）。
 - 玩家怎么加：插件页上粘贴 `mcpServers` 配置，或者从 Claude Desktop、VS Code 导入（`KOTONE_HOME/mcp.json`，格式就是 `mcpServers`）。玩家给的短名就是**插件 id**。
 - 插件在 Kotone 里的样子：
 
@@ -241,13 +241,96 @@ server.serve_stdio()
 
 ## 七、发布前跑检查命令
 
-> 占位：**第 4 期提供 `kotone-cli plugin check`**（照 Cortico 的 `pnpm check:extension`、MCP Inspector）：连上你的服务器，读 `kotone://manifest`，列出不认识的字段和清单的问题，试调观察项用的工具、看结果里有没有 `structuredContent` 和 `field` 指的字段。
+### 7.1 `plugin check`
 
-在那之前：把插件加进 Kotone，打开它的「设置」，看“Kotone 清单”一节有没有提示。
+照 Cortico 的 `pnpm check:extension`、MCP Inspector：连上你的服务器，**用 Kotone 读第三方插件的同一份代码**看一遍 Kotone 会怎么待它。装了 Kotone 的用 `kotone.exe plugin check …`，从源码跑用 `cargo run -p kotone-cli -- plugin check …`（下面写 `kotone-cli`）。
+
+```text
+kotone-cli plugin check --command <程序> [--env NAME=值]… [--cwd 目录] [--id <插件 id>] [-- 参数…]
+kotone-cli plugin check --url <网址> [--header NAME=值]… [--id <插件 id>]
+kotone-cli plugin check --config <mcp.json> [--id <名字>]
+                        [--json] [--strict] [--no-modern]
+```
+
+- 给的东西和 `mcp.json` 里的一条一样：子进程（`--command`，参数写在 `--` 后面）、Streamable HTTP（`--url`），或者直接读一个 `{"mcpServers": {…}}` 文件里的一条（只有一条时不用写 `--id`）。
+- `--id`：玩家给它起的短名，事件的全名是 `<id>.<名字>`；不写是 `plugin`（只是占位）。
+- 配置里的 `${input:名字}`（Key）**只从环境变量读**：`KOTONE_INPUT_<名字>`（名字转大写，字母数字以外的换成 `_`，如 `${input:api.key}` → `KOTONE_INPUT_API_KEY`）。检查命令不读 Kotone 的凭据库、不读 `~/.kotone`；输出里出现填进去的 Key 换成 `***`。
+
+它做的事：
+
+| 一节 | 看什么 |
+| --- | --- |
+| 连接 | 照 Kotone 现在的握手（`initialize`，2025-11-25）连一次；再用 2026-07-28（`server/discover`，不退回）连一次，读到的清单和工具清单要一样。第二次连不上只是提醒（`--no-modern` 不试） |
+| Kotone 清单 | 读 `kotone://manifest`（没给不是错，提醒一句；给了但读不出来是 ✗）；标准版本、不认识的字段（第 3.6 节）、清单的问题、游戏 id 这一版 Kotone 有没有、事件的全名、风险说明。服务器没给、Kotone 带的预设认得出它时，看的是预设 |
+| 工具 | 名字合不合规矩（不合的不进 Kotone）、重名、没写说明、`_meta.ui` 的写法（`visibility`、`resourceUri`） |
+| 页面 | 每个 `ui://` 页面真读一次：读不读得到、类型是不是 `text/html;profile=mcp-app`、`_meta.ui.csp` 里会被丢掉的本机和局域网地址 |
+| 观察项 | 间隔低于下限时说按下限算；工具在不在、标没标只读；**每个观察项真调一次**：有没有 `structuredContent`，`field` / `list` / `id` 在结果里找不找得到（用的就是宿主比较时的代码）；事件 `data` 登记的字段结果里没有（只是提醒）；登记了事件却没有观察项（现在发不出来） |
+
+三级：**✓** 没问题；**!** 提醒（Kotone 照样能用，或者只是这一项用不了）；**✗** 要先改（Kotone 用不了这一项，或者清单写错了）。
+
+退出码：有 ✗ 是 **1**；只有 ! 是 **0**（`--strict` 时 ! 也算 **1**）；参数、配置不对（缺 Key、`--id` 不合规矩、`mcp.json` 里没有这一条）是 **2**。`--json` 输出同样的内容（`sections[].lines[]` 的 `level` 是 `ok` / `warn` / `fail`，另有 `counts`、`exitCode` 和 Kotone 会照着用的清单 `manifest`），给脚本和 CI 用。
+
+第六节的例子（兼容测试里的 `0.1-minimal`）跑出来是这样：
+
+```text
+$ kotone-cli plugin check --id farm --command old_plugin_server.exe -- 0.1-minimal/snapshot.json
+检查插件 farm（运行 old_plugin_server.exe 0.1-minimal/snapshot.json）
+
+连接
+  ✓ 2025-11-25（initialize）连上了：服务器说自己是 my-farm 1.0.0，谈好的协议 2025-11-25
+  ✓ 2026-07-28（server/discover）也连得上，清单和工具清单一样
+
+Kotone 清单（kotone://manifest）
+  ✓ 服务器给了清单（493 字节）
+  ✓ 照标准 0.1 写的
+  ✓ 挂在游戏 genshin 上
+  ✓ 事件 farm.farm_finished：自动刷本跑完了（data：message）
+  ✓ 有风险说明（22 字）：第一次点开插件时在“风险和许可”弹窗里显示
+
+工具（tools/list）
+  ✓ 2 个工具，1 个标了只读（annotations.readOnlyHint: true）
+
+页面（MCP Apps，ui://）
+  ✓ 没有 ui:// 页面：点开插件卡片显示一页工具列表
+
+观察项（watches）
+  ✓ farm_finished ← farm_status（status 变成 finished 时发）：每 30 秒查一次
+  ✓ farm_finished：调了一次 farm_status（structuredContent）：status 现在是 "running"
+
+✓ 11  ! 0  ✗ 0：都没问题，可以发布
+```
+
+有问题时像这样（节选）：
+
+```text
+Kotone 清单（kotone://manifest）
+  ! 不认识的字段 watches[1].retry：Kotone 忽略它，插件页会列出来（按更新的标准写的，或者拼错了）
+  ✗ 观察项要发的事件 ghost 没在 events 里登记，丢掉
+  ! 这一版 Kotone 没有游戏 starrail：保留着，插件页会提示（游戏 id 见 crates/kotone-core/resources/profiles/）
+
+观察项（watches）
+  ! done ← status（state.value 变了就发）：写的每 5 秒低于下限 10 秒（本机），按 10 秒算
+  ! done：工具 status 没标只读（annotations.readOnlyHint: true）：玩家打开这个观察项时要明确同意定时调它
+  ✗ done：调了一次 status（structuredContent）：结果里没有字段 state.value，每次都会算没查成
+  ✗ textonly：调了一次 words：这个工具没有给结构化结果（structuredContent），观察项用不了：要插件作者让它返回 structuredContent
+
+✓ 11  ! 12  ✗ 7：有 ✗：先改好再发布
+```
+
+它不看的：MCP Events（宿主还不支持订阅，第 2.3 节）；玩家本地的 `manifest.json`（那是玩家的，不是你发布的）；工具除了观察项用的那几个都不调（没标只读的工具可能会改东西）。
+
+### 7.2 兼容测试（Kotone 这边，D4 第 7 条）
+
+Kotone 的 CI 里固定放一组“老插件”，每次改宿主都跑（`cargo test --workspace` 里就有）：改了宿主、让按旧标准写的插件不能用了，CI 就红。
+
+- 放在 `crates/kotone-remote-plugin/tests/old-plugins/<名字>/`：`snapshot.json` 是插件原样的回答（握手的 `serverInfo`、`tools/list`、`resources/list`、`resources/read`——`kotone://manifest` 的原文也在这里——和观察项每次调用的结果），`expected.json` 是那时候宿主该有的样子（清单的提示、观察项发出的事件）。
+- 现在有两份：`0.1-minimal/`（按 0.1 写的最小插件，就是第六节的例子）、`steam-snapshot/`（真实插件 [l1veIn/kotone-plugin-steam](https://github.com/l1veIn/kotone-plugin-steam) 0.1.0 的快照，用它仓库里合成的假 Steam 数据录的；出处和提交写在快照的 `about` 里）。
+- 测试（`crates/kotone-remote-plugin/tests/old_plugins.rs`）让一个假服务器（`examples/old_plugin_server.rs`）照快照回答，每份过三关：宿主读清单（提示和记着的一样）→ 宿主的观察项真跑起来（第一次记底、第二次换一份结果）发出预期的事件 → 检查命令（7.1）没有 ✗。
+- **规矩**：快照**不许为了让测试过而改**——红了是宿主改坏了，改宿主。标准真的改了含义（第五节第 5 条），照新版本**另加**一份老插件（如 `0.2-minimal/`），旧的留着、照旧要过。
 
 ## 八、别的仓库的插件
 
-- [l1veIn/kotone-plugin-steam](https://github.com/l1veIn/kotone-plugin-steam)（**建设中**，第 4 期）：只靠本标准、在别的仓库里跑通的第一个插件。
+- [l1veIn/kotone-plugin-steam](https://github.com/l1veIn/kotone-plugin-steam)：只靠本标准、在别的仓库里跑通的第一个插件（只读本机 Steam 文件的 MCP 服务器 + MCP App + Kotone 清单，两个观察项）。它的快照在兼容测试里（7.2）。
 
 ## 九、Kotone 里的代码在哪
 
@@ -256,6 +339,9 @@ server.serve_stdio()
 | 读清单、合成、预设、观察项的结构 | `crates/kotone-remote-plugin/src/manifest.rs` |
 | 连上时读 `kotone://manifest`、记在磁盘上 | `crates/kotone-remote-plugin/src/server.rs`（`remote-cache.json`） |
 | 预设 | `crates/kotone-remote-plugin/presets/` |
+| 观察项（什么时候查、比较、发事件） | `crates/kotone-remote-plugin/src/watch.rs` |
+| 检查命令 | `crates/kotone-remote-plugin/src/check.rs`（`kotone-cli plugin check` 在 `crates/kotone-cli/src/plugin.rs`） |
+| 兼容测试（老插件） | `crates/kotone-remote-plugin/tests/old_plugins.rs`、`tests/old-plugins/` |
 | 插件页要的样子 | `apps/desktop/src-tauri/src/remote_plugins.rs`（`describe`） |
 | 插件页 | `apps/desktop/src/lib/components/plugins/RemotePluginSettings.svelte`、`PluginRiskDialog.svelte` |
 

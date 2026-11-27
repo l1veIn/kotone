@@ -33,9 +33,22 @@ pub enum Transport {
     },
 }
 
+/// 怎么开始一个会话（协议版本）。宿主一直用 [`Handshake::Initialize`]；[`Handshake::Discover`] 给插件作者的检查命令
+/// （`kotone-cli plugin check`）试一下“只说 2026-07-28 的 Kotone”连不连得上。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Handshake {
+    /// `initialize` 握手（2025-11-25；服务器只会旧版本的，回它自己的版本也照样用）。
+    #[default]
+    Initialize,
+    /// 2026-07-28：先 `server/discover`，没有握手；服务器不认就算连不上（不退回 `initialize`）。
+    Discover,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
     pub transport: Transport,
+    /// 怎么开始会话（默认 [`Handshake::Initialize`]）。
+    pub handshake: Handshake,
     pub startup_timeout: Duration,
     /// 每次请求的超时。
     pub tool_timeout: Duration,
@@ -49,6 +62,7 @@ impl ServerConfig {
     fn new(transport: Transport) -> Self {
         Self {
             transport,
+            handshake: Handshake::Initialize,
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             tool_timeout: DEFAULT_TOOL_TIMEOUT,
             client_name: "kotone".into(),
@@ -99,6 +113,12 @@ impl ServerConfig {
         if let Transport::Http { headers, .. } = &mut self.transport {
             headers.insert(name.into(), value.into());
         }
+        self
+    }
+
+    /// 怎么开始会话（见 [`Handshake`]）。
+    pub fn handshake(mut self, handshake: Handshake) -> Self {
+        self.handshake = handshake;
         self
     }
 

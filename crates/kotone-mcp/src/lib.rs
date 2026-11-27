@@ -35,6 +35,8 @@ mod types;
 pub mod testing;
 
 pub use client::McpClient;
-pub use config::{ServerConfig, Transport, DEFAULT_STARTUP_TIMEOUT, DEFAULT_TOOL_TIMEOUT};
+pub use config::{
+    Handshake, ServerConfig, Transport, DEFAULT_STARTUP_TIMEOUT, DEFAULT_TOOL_TIMEOUT,
+};
 pub use error::{status_text, McpError, Stage};
 pub use types::{Resource, ResourceContents, ServerInfo, Tool, ToolCallResult};
