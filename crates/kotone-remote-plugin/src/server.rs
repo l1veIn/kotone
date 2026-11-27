@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use kotone_mcp::{McpClient, McpError, ServerInfo, Tool};
+use kotone_mcp::{McpClient, McpError, ServerInfo, Tool, ToolCallResult};
 use kotone_plugin_api::resource::public_csp_source;
 use kotone_plugin_api::{Host, Resource, ResourceUi, ToolResult, ToolSpec, APP_MIME};
 use serde::{Deserialize, Serialize};
@@ -236,7 +236,16 @@ impl Server {
         let name = known.server.as_ref().map(|about| about.name.as_str());
         let preset = manifest::preset_for(url, name).map(|(_, parsed)| parsed);
         let local = self.dir.as_deref().and_then(manifest::read_local);
-        manifest::merge(server, preset, local)
+        let mut out = manifest::merge(server, preset, local);
+        if out.source == manifest::Source::Preset {
+            out.preset = manifest::preset_id(url, name);
+        }
+        out
+    }
+
+    /// 插件自己的目录（玩家本地的 `manifest.json` 在这里；测试里可能没有）。
+    pub fn dir(&self) -> Option<&std::path::Path> {
+        self.dir.as_deref()
     }
 
     /// 服务器给的清单（或者它自报的名字，预设按它认）每变一次，这里的数加一。
@@ -530,12 +539,24 @@ impl Server {
             .iter()
             .find(|t| t.name == original)
             .and_then(|t| tools::ui_meta(t).1);
+        let result = self.call_raw(host, &original, arguments).await?;
+        tools::to_result(result, page)
+    }
+
+    /// 按服务器上的原名调一个工具，结果原样交回（观察项要 `structuredContent`，[`crate::watch`]）。
+    /// 连不上、掉线、服务器报错都变成一句给人看的话（Key 换成 `***`）。
+    pub async fn call_raw(
+        self: &Arc<Self>,
+        host: &Arc<dyn Host>,
+        original: &str,
+        arguments: Value,
+    ) -> Result<ToolCallResult, String> {
         let client = self
             .connect(host, false)
             .await
             .map_err(|e| self.offline(&e))?;
-        match client.call_tool(&original, arguments).await {
-            Ok(result) => tools::to_result(result, page),
+        match client.call_tool(original, arguments).await {
+            Ok(result) => Ok(result),
             Err(
                 error @ (McpError::Closed
                 | McpError::Connect(_)

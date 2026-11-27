@@ -5,11 +5,14 @@
  * 测试可以在页面加载前放 `window.__kotoneMcpSeed`（服务器列表）当作手改 `mcp.json` 加的（没信任），
  * 放 `window.__kotoneMcpFileSeed`（`{fileError?, problems?}`）当作 `mcp.json` 读不出来、有没加进来的项。
  * 服务器可以带 `kotoneManifest`（它的 Kotone 清单、不认识的字段、问题，照后端 `describe_manifest`）。
+ * 观察项（ADR 047 D5）照后端 `watch::gate` 的规矩现算：开关和确认存在设置 `plugins.<id>.settings.watches`；`tools` 换掉默认的
+ * 两个工具（写 `readOnly`）；`gameRunning` 当它挂的游戏开着；`stoppedWatches`（事件名 → 原因）当连续失败停下了。
  * 不连任何真的服务器。
  */
 import type { PluginInfo } from "../plugins";
-import type { KotoneManifestInfo, McpCandidate, McpFileStatus, McpImportSource, McpProblem, RemoteInfo, TrustFacts } from "../mcpServers";
-import { getSettings } from "./browserMock";
+import type { KotoneManifestInfo, McpCandidate, McpFileStatus, McpImportSource, McpProblem, NewWatch, RemoteInfo, RemoteWatch, TrustFacts, WatchStatus } from "../mcpServers";
+import type { Settings } from "./contracts";
+import { getSettings, updateSettings } from "./browserMock";
 
 interface MockServer {
   id: string;
@@ -25,7 +28,139 @@ interface MockServer {
   icon?: string;
   /** 它的 Kotone 清单（插件标准 0.1；没写 = 没有清单）。`manifest` 里没写的字段用默认值。 */
   kotoneManifest?: Partial<Omit<KotoneManifestInfo, "manifest">> & { manifest?: Partial<KotoneManifestInfo["manifest"]> };
+  /** 换掉默认的两个工具（echo、add）。 */
+  tools?: { name: string; readOnly: boolean; title?: string; description?: string }[];
+  /** 它挂的游戏开着（观察项“在查”，不然“等游戏开”）。 */
+  gameRunning?: boolean;
+  /** 连续失败停下了的观察项：事件名 → 原因。 */
+  stoppedWatches?: Record<string, string>;
 }
+
+type RawWatch = { event: string; tool: string; arguments?: Record<string, unknown>; everySeconds?: number; compare: "changed" | "new";
+  field?: string; to?: string | string[]; list?: string | null; id?: string };
+
+/** 和后端 `watch::digest` 一样只看工具、参数、比较（预览里的写法不同，够用就行）。 */
+function mockDigest(w: RawWatch): string {
+  return `d:${w.tool}:${JSON.stringify(w.arguments ?? {})}:${w.compare}:${w.field ?? ""}:${JSON.stringify(w.to ?? [])}:${w.list ?? ""}:${w.id ?? ""}`;
+}
+
+function toolsOf(s: MockServer): { name: string; readOnly: boolean; title?: string; description?: string }[] {
+  return s.tools ?? [
+    { name: "echo", readOnly: true, title: "Echo", description: "Echo the text back" },
+    { name: "add", readOnly: false, title: "Add", description: "Add a note" },
+  ];
+}
+
+// i18n-ignore-start：预览里模拟后端说的原因和错误（真实应用里来自后端）
+/** 照后端 `Watcher::view` 现算每个观察项。 */
+function watchesOf(s: MockServer, settings: Settings, enabled: boolean, known: boolean): RemoteWatch[] {
+  const m = kotoneManifest(s);
+  const choices = ((settings.plugins?.[s.id]?.settings as Record<string, unknown> | undefined)?.watches ?? {}) as Record<string, { on?: boolean; confirmed?: string; allowUnmarked?: boolean } | null>;
+  const games = m.manifest.games.length > 0;
+  return (m.manifest.watches as unknown as RawWatch[]).map((w) => {
+    const digest = mockDigest(w);
+    const c = choices[w.event] ?? {};
+    const tool = known ? toolsOf(s).find((t) => t.name === w.tool) : undefined;
+    const readOnly = tool ? tool.readOnly : null;
+    const every = w.everySeconds ?? 60;
+    const local = /^(stdio|https?:\/\/(127\.|localhost|\[::1\]))/.test(String(s.entry.url ?? "stdio"));
+    let status: WatchStatus;
+    if (!c.on) status = { state: "off" };
+    else if (c.confirmed !== digest) status = { state: "confirm", reason: c.confirmed ? "观察项的内容变了，要重新确认" : "还没确认过" };
+    else if (!enabled) status = { state: "blocked", reason: "插件关着" };
+    else if (!s.trusted) status = { state: "blocked", reason: "还没信任这个插件（在它的设置里信任以后才查）" };
+    else if (known && !tool) status = { state: "blocked", reason: `服务器上没有工具 ${w.tool}` };
+    else if (readOnly === false && !c.allowUnmarked) status = { state: "confirm", reason: `工具 ${w.tool} 没标只读，要你在确认里明确同意` };
+    else if (s.stoppedWatches?.[w.event]) status = { state: "stopped", reason: s.stoppedWatches[w.event] };
+    else status = games && !s.gameRunning ? { state: "waiting" } : { state: "polling" };
+    return {
+      ...w, arguments: w.arguments ?? {}, everySeconds: every, to: w.to === undefined ? undefined : Array.isArray(w.to) ? w.to : [w.to],
+      type: `${s.id}.${w.event}`, label: m.manifest.events.find((e) => e.name === w.event)?.label ?? "",
+      intervalSeconds: Math.max(every, local && games ? 10 : 60), from: m.watchFrom?.[w.event] ?? m.source,
+      readOnly, digest, on: !!c.on, confirmed: c.confirmed === digest, allowUnmarked: !!c.allowUnmarked, status,
+      lastError: s.stoppedWatches?.[w.event] ?? null, failures: s.stoppedWatches?.[w.event] ? 5 : 0, sent: 0,
+    } as RemoteWatch;
+  });
+}
+
+async function saveChoice(id: string, event: string, value: unknown): Promise<void> {
+  await updateSettings({ plugins: { [id]: { settings: { watches: { [event]: value } } } } } as never);
+}
+
+async function watchView(id: string, event: string): Promise<{ server: MockServer; watch: RemoteWatch }> {
+  const server = all().find((x) => x.id === id);
+  if (!server) throw new Error(id);
+  const settings = await getSettings();
+  const enabled = settings.plugins?.[id]?.enabled ?? true;
+  const watch = watchesOf(server, settings, enabled, true).find((w) => w.event === event);
+  if (!watch) throw new Error(event);
+  return { server, watch };
+}
+
+/** `remote_watch_set`（规矩照后端）。 */
+export async function setWatch(id: string, event: string, on: boolean, digest?: string, allowUnmarked?: boolean): Promise<void> {
+  const { watch } = await watchView(id, event);
+  if (!on) return saveChoice(id, event, { on: false });
+  if (watch.confirmed && (watch.readOnly || watch.allowUnmarked) && (!digest || digest === watch.digest)) return saveChoice(id, event, { on: true });
+  if (!digest) throw new Error("第一次打开要先确认");
+  if (digest !== watch.digest) throw new Error("这个观察项刚变过：刷新一下，看过现在的内容再打开");
+  if (watch.readOnly === false && !allowUnmarked) throw new Error(`工具 ${watch.tool} 没标只读：要在确认里勾上“我同意定时调它”`);
+  await saveChoice(id, event, { on: true, confirmed: watch.digest, allowUnmarked: !!allowUnmarked });
+}
+
+/** `remote_watch_retry`：停下的重新开始。 */
+export async function retryWatch(id: string, event: string): Promise<void> {
+  const { server } = await watchView(id, event);
+  if (server.stoppedWatches) delete server.stoppedWatches[event];
+}
+
+/** `remote_watch_add`：写进“本地的 manifest.json”（这里是内存），加完就开。 */
+export async function addWatch(id: string, spec: NewWatch): Promise<void> {
+  const server = all().find((x) => x.id === id);
+  if (!server) throw new Error(id);
+  const m = kotoneManifest(server);
+  if (!/^[a-z][a-z0-9_]{0,63}$/.test(spec.name)) throw new Error("events[0]：name 要是 snake_case（小写字母开头，小写字母、数字、下划线），丢掉");
+  if (!spec.label.trim()) throw new Error("events[0]（" + spec.name + "）：label 必填，最多 64 字，丢掉");
+  if (m.manifest.events.some((e) => e.name === spec.name)) throw new Error(`已经有叫 ${spec.name} 的事件了，换一个名字`);
+  const tool = toolsOf(server).find((t) => t.name === spec.tool);
+  if (!tool) throw new Error(`服务器上没有工具 ${spec.tool}`);
+  if (!tool.readOnly && !spec.allowUnmarked) throw new Error(`工具 ${spec.tool} 没标只读：要勾上“我同意定时调它”`);
+  if (spec.compare === "changed" && !spec.field?.trim()) throw new Error(`watches[0]（${spec.name}）：compare 是 changed 时要写 field，丢掉`);
+  const to = (spec.to ?? "").split(/[,，、]/).map((x) => x.trim()).filter(Boolean);
+  const watch: RawWatch = spec.compare === "changed"
+    ? { event: spec.name, tool: spec.tool, arguments: spec.arguments, everySeconds: spec.everySeconds, compare: "changed", field: spec.field, ...(to.length ? { to } : {}) }
+    : { event: spec.name, tool: spec.tool, arguments: spec.arguments, everySeconds: spec.everySeconds, compare: "new", ...(spec.list ? { list: spec.list } : {}), id: spec.idField || "id" };
+  const data: Record<string, string> = spec.compare === "changed" ? { from: "之前的值", to: "现在的值" } : {};
+  server.kotoneManifest = {
+    ...server.kotoneManifest,
+    source: m.source === "none" ? "local" : m.source,
+    local: true,
+    watchFrom: { ...m.watchFrom, [spec.name]: "local" },
+    manifest: { ...m.manifest, events: [...m.manifest.events, { name: spec.name, label: spec.label.trim(), data }], watches: [...m.manifest.watches, watch as unknown as Record<string, unknown>] },
+  };
+  await saveChoice(id, spec.name, { on: true, confirmed: mockDigest(watch), allowUnmarked: spec.allowUnmarked });
+}
+
+/** `remote_watch_remove`：只能删自己加的。 */
+export async function removeWatch(id: string, event: string): Promise<void> {
+  const server = all().find((x) => x.id === id);
+  if (!server) throw new Error(id);
+  const m = kotoneManifest(server);
+  if (m.watchFrom?.[event] !== "local") throw new Error("只能删你自己加的观察项；服务器给的、Kotone 带的可以关掉");
+  const { [event]: _gone, ...rest } = m.watchFrom ?? {};
+  void _gone;
+  server.kotoneManifest = {
+    ...server.kotoneManifest,
+    watchFrom: rest,
+    manifest: {
+      ...m.manifest,
+      events: m.manifest.events.filter((e) => e.name !== event),
+      watches: m.manifest.watches.filter((w) => (w as unknown as RawWatch).event !== event),
+    },
+  };
+  await saveChoice(id, event, null);
+}
+// i18n-ignore-end
 
 /** 照后端 `remote_plugins::describe_manifest`：没写的用默认值（没有清单）。 */
 function kotoneManifest(s: MockServer): KotoneManifestInfo {
@@ -241,11 +376,13 @@ export async function remotePlugins(): Promise<PluginInfo[]> {
   return all().map((s) => {
     const enabled = settings.plugins?.[s.id]?.enabled ?? true;
     const f = facts(s.entry);
-    const known = s.status === "connected" || s.app;
-    const tools = known ? [
-      { name: `${s.id}.echo`, readOnly: true, visibility: ["model", "app"] as const, page: s.app ? `ui://${s.id}/app` : null, title: "Echo", description: "Echo the text back" },
-      { name: `${s.id}.add`, readOnly: false, visibility: ["model", "app"] as const, page: null, title: "Add", description: "Add a note" },
-    ] : [];
+    const known = s.status === "connected" || !!s.app;
+    const tools = known ? toolsOf(s).map((t, i) => ({
+      name: `${s.id}.${t.name}`, readOnly: t.readOnly, visibility: ["model", "app"] as const,
+      page: s.app && i === 0 ? `ui://${s.id}/app` : null, title: t.title ?? t.name, description: t.description ?? null,
+    })) : [];
+    const watches = watchesOf(s, settings, enabled, known);
+    const stopped = watches.find((w) => w.status.state === "stopped");
     const remote: RemoteInfo = {
       status: enabled ? s.status : "notConnected",
       error: s.error ?? null,
@@ -258,6 +395,8 @@ export async function remotePlugins(): Promise<PluginInfo[]> {
       fingerprint: "mock",
       toolList: tools.map((t) => ({ ...t, visibility: [...t.visibility] })),
       kotoneManifest: kotoneManifest(s),
+      watches,
+      watchStopped: stopped && "reason" in stopped.status ? { label: stopped.label, reason: stopped.status.reason } : null,
       ...("error" in f ? { configError: f.error } : { config: f }),
     };
     return {

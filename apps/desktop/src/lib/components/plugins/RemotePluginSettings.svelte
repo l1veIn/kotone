@@ -1,6 +1,7 @@
 <script lang="ts">
   // 第三方插件的设置（插件页顶栏的“设置”，和内置插件同一个位置）：连接（运行什么 / 连哪里）、Key（`${input:名字}`
-  // 的值，存进 Windows 的安全存储，不进 mcp.json）、信任（它说只读的工具要不要先问）、Kotone 清单（插件标准 0.1：从哪来，
+  // 的值，存进 Windows 的安全存储，不进 mcp.json）、信任（它说只读的工具要不要先问）、事件（观察项，ADR 047 D5，
+  // `RemotePluginEvents`）、Kotone 清单（插件标准 0.1：从哪来，
   // 给作者看的小字：不认识的字段、清单的问题、标准比这一版新）、删掉。
   // 风险不在这里摆（ADR 043：一个插件一个弹窗）：顶栏的“风险和许可”里是“它是别人写的程序”和它清单里的 `risk`。
   import { Trash2 } from "@lucide/svelte";
@@ -8,6 +9,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import McpTrustFacts from "./McpTrustFacts.svelte";
+  import RemotePluginEvents from "./RemotePluginEvents.svelte";
   import { reconnectServer, remoteOf, removeServer, setServerKey, trustServer, type ManifestNote } from "$lib/mcpServers";
   import type { PluginPageProps } from "$lib/pluginUi";
   import { openTarget } from "$lib/stores/navigation";
@@ -106,6 +108,10 @@
       <Button size="sm" class="h-7 text-xs" disabled={busy || !remote?.config} data-testid="remote-plugin-trust-button" onclick={() => void run(() => trustServer(id, true))}>{m.system_mcp_trust_button()}</Button>
     {/if}
   </section>
+
+  {#if remote}
+    <RemotePluginEvents {plugin} {remote} />
+  {/if}
 
   {#if kotone && showManifest}
     <section class="space-y-1.5" data-testid="remote-plugin-manifest" data-source={kotone.source}>

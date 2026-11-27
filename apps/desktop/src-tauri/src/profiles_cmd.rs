@@ -18,6 +18,7 @@ pub(crate) fn save_profile(mut profile: GameProfile) -> Result<(), String> {
         "dota2" => Some(GameProfile::builtin_dota2()),
         "cs2" => Some(GameProfile::builtin_cs2()),
         "genshin" => Some(GameProfile::builtin_genshin()),
+        "zzz" => Some(GameProfile::builtin_zzz()),
         "generic" => Some(GameProfile::builtin_generic()),
         _ => None,
     };

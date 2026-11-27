@@ -995,10 +995,31 @@ pub struct Template {
     pub description: String,
     pub params: Vec<ParamSpec>,
     pub source: String,
+    /// 带好的游戏事件触发（没有 = 不带，新建时玩家自己选）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on: Option<EventTrigger>,
+    /// 要哪个第三方插件（ADR 047 第 2 期）：Kotone 预设的 id（`zzz-onedragon`）。触发里的事件名以 `<它>.` 开头；
+    /// 第三方插件的 id 是玩家起的，界面换成用着这份预设的那个插件的 id，没有这样的插件时不列这个模板。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
-/// 四个模板：说一句、推送一条、让她做、空白程序（按键类复制内置程序）。“说一句”用 `args.text`，
-/// 不再支持 `{参数}` 写法；要用事件里的字，让她写或改程序。
+/// 绝区零一条龙的预设建议的插件 id（`kotone-remote-plugin` 的 `presets/zzz-onedragon.json`）。
+pub const ONEDRAGON_PRESET: &str = "zzz-onedragon";
+
+/// “一条龙跑完推一行”的程序（ADR 045：通知是函数，写了才有）。`args.to` 由事件填（事件 `data.to`：`success` / `failed`）。
+/// 不把它说的原话拼进推送：别人的服务器给的字可能很长、带换行，推送最多 40 字，超了这一次就推不出去。
+const ONEDRAGON_SOURCE: &str = r#"
+-- 绝区零一条龙跑完 / 出错时推一行（args.to 由事件自动填上：success 或 failed）
+if args.to == "failed" then
+  push("绝区零一条龙出错了，去看看")
+else
+  push("绝区零一条龙跑完了")
+end
+"#;
+
+/// 五个模板：说一句、推送一条、让她做、空白程序（按键类复制内置程序），和“一条龙跑完推一行”（要先加绝区零一条龙插件）。
+/// “说一句”用 `args.text`，不再支持 `{参数}` 写法；要用事件里的字，让她写或改程序。
 pub fn templates() -> Vec<Template> {
     let text = |name: &str, label: &str, max_length: u32, default: &str| ParamSpec {
         name: name.into(),
@@ -1013,6 +1034,8 @@ pub fn templates() -> Vec<Template> {
         description: description.into(),
         params,
         source: source.trim().to_string() + "\n",
+        on: None,
+        preset: None,
     };
     vec![
         template(
@@ -1048,6 +1071,29 @@ pub fn templates() -> Vec<Template> {
             vec![],
             "-- 在这里写程序，例如：\n-- say(\"该买眼了\")",
         ),
+        Template {
+            on: Some(EventTrigger {
+                event: vec![
+                    format!("{ONEDRAGON_PRESET}.run_finished"),
+                    format!("{ONEDRAGON_PRESET}.run_failed"),
+                ],
+                game: Some("zzz".into()),
+                matches: Map::new(),
+                for_seconds: 0,
+                mode: crate::games::RunMode::Single,
+                once_per_match: false,
+                cooldown_seconds: 0,
+                enabled: true,
+            }),
+            preset: Some(ONEDRAGON_PRESET.into()),
+            ..template(
+                "onedragon-push",
+                "一条龙跑完推一行",
+                "绝区零一条龙跑完或出错时，在 Kotone 聊天里记一行、悬浮窗显示一行；不出声，不调用 AI。要先加绝区零一条龙插件，并在它的「设置 → 事件」里打开“跑完了”“出错了”。",
+                vec![text("to", "现在的状态（事件自动填）", 20, "success")],
+                ONEDRAGON_SOURCE,
+            )
+        },
     ]
 }
 
@@ -2448,7 +2494,29 @@ mod tests {
     fn templates_are_valid_drafts() {
         let all = templates();
         let ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["say", "push", "ask", "blank"]);
+        assert_eq!(ids, ["say", "push", "ask", "blank", "onedragon-push"]);
+        // 一条龙的事件由第三方插件登记（宿主按它的清单并进目录）：这里照预设的写法登记一份
+        let mut events = EventCatalog::generic();
+        for (name, label) in [
+            ("run_finished", "一条龙跑完了"),
+            ("run_failed", "一条龙出错了"),
+        ] {
+            events
+                .add(crate::games::CatalogEntry {
+                    spec: crate::games::EventSpec {
+                        kind: format!("{ONEDRAGON_PRESET}.{name}"),
+                        label: label.into(),
+                        data: [("to".to_string(), "现在的状态".to_string())].into(),
+                        needs: Vec::new(),
+                        private: Vec::new(),
+                    },
+                    adapter: ONEDRAGON_PRESET.into(),
+                    plugin: Some((ONEDRAGON_PRESET.into(), ONEDRAGON_PRESET.into())),
+                    games: vec!["zzz".into()],
+                    off: None,
+                })
+                .unwrap();
+        }
         for t in &all {
             let draft = AutomationDraft {
                 id: None,
@@ -2459,10 +2527,33 @@ mod tests {
                     source: t.source.clone(),
                 }),
                 schedule: None,
-                on: None,
+                on: t.on.clone(),
             }
-            .normalized(&EventCatalog::generic())
+            .normalized(&events)
             .unwrap_or_else(|e| panic!("{}: {e}", t.id));
+            assert_eq!(t.on.is_some(), t.preset.is_some(), "{}", t.id);
+            if let Some(on) = &draft.on {
+                assert!(on.enabled, "选了模板就是要它：触发开着");
+                let event = GameEvent {
+                    id: "e".into(),
+                    kind: on.event[1].clone(),
+                    game: "zzz".into(),
+                    match_id: String::new(),
+                    time: 0,
+                    game_time: None,
+                    source: "third-party/zzz-onedragon".into(),
+                    data: [
+                        ("from".to_string(), json!("running")),
+                        ("to".to_string(), json!("failed")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                };
+                assert!(crate::games::trigger_matches(on, &event));
+                let args = event_args(&draft.params, &event);
+                assert_eq!(args["to"], "failed", "事件的 to 填进参数");
+                validate_args(&draft.params, &args).unwrap();
+            }
             validate_args(&draft.params, &Map::new()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
             let uses = ProgramUses::of(&t.source);
             assert!(!uses.window, "模板都不用游戏窗口：{}", t.id);

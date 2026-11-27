@@ -1,11 +1,12 @@
 //! 游戏 profile：CRUD + 前台进程匹配（docs/development.md §5.1、§5.4）
 //! 存储：~/.kotone/profiles/<id>.json
 //!
-//! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘五个 profile：
+//! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘六个 profile：
 //! - `lol`：League of Legends（§5.4 示例值，delay 20/20/100，Unicode 逐字）
 //! - `dota2`：Dota 2（同上默认值；Enter 队伍频道、Shift+Enter 所有人）
 //! - `cs2`：Counter-Strike 2（ADR 032；U 队伍、Y 所有人、Enter 发送，资料值待核对）
 //! - `genshin`：原神（ADR 047 第 3 期；国服、国际服两个进程名，聊天键资料值待核对）
+//! - `zzz`：绝区零（ADR 047 第 2 期，一条龙插件的观察项只在它开着时查；聊天键资料值待核对）
 //! - `generic`：通用，匹配任意前台窗口（processNames 为空 = 通配）
 
 use std::path::{Path, PathBuf};
@@ -302,6 +303,17 @@ impl GameProfile {
             .clone()
     }
 
+    /// 内置绝区零 profile（ADR 047 第 2 期：绝区零一条龙插件的观察项只在游戏开着时查，游戏中心靠它认 ZenlessZoneZero.exe）。
+    /// 聊天键和延时是资料值，没在装了绝区零的机器上核对。玩家删了就不再装回（同 CS2）。
+    pub fn builtin_zzz() -> Self {
+        static PROFILE: OnceLock<GameProfile> = OnceLock::new();
+        PROFILE
+            .get_or_init(|| {
+                parse_builtin_profile("zzz", include_str!("../resources/profiles/zzz.json"))
+            })
+            .clone()
+    }
+
     /// 内置通用 profile。内容由 resources/profiles/generic.json 维护。
     pub fn builtin_generic() -> Self {
         static PROFILE: OnceLock<GameProfile> = OnceLock::new();
@@ -431,6 +443,7 @@ fn deletion_marker(id: &str) -> Option<&'static str> {
         "dota2" => Some(DOTA2_DELETION_MARKER),
         "cs2" => Some(".cs2-deleted"),
         "genshin" => Some(".genshin-deleted"),
+        "zzz" => Some(".zzz-deleted"),
         _ => None,
     }
 }
@@ -446,6 +459,10 @@ pub fn builtin_cs2_is_deleted() -> bool {
 
 pub fn builtin_genshin_is_deleted() -> bool {
     builtin_is_deleted_in(&profiles_dir(), "genshin")
+}
+
+pub fn builtin_zzz_is_deleted() -> bool {
+    builtin_is_deleted_in(&profiles_dir(), "zzz")
 }
 
 pub fn builtin_dota2_is_deleted() -> bool {
@@ -526,6 +543,7 @@ pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
         GameProfile::builtin_dota2(),
         GameProfile::builtin_cs2(),
         GameProfile::builtin_genshin(),
+        GameProfile::builtin_zzz(),
         GameProfile::builtin_generic(),
     ] {
         if builtin_is_deleted_in(dir, &p.id) {
@@ -1476,6 +1494,29 @@ mod dota2_upgrade_tests {
         assert!(save_in(dir, &GameProfile::builtin_genshin()).is_err());
         assert!(get_in(dir, "cs2").is_some());
     }
+
+    /// 绝区零（ADR 047 第 2 期）：装一次；玩家删了就不再装回、存不进来，不影响别的内置配置。
+    #[test]
+    fn bundled_zzz_is_installed_once_and_stays_deleted() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path();
+        ensure_builtin_in(dir).unwrap();
+        let zzz = get_in(dir, "zzz").unwrap();
+        validate_profile(&zzz).unwrap();
+        assert!(matches_process(&zzz, "ZenlessZoneZero.exe"));
+        let mut sorted = zzz.hotwords.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), zzz.hotwords.len(), "内置热词不应有重复");
+        assert!(matches!(
+            delete_profile_in(dir, "zzz").unwrap(),
+            ProfileDeleteOutcome::Deleted
+        ));
+        ensure_builtin_in(dir).unwrap();
+        assert!(get_in(dir, "zzz").is_none());
+        assert!(save_in(dir, &GameProfile::builtin_zzz()).is_err());
+        assert!(get_in(dir, "cs2").is_some());
+    }
 }
 
 #[cfg(test)]
@@ -1702,13 +1743,13 @@ mod tests {
         let mut all = list_in(&dir);
         assert_eq!(
             all.len(),
-            5,
-            "首次运行落盘 lol + dota2 + cs2 + genshin + generic"
+            6,
+            "首次运行落盘 lol + dota2 + cs2 + genshin + zzz + generic"
         );
         // 再跑一遍不重复、不覆盖
         ensure_builtin_in(&dir).unwrap();
         all = list_in(&dir);
-        assert_eq!(all.len(), 5);
+        assert_eq!(all.len(), 6);
 
         let mut custom = GameProfile::builtin_lol();
         custom.id = "valorant".into();
@@ -1718,7 +1759,7 @@ mod tests {
 
         let loaded = get_in(&dir, "valorant").unwrap();
         assert_eq!(loaded.display_name, "Valorant");
-        assert_eq!(list_in(&dir).len(), 6);
+        assert_eq!(list_in(&dir).len(), 7);
     }
 
     #[test]

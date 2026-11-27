@@ -17,13 +17,19 @@
 //!   从哪来、不认识的字段和问题；`games` 进插件的 `Manifest`（游戏页靠它）。清单是连上以后才到的：服务器给的
 //!   清单变了（[`watch_manifest`]）或者玩家点“重新读 mcp.json”时，`games` 对不上的插件换一个（同一个连接，
 //!   `RemotePlugin::refreshed`）。
+//! - **观察项和第三方事件**（ADR 047 D5，`kotone_remote_plugin::watch`）：插件定时调只读工具、比较，产生的事件经
+//!   [`RemoteHost`] 的 `game_event` 进游戏中心（只收清单里登记过的，[`accepts_event`]），**只交给自动化**的“当……的时候”
+//!   （`games::push_third_party`：不进她看的最近几件事、不推送、不进对局复盘），来源是 `third-party/<插件 id>`。
+//!   插件页“事件”一块的开关、确认、重试、玩家自己加的观察项是这里的命令（`remote_watch_*`）；开着哪些游戏由游戏中心告诉它。
+//!   事件目录（自动化保存校验、界面的选择）里的第三方事件由 [`catalog_entries`] 给。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use kotone_core::games::Observation;
+use kotone_core::games::{CatalogEntry, EventSpec, Observation};
 use kotone_plugin_api::{BoxFuture, Host, Offer, Plugin};
+use kotone_remote_plugin::manifest::{Effective, Source};
 use kotone_remote_plugin::{McpFile, RemotePlugin, ServerSpec};
 use serde_json::{json, Map, Value};
 use tauri::AppHandle;
@@ -221,19 +227,37 @@ impl Host for RemoteHost {
         None
     }
 
-    /// 不给第三方往游戏中心报事（以后要给也是单向门，先不开）。
+    /// 不给第三方报游戏的阶段（以后要给也是单向门，先不开）。
     fn game_observe(&self, _game: &str, _observation: Observation) {}
 
     fn game_claim(&self, _game: &str, _claimed: bool) {}
 
+    /// 观察项产生的事（ADR 047 D5）：只收它清单里登记过的 `<插件 id>.<名字>`，来源一律记成 `third-party/<插件 id>`，
+    /// **只交给自动化**（`games::push_third_party`）。游戏没开也收（`games` 为空的插件、游戏刚退出的宽限期）。
     fn game_event(
         &self,
-        _game: &str,
-        _kind: &str,
+        game: &str,
+        kind: &str,
         _source: &str,
-        _data: Map<String, Value>,
+        data: Map<String, Value>,
         _game_time: Option<f64>,
     ) {
+        let Some(plugin) = find(&self.id).filter(|_| !builtin(&self.id)) else {
+            return;
+        };
+        if !accepts_event(&plugin.kotone_manifest(), &self.id, kind) {
+            kotone_core::log::log(&format!(
+                "第三方插件 {} 报了没登记的事件 {kind}，没收",
+                self.id
+            ));
+            return;
+        }
+        let source = format!(
+            "{}{}",
+            kotone_remote_plugin::watch::EVENT_SOURCE_PREFIX,
+            self.id
+        );
+        crate::games::push_third_party(&self.app, game, kind, &source, data);
     }
 
     fn secret(&self, name: &str) -> Option<String> {
@@ -247,6 +271,52 @@ impl Host for RemoteHost {
     fn delete_secret(&self, name: &str) {
         delete_secret(&self.id, name)
     }
+}
+
+/// 第三方插件报的这件事是它清单里登记过的（`<插件 id>.<名字>`，照内置插件的 `declares_event`）。
+pub fn accepts_event(effective: &Effective, id: &str, kind: &str) -> bool {
+    kind.strip_prefix(id)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .is_some_and(|name| effective.manifest.events.iter().any(|e| e.name == name))
+}
+
+/// 事件目录里的第三方事件（ADR 047 D5）：每个第三方插件清单里登记的事件，`<插件 id>.<名字>`，挂在清单的 `games` 上
+/// （空 = 不挂在哪个游戏上）。第三方插件没有适配器，范围就是插件 id（和语音输入一样，ADR 043 D10）。
+/// 现在为什么不会发生（插件关着、观察项没打开、要重新确认、没信任、没有观察项）照 `Watcher::event_off`。
+pub fn catalog_entries(settings: &kotone_core::settings::Settings) -> Vec<CatalogEntry> {
+    plugins()
+        .iter()
+        .flat_map(|plugin| {
+            let id = plugin.manifest().id.clone();
+            let effective = plugin.kotone_manifest();
+            let enabled = settings.plugin_enabled(&id, true);
+            let plugin_settings = settings
+                .plugins
+                .get(&id)
+                .map(|p| Value::Object(p.settings.clone()))
+                .unwrap_or_else(|| json!({}));
+            effective
+                .manifest
+                .events
+                .iter()
+                .map(|event| CatalogEntry {
+                    spec: EventSpec {
+                        kind: kotone_remote_plugin::manifest::event_type(&id, &event.name),
+                        label: event.label.clone(),
+                        data: event.data.clone(),
+                        needs: Vec::new(),
+                        private: Vec::new(),
+                    },
+                    adapter: id.clone(),
+                    plugin: Some((id.clone(), id.clone())),
+                    games: effective.manifest.games.clone(),
+                    off: plugin
+                        .watcher()
+                        .event_off(&plugin_settings, enabled, &event.name),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// 第三方插件的宿主。
@@ -329,6 +399,10 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
             Some(plugin) => next.push(plugin.clone()),
             None => {
                 let plugin = Arc::new(RemotePlugin::new(&id, spec, Some(data_dir(&id)), &version));
+                // 挂在游戏上的观察项只在游戏开着时查：开着哪些游戏看游戏中心
+                plugin.set_games_probe(Arc::new(|| {
+                    crate::games::states().into_iter().map(|s| s.game).collect()
+                }));
                 started.push(plugin.clone());
                 next.push(plugin);
             }
@@ -538,6 +612,12 @@ pub fn describe(plugin: &RemotePlugin) -> Value {
     }
     out["fingerprint"] = json!(server.fingerprint());
     out["kotoneManifest"] = describe_manifest(plugin);
+    // 插件页“事件”一块：每个观察项的样子（开关、确认要的指纹、在查 / 停了……）；停下的那个另给卡片上用
+    out["watches"] = Value::Array(plugin.watcher().view());
+    out["watchStopped"] = match plugin.watcher().stopped() {
+        Some((label, reason)) => json!({"label": label, "reason": reason}),
+        None => Value::Null,
+    };
     // 一页工具列表（没有 MCP App 的第三方插件，点卡片看到的就是它）：服务器说的名字、说明（剥过字、限长）、
     // 标没标只读、给谁
     let known = server.known();
@@ -574,7 +654,11 @@ pub fn preview(
     } else {
         name.to_string()
     };
-    let id = kotone_remote_plugin::import::suggest_id(&name, &|id| {
+    // Kotone 带了预设的服务器（绝区零一条龙）：建议用预设的 id（自动化模板按它找插件；原来的名字照样显示）
+    let url = entry.get("url").and_then(Value::as_str);
+    let preferred =
+        kotone_remote_plugin::manifest::preset_id(url, None).unwrap_or_else(|| name.clone());
+    let id = kotone_remote_plugin::import::suggest_id(&preferred, &|id| {
         taken(id) || check_new_id(id).is_err()
     });
     let (clean, secrets) = kotone_remote_plugin::import::split_secrets(entry);
@@ -598,6 +682,182 @@ pub fn preview(
         Err(error) => out["error"] = json!(error),
     }
     out
+}
+
+// ---------- 插件页“事件”一块（ADR 047 D5） ----------
+
+fn remote(id: &str) -> Result<Arc<RemotePlugin>, String> {
+    find(id)
+        .filter(|_| !builtin(id))
+        .ok_or_else(|| format!("没有第三方插件 {id}"))
+}
+
+fn watch_view(plugin: &RemotePlugin, event: &str) -> Result<Value, String> {
+    plugin
+        .watcher()
+        .view()
+        .into_iter()
+        .find(|w| w["event"] == event)
+        .ok_or_else(|| format!("没有观察项 {event}（清单刚变过：刷新一下）"))
+}
+
+/// 写进插件设置 `watches.<事件名>`（和信任一样经设置保存；保存后插件对一遍设置、观察项马上看一遍）。
+fn save_choice(app: &AppHandle, id: &str, event: &str, value: Value) -> Result<(), String> {
+    crate::settings_cmd::update_settings_from_backend(
+        app,
+        json!({"plugins": {id: {"settings": {kotone_remote_plugin::watch::SETTINGS_KEY: {event: value}}}}}),
+    )?;
+    Ok(())
+}
+
+fn item(id: &str) -> Result<Value, String> {
+    let plugin = remote(id)?;
+    Ok(json!({"id": id, "remote": describe(&plugin)}))
+}
+
+/// 观察项的开关。打开：已经确认过这份内容（工具标了只读，或者确认时同意过）的直接开；没确认过的要带上玩家在确认里
+/// 看到的那份内容的指纹（`digest`，和现在的不一样就不认：期间清单变了），工具没标只读的还要 `allowUnmarked`（玩家在确认里
+/// 明确同意定时调它）。关掉：只记“关”，确认留着（再开不用再确认）。
+#[tauri::command]
+pub fn remote_watch_set(
+    app: AppHandle,
+    id: String,
+    event: String,
+    on: bool,
+    digest: Option<String>,
+    allow_unmarked: Option<bool>,
+) -> Result<Value, String> {
+    let plugin = remote(&id)?;
+    let view = watch_view(&plugin, &event)?;
+    if !on {
+        save_choice(&app, &id, &event, json!({"on": false}))?;
+        return item(&id);
+    }
+    let current = view["digest"].as_str().unwrap_or_default().to_string();
+    let read_only = view["readOnly"] == true;
+    let confirmed = view["confirmed"] == true && (read_only || view["allowUnmarked"] == true);
+    if confirmed && digest.as_deref().map_or(true, |d| d == current) {
+        save_choice(&app, &id, &event, json!({"on": true}))?;
+        return item(&id);
+    }
+    let Some(seen) = digest else {
+        return Err("第一次打开要先确认".into());
+    };
+    if seen != current {
+        return Err("这个观察项刚变过：刷新一下，看过现在的内容再打开".into());
+    }
+    let allow = allow_unmarked.unwrap_or(false);
+    if view["readOnly"] == false && !allow {
+        return Err(format!(
+            "工具 {} 没标只读：要在确认里勾上“我同意定时调它”",
+            view["tool"].as_str().unwrap_or_default()
+        ));
+    }
+    save_choice(
+        &app,
+        &id,
+        &event,
+        json!({"on": true, "confirmed": current, "allowUnmarked": allow}),
+    )?;
+    item(&id)
+}
+
+/// 停下的观察项再试（连续失败停下以后，玩家点“重试”）。
+#[tauri::command]
+pub fn remote_watch_retry(id: String, event: String) -> Result<Value, String> {
+    let plugin = remote(&id)?;
+    plugin.watcher().retry(&event);
+    item(&id)
+}
+
+/// 玩家自己加一个观察项：事件和观察项写进本地的 `manifest.json`（插件标准的同一个格式，只加），加完就开
+/// （加的时候确认过：说清楚会每 N 秒调它的哪个工具；工具没标只读的要 `allowUnmarked`）。
+/// `spec`：`{name, label, tool, arguments, everySeconds, compare, field, to, list, idField, data}`。
+#[tauri::command]
+pub fn remote_watch_add(app: AppHandle, id: String, spec: Value) -> Result<Value, String> {
+    let plugin = remote(&id)?;
+    let effective = plugin.kotone_manifest();
+    let text = |key: &str| {
+        spec.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let name = text("name");
+    let tool = text("tool");
+    let tools = plugin.server().known().tools;
+    let found = tools.iter().find(|t| t.name == tool);
+    if !tools.is_empty() && found.is_none() {
+        return Err(format!("服务器上没有工具 {tool}"));
+    }
+    let allow = spec.get("allowUnmarked").and_then(Value::as_bool) == Some(true);
+    if found.is_some_and(|t| !kotone_remote_plugin::tools::read_only(t)) && !allow {
+        return Err(format!("工具 {tool} 没标只读：要勾上“我同意定时调它”"));
+    }
+    let compare = text("compare");
+    let mut data = spec
+        .get("data")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut watch = json!({
+        "event": name,
+        "tool": tool,
+        "arguments": spec.get("arguments").cloned().unwrap_or_else(|| json!({})),
+        "everySeconds": spec.get("everySeconds").cloned().unwrap_or(json!(kotone_remote_plugin::manifest::DEFAULT_EVERY)),
+        "compare": compare,
+    });
+    if compare == "changed" {
+        watch["field"] = json!(text("field"));
+        let to: Vec<String> = text("to")
+            .split([',', '，', '、'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        if !to.is_empty() {
+            watch["to"] = json!(to);
+        }
+        data.entry("from").or_insert_with(|| json!("之前的值"));
+        data.entry("to").or_insert_with(|| json!("现在的值"));
+    } else {
+        if !text("list").is_empty() {
+            watch["list"] = json!(text("list"));
+        }
+        if !text("idField").is_empty() {
+            watch["id"] = json!(text("idField"));
+        }
+    }
+    let event = json!({"name": name, "label": text("label"), "data": data});
+    let taken: Vec<String> = effective
+        .manifest
+        .events
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    let dir = data_dir(&id);
+    let (decl, parsed) = kotone_remote_plugin::manifest::add_local(&dir, event, watch, &taken)?;
+    let digest = kotone_remote_plugin::watch::digest(plugin.server().fingerprint(), &parsed);
+    save_choice(
+        &app,
+        &id,
+        &decl.name,
+        json!({"on": true, "confirmed": digest, "allowUnmarked": allow}),
+    )?;
+    item(&id)
+}
+
+/// 删掉玩家自己加的观察项（连同它的事件；服务器给的、预设的删不了，只能关）。
+#[tauri::command]
+pub fn remote_watch_remove(app: AppHandle, id: String, event: String) -> Result<Value, String> {
+    let plugin = remote(&id)?;
+    if plugin.kotone_manifest().watch_from.get(&event) != Some(&Source::Local) {
+        return Err("只能删你自己加的观察项；服务器给的、Kotone 带的可以关掉".into());
+    }
+    kotone_remote_plugin::manifest::remove_local(&data_dir(&id), &event)?;
+    save_choice(&app, &id, &event, Value::Null)?;
+    item(&id)
 }
 
 /// 测试用：一个记着 `count` 个给她的工具（`t0`…）和一个只给页面的工具（它的页面是 `ui://<id>/app`）的
@@ -730,6 +990,118 @@ mod tests {
         let plugin = test_plugin("described", 1);
         assert_eq!(describe(&plugin)["kotoneManifest"]["source"], "none");
         assert!(plugin.manifest().games.is_empty());
+    }
+
+    /// ADR 047 D5：事件目录里有第三方插件清单登记的事件（`<插件 id>.<名字>`，games 跟清单）；观察项没打开时标着为什么不会发生，
+    /// 打开、确认、信任了就会发生；`game.state` 里那一组标着是第三方的。
+    #[test]
+    fn the_event_catalog_lists_third_party_events() {
+        use kotone_core::settings::Settings;
+        let id = "catalog-zzz";
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(kotone_remote_plugin::manifest::LOCAL_FILE),
+            json!({"games": ["zzz"], "events": [{"name": "run_finished", "label": "一条龙跑完了", "data": {"to": "状态"}},
+                                                 {"name": "no_watch", "label": "没有观察项"}],
+                   "watches": [{"event": "run_finished", "tool": "get_run_status", "compare": "changed", "field": "state"}]})
+            .to_string(),
+        )
+        .unwrap();
+        let spec = ServerSpec::parse(&json!({"url": "http://127.0.0.1:9/mcp"})).unwrap();
+        let fp = spec.fingerprint();
+        let plugin = Arc::new(RemotePlugin::new(
+            id,
+            Ok(spec),
+            Some(dir.path().to_path_buf()),
+            "test",
+        ));
+        insert_for_test(plugin.clone());
+        let mut settings = Settings::default();
+        let catalog = crate::games::event_catalog(&settings);
+        let entry = catalog
+            .get("catalog-zzz.run_finished")
+            .expect("目录里有第三方事件");
+        assert_eq!(entry.games, ["zzz"]);
+        assert_eq!(entry.plugin.as_ref().unwrap().0, id);
+        assert!(
+            entry.off.as_deref().unwrap().contains("没打开"),
+            "{:?}",
+            entry.off
+        );
+        assert!(catalog
+            .get("catalog-zzz.no_watch")
+            .unwrap()
+            .off
+            .as_deref()
+            .unwrap()
+            .contains("没有观察项"));
+        // 打开、确认了这份内容、信任了：会发生
+        let watch = plugin.kotone_manifest().manifest.watches[0].clone();
+        let digest = kotone_remote_plugin::watch::digest(&fp, &watch);
+        let p = settings.plugins.entry(id.into()).or_default();
+        p.settings
+            .insert(kotone_remote_plugin::TRUST_KEY.into(), json!(fp));
+        p.settings.insert(
+            "watches".into(),
+            json!({"run_finished": {"on": true, "confirmed": digest}}),
+        );
+        let on = crate::games::event_catalog(&settings);
+        assert_eq!(on.get("catalog-zzz.run_finished").unwrap().off, None);
+        // 插件关着
+        settings.plugins.entry(id.into()).or_default().enabled = Some(false);
+        let closed = crate::games::event_catalog(&settings);
+        assert!(closed
+            .get("catalog-zzz.run_finished")
+            .unwrap()
+            .off
+            .as_deref()
+            .unwrap()
+            .contains("插件关着"));
+        remove_for_test(id);
+    }
+
+    /// ADR 047 D5：只收清单里登记过的第三方事件（`<插件 id>.<名字>`），别的插件的前缀、没登记的名字都不收。
+    #[test]
+    fn only_declared_third_party_events_are_accepted() {
+        use kotone_remote_plugin::manifest;
+        let effective = manifest::merge(
+            Some(manifest::parse_text(
+                &json!({"events": [{"name": "run_finished", "label": "跑完了"}]}).to_string(),
+            )),
+            None,
+            None,
+        );
+        assert!(accepts_event(&effective, "zzz-od", "zzz-od.run_finished"));
+        assert!(
+            !accepts_event(&effective, "zzz-od", "zzz-od.run_failed"),
+            "没登记"
+        );
+        assert!(
+            !accepts_event(&effective, "zzz-od", "lol.run_finished"),
+            "别人的前缀"
+        );
+        assert!(!accepts_event(&effective, "zzz-od", "zzz-odrun_finished"));
+        assert!(!accepts_event(&effective, "zzz", "zzz-od.run_finished"));
+    }
+
+    /// 导入一条龙（默认地址）时建议用预设的 id：自动化模板按它找插件。
+    #[test]
+    fn importing_onedragon_suggests_the_preset_id() {
+        let p = preview(
+            "zzz_od",
+            &json!({"type": "http", "url": "http://127.0.0.1:23001/mcp"}),
+            &[],
+            &|_| false,
+        );
+        assert_eq!(p["id"], "zzz-onedragon");
+        assert_eq!(p["name"], "zzz_od", "原来的名字照样显示");
+        let other = preview(
+            "zzz_od",
+            &json!({"url": "http://127.0.0.1:23002/mcp"}),
+            &[],
+            &|_| false,
+        );
+        assert_eq!(other["id"], "zzz-od");
     }
 
     #[test]

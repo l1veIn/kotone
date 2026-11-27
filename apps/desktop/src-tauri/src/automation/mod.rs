@@ -1345,7 +1345,7 @@ mod tests {
             .iter()
             .map(|t| t["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, ["say", "push", "ask", "blank"]);
+        assert_eq!(ids, ["say", "push", "ask", "blank", "onedragon-push"]);
         for t in templates.as_array().unwrap() {
             for key in ["name", "description", "params", "source"] {
                 assert!(t.get(key).is_some(), "{key}");

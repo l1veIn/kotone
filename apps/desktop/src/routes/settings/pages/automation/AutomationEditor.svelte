@@ -4,6 +4,8 @@
   // 按键类不另做模板：在列表里复制内置的按键程序改。程序在后端检查语法，参数声明在后端校验；这里只做基本输入。
   // 程序里调的工具（ADR 046 D9）：改程序时防抖查一次，程序下面一行“会调用：…”；有要你允许的，存的按钮变成“允许并保存”
   // （改了程序的要再允许一次）；调不了的写原因，照样能存。
+  // 带触发的模板（“一条龙跑完推一行”，ADR 047 第 2 期）：要的第三方插件按 Kotone 预设认（`pluginForPreset`），没加这个插件不列；
+  // 选了就照它填好“当……的时候”（事件名的插件 id 换成玩家起的那个）。
   import { untrack, onMount } from "svelte";
   import { BellRing, Code, Sparkles, Volume2 } from "@lucide/svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
@@ -14,6 +16,7 @@
   } from "../../../../lib/automation";
   import { eventCatalog, eventLabel, eventsFor, phaseLabel, TRIGGER_PHASES } from "../../../../lib/gameEvents";
   import { pluginsStore } from "../../../../lib/plugins";
+  import { pluginForPreset } from "../../../../lib/mcpServers";
   import { listProfiles } from "../../../../lib/ipc";
   import type { GameProfile } from "../../../../lib/ipc/contracts";
   import { companionName } from "$lib/stores/companion";
@@ -68,6 +71,8 @@
   let onHold = $state(initialOn?.for ?? 0);
   let onOnce = $state(initialOn?.oncePerMatch ?? true);
   let onCooldown = $state(initialOn?.cooldownSeconds ?? 0);
+  // 选的模板带的触发（事件名已换成玩家的插件 id）：和存着的触发一样，界面只编辑第一种事件，其余原样保存
+  let pickedOn = $state<EventTrigger | null>(null);
   let profiles = $state<GameProfile[]>([]);
   const games = $derived(profiles.filter((p) => p.processNames.length > 0));
   // 事件目录：本体的 game.* + 插件登记的（插件关着的不在选择里；已经选了的照样显示，旁边说清楚不会发生）
@@ -108,6 +113,9 @@
     return () => clearTimeout(timer);
   });
 
+  /** 能选的模板：要第三方插件的，只在加了用着那份预设的插件时列出来。 */
+  const shownTemplates = $derived(templates.filter((t) => !t.preset || !!pluginForPreset(t.preset, $pluginsStore)));
+
   /** 模板的名字和说明按 id 取文案；不认得的 id（以后加的）用后端给的。 */
   function templateText(t: AutomationTemplate): { name: string; description: string } {
     switch (t.id) {
@@ -115,10 +123,11 @@
       case "push": return { name: m.auto_template_push(), description: m.auto_template_push_desc() };
       case "ask": return { name: m.auto_template_ask({ name: $companionName }), description: m.auto_template_ask_desc({ name: $companionName, max: ASKS_PER_MATCH }) };
       case "blank": return { name: m.auto_template_blank(), description: m.auto_template_blank_desc() };
+      case "onedragon-push": return { name: m.auto_template_onedragon(), description: m.auto_template_onedragon_desc() };
       default: return { name: t.name, description: t.description };
     }
   }
-  const ICONS: Record<string, typeof Code> = { say: Volume2, push: BellRing, ask: Sparkles, blank: Code };
+  const ICONS: Record<string, typeof Code> = { say: Volume2, push: BellRing, ask: Sparkles, blank: Code, "onedragon-push": BellRing };
 
   function pick(t: AutomationTemplate) {
     picked = t;
@@ -126,6 +135,19 @@
     params = $state.snapshot(t.params) as ParamSpec[];
     source = t.source;
     showSource = !t.params.length;
+    if (t.on) {
+      // 事件名里的插件 id 换成玩家加的那个（第三方插件的 id 是玩家起的）
+      const preset = t.preset;
+      const owner = preset ? pluginForPreset(preset, $pluginsStore)?.manifest.id : null;
+      const on = $state.snapshot(t.on) as EventTrigger;
+      if (owner && preset) on.event = on.event.map((e) => (e.startsWith(`${preset}.`) ? `${owner}${e.slice(preset.length)}` : e));
+      pickedOn = on;
+      triggered = on.enabled;
+      onGame = on.game ?? "";
+      onEvent = on.event[0];
+      onOnce = on.oncePerMatch ?? false;
+      onCooldown = on.cooldownSeconds ?? 0;
+    }
     picking = false;
   }
 
@@ -140,18 +162,19 @@
   }
 
   function trigger(): EventTrigger | null {
-    if (!triggered && !initialOn) return null;
+    if (!triggered && !initialOn && !pickedOn) return null;
     const match: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(initialMatch)) {
       if (key !== "to" && key !== "team") match[key] = value;
     }
     if (onEvent === "game.phase_changed") match.to = onPhase;
     if (teamEvent && onTeam) match.team = onTeam;
-    const keepEvents = initialOn && initialOn.event[0] === onEvent ? initialOn.event : [onEvent];
+    const multi = initialOn ?? pickedOn;
+    const keepEvents = multi && multi.event[0] === onEvent ? multi.event : [onEvent];
     return {
       event: keepEvents, game: onGame || null, match,
       for: onEvent === "game.phase_changed" ? Math.max(0, Math.round(Number(onHold) || 0)) : 0,
-      mode: initialOn?.mode ?? "single", oncePerMatch: onOnce,
+      mode: multi?.mode ?? "single", oncePerMatch: onOnce,
       cooldownSeconds: Math.max(0, Math.round(Number(onCooldown) || 0)), enabled: triggered,
     };
   }
@@ -271,7 +294,7 @@
     <h2 class="m-0 text-[15px] font-semibold">{m.auto_editor_title_new()}</h2>
     <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.auto_editor_template_hint()}</p>
     <div class="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-      {#each templates as t (t.id)}
+      {#each shownTemplates as t (t.id)}
         {@const text = templateText(t)}
         {@const Icon = ICONS[t.id] ?? Code}
         <button type="button" class="template" onclick={() => pick(t)} data-testid="automation-template" data-template={t.id}>

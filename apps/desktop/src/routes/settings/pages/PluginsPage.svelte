@@ -66,6 +66,8 @@
     if (remote.keys.some((k) => !k.filled)) return { text: m.system_mcp_needs_key(), warn: true };
     if (remote.status === "failed") return { text: m.system_mcp_status_failed(), warn: true };
     if (!remote.trusted) return { text: m.system_mcp_untrusted(), warn: true };
+    // 有观察项连续失败停下了（ADR 047 D5）：卡片上也说
+    if (remote.watchStopped) return { text: m.system_mcp_status_watch_stopped({ event: remote.watchStopped.label }), warn: true };
     if (remote.status === "connected") return { text: m.system_mcp_status_connected(), warn: false };
     if (remote.status === "connecting") return { text: m.system_mcp_status_connecting(), warn: false };
     return { text: m.system_mcp_status_not_connected(), warn: false };

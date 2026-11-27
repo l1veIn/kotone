@@ -343,6 +343,38 @@ impl Hub {
         }
         Some(self.event(game, kind, source, data, game_time, now))
     }
+
+    /// 第三方插件的事（ADR 047 D5，`<插件 id>.<名字>`，宿主核对过是它清单里登记的）：**只交给自动化**，
+    /// 不记进最近几件事（她看的 `game.state` 从那里取）；游戏没在跑也收（`games` 为空的插件 `game` 是空的；
+    /// 游戏刚退出的宽限期里还会来）。在跑的话带上这一局的编号。
+    pub fn outside_event(
+        &mut self,
+        game: &str,
+        kind: &str,
+        source: &str,
+        data: Map<String, Value>,
+        now: u64,
+    ) -> GameEvent {
+        self.next_id += 1;
+        GameEvent {
+            id: format!(
+                "{}-{}",
+                if game.is_empty() { "third-party" } else { game },
+                self.next_id
+            ),
+            kind: kind.to_string(),
+            game: game.to_string(),
+            match_id: self
+                .states
+                .get(game)
+                .map(|s| s.match_id.clone())
+                .unwrap_or_default(),
+            time: now,
+            game_time: None,
+            source: source.to_string(),
+            data,
+        }
+    }
 }
 
 // ---------- 能给的事（目录，D4） ----------

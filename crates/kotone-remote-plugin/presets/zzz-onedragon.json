@@ -1,0 +1,55 @@
+{
+  "id": "zzz-onedragon",
+  "match": {
+    "url": "http://127.0.0.1:23001/mcp",
+    "name": "zzz_od"
+  },
+  "manifest": {
+    "standard": "0.1",
+    "games": ["zzz"],
+    "events": [
+      {
+        "name": "run_finished",
+        "label": "一条龙跑完了",
+        "data": {
+          "from": "之前的状态（一般是 running）",
+          "to": "现在的状态：success",
+          "app": "跑的是哪个（一条龙里的应用名，例如 OpenAndEnterGame）",
+          "lastStatus": "它说的结果（可能为空）",
+          "durationSeconds": "跑了多少秒"
+        }
+      },
+      {
+        "name": "run_failed",
+        "label": "一条龙出错了",
+        "data": {
+          "from": "之前的状态（一般是 running）",
+          "to": "现在的状态：failed",
+          "app": "跑的是哪个（一条龙里的应用名）",
+          "lastStatus": "它说的失败原因（可能为空）",
+          "failedNode": "停在哪一步（可能为空）",
+          "durationSeconds": "跑了多少秒"
+        }
+      }
+    ],
+    "watches": [
+      {
+        "event": "run_finished",
+        "tool": "get_run_status",
+        "everySeconds": 30,
+        "compare": "changed",
+        "field": "state",
+        "to": "success"
+      },
+      {
+        "event": "run_failed",
+        "tool": "get_run_status",
+        "everySeconds": 30,
+        "compare": "changed",
+        "field": "state",
+        "to": "failed"
+      }
+    ],
+    "risk": "绝区零一条龙（ZenlessZoneZero-OneDragon）是别人写的脚本，会替你操作游戏（点击、按键、自动战斗）。用脚本代替手动游玩可能违反米哈游的用户协议，有封号风险，由你自己决定。Kotone 只查它的运行状态（get_run_status，只读），不替它按键；它的其他工具（打开游戏、运行一条龙、点击）只有你或她明确要用时才会调，第一次会问你。"
+  }
+}

@@ -136,13 +136,17 @@ export function unusableTools(tools: ProgramTool[]): ProgramTool[] {
   return tools.filter((t) => t.state === "off" || t.state === "blocked");
 }
 
-/** 新建时选的模板（ADR 045 D9）：说一句 / 推送一条 / 让她做 / 空白程序。名字和说明界面按 id 取文案。 */
+/** 新建时选的模板（ADR 045 D9）：说一句 / 推送一条 / 让她做 / 空白程序，和带触发的“一条龙跑完推一行”。名字和说明界面按 id 取文案。 */
 export interface AutomationTemplate {
   id: string;
   name: string;
   description: string;
   params: ParamSpec[];
   source: string;
+  /** 带好的“当……的时候”（没有 = 新建时自己选）。 */
+  on?: EventTrigger;
+  /** 要哪个第三方插件：Kotone 预设的 id（`zzz-onedragon`）；触发里的事件名以它开头，界面换成用着这份预设的插件的 id。 */
+  preset?: string;
 }
 
 /** `automation_saved_list` 的结果。 */
@@ -378,6 +382,12 @@ const previewTemplates: AutomationTemplate[] = [
     params: [{ name: "request", label: "让她做什么", description: "", type: "text", maxLength: 200, default: "看看现在的情况，用一句话告诉我该注意什么" }], source: "ask(args.request)\n" },
   { id: "blank", name: "空白程序", description: "自己写一段程序。要通知就写 say / toast / push，不写就安静；按键类可以复制内置的程序。",
     params: [], source: "-- 在这里写程序，例如：\n-- say(\"该买眼了\")\n" },
+  { id: "onedragon-push", name: "一条龙跑完推一行",
+    description: "绝区零一条龙跑完或出错时，在 Kotone 聊天里记一行、悬浮窗显示一行；不出声，不调用 AI。要先加绝区零一条龙插件，并在它的「设置 → 事件」里打开“跑完了”“出错了”。",
+    params: [{ name: "to", label: "现在的状态（事件自动填）", description: "", type: "text", maxLength: 20, default: "success" }],
+    source: "-- 绝区零一条龙跑完 / 出错时推一行（args.to 由事件自动填上：success 或 failed）\nif args.to == \"failed\" then\n  push(\"绝区零一条龙出错了，去看看\")\nelse\n  push(\"绝区零一条龙跑完了\")\nend\n",
+    on: { event: ["zzz-onedragon.run_finished", "zzz-onedragon.run_failed"], game: "zzz", match: {}, for: 0, mode: "single", oncePerMatch: false, cooldownSeconds: 0, enabled: true },
+    preset: "zzz-onedragon" },
 ];
 // i18n-ignore-end
 

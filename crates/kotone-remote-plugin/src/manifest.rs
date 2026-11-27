@@ -9,7 +9,8 @@
 //!   不合格的条目丢掉，都列进“问题”。整份不是 JSON 对象、超过 [`MAX_BYTES`] = 没给清单。
 //! - 内置插件的 `plugin.toml` 不走这里（照旧 `deny_unknown_fields`，ADR 047 D1：内层不是标准）。
 //!
-//! 观察项这一期只解析（[`Watch`]），轮询、比较、发事件在第 2 期（契约第 3 节的数在这里：[`LOCAL_FLOOR`] 等）。
+//! 观察项在这里解析（[`Watch`]），轮询、比较、发事件在 [`crate::watch`]（契约第 3 节的数在这里：[`LOCAL_FLOOR`] 等）。
+//! 玩家在插件页“事件”一块里自己加的观察项写进本地文件（[`add_local`]、[`remove_local`]）。
 //!
 //! 照谁做：读法照 MCP 自己的“不认识的字段忽略”和 VS Code 扩展清单（`engines` 写最低版本）；
 //! 观察项照 Home Assistant 的 REST 传感器、Zapier / n8n 的轮询触发（ADR 047 D5）。
@@ -47,15 +48,15 @@ pub const DEFAULT_EVERY: u64 = 60;
 pub const LOCAL_FLOOR: u64 = 10;
 /// 间隔下限：别的网址；`games` 为空（一直轮询）时也用它。
 pub const REMOTE_FLOOR: u64 = 60;
-/// 第 2 期用：`new` 记底的 id 最多存多少个（旧的丢掉）。
+/// `new` 记底的 id 最多存多少个（旧的丢掉）。
 pub const MAX_SEEN_IDS: usize = 500;
-/// 第 2 期用：事件内容里单个字符串截到多少字。
+/// 事件内容里单个字符串截到多少字。
 pub const MAX_EVENT_TEXT: usize = 500;
-/// 第 2 期用：游戏退出后再查最后一次的宽限。
+/// 游戏退出后再查最后一次的宽限。
 pub const GAME_GRACE: Duration = Duration::from_secs(180);
-/// 第 2 期用：失败退避的上限。
+/// 失败退避的上限。
 pub const MAX_BACKOFF: Duration = Duration::from_secs(600);
-/// 第 2 期用：连续失败几次停下。
+/// 连续失败几次停下。
 pub const MAX_FAILURES: u32 = 5;
 
 /// 生效的清单（几层合起来以后）。
@@ -200,6 +201,11 @@ pub struct Effective {
     pub newer_standard: bool,
     pub unknown: Vec<Note>,
     pub problems: Vec<Note>,
+    /// 每个观察项（按事件名）是哪一层的：预设的才能把文字当 JSON 读，玩家自己加的（`local`）才能在界面上删。
+    pub watch_from: BTreeMap<String, Source>,
+    /// 用上了 Kotone 带的哪份预设（预设的 `id`，如 `zzz-onedragon`；自动化模板按它找插件）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 /// 读一份清单的文字。`Err` = 当没给清单（太大、不是 JSON、不是对象），里面是给插件页的一句话。
@@ -642,6 +648,7 @@ pub fn merge(
     }
     for (from, watch) in watches {
         if out.manifest.events.iter().any(|e| e.name == watch.event) {
+            out.watch_from.insert(watch.event.clone(), from);
             out.manifest.watches.push(watch);
         } else {
             out.problems.push(Note {
@@ -671,10 +678,13 @@ pub fn read_local(dir: &Path) -> Option<Result<Parsed, String>> {
 
 // ---- 预设 ----
 
-/// 一份预设：`{ "match": {...}, "manifest": {...} }`。`match` 只在 Kotone 内部用（不属于标准）。
+/// 一份预设：`{ "id": "...", "match": {...}, "manifest": {...} }`。`id`、`match` 只在 Kotone 内部用（不属于标准）：
+/// `id` 是导入这个服务器时建议的插件 id（自动化模板按它找插件），`match` 认服务器。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PresetFile {
+    #[serde(default)]
+    id: Option<String>,
     #[serde(rename = "match")]
     matcher: Matcher,
     manifest: Value,
@@ -704,8 +714,11 @@ fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D:
     })
 }
 
-/// Kotone 带的预设（文件名、内容，编进程序）。第 2 期在这里加绝区零一条龙那份。
-const PRESETS: &[(&str, &str)] = &[];
+/// Kotone 带的预设（文件名、内容，编进程序）。
+const PRESETS: &[(&str, &str)] = &[(
+    "zzz-onedragon.json",
+    include_str!("../presets/zzz-onedragon.json"),
+)];
 
 /// 只给测试的预设：认 `kotone-mcp` 测试服务器的名字（`kotone-test-server`），正式版里没有。
 #[cfg(test)]
@@ -722,8 +735,8 @@ fn preset_files() -> Vec<(&'static str, &'static str)> {
     files
 }
 
-/// 认得出这个服务器的预设（文件名、读出来的清单）。`url`：HTTP 服务器的网址；`name`：它自报的名字。
-pub fn preset_for(url: Option<&str>, name: Option<&str>) -> Option<(&'static str, Parsed)> {
+/// 认得出这个服务器的那份预设。
+fn matching_preset(url: Option<&str>, name: Option<&str>) -> Option<(&'static str, PresetFile)> {
     let url = url.map(normalize_url);
     preset_files().into_iter().find_map(|(file, text)| {
         let preset: PresetFile = serde_json::from_str(text).ok()?;
@@ -733,13 +746,112 @@ pub fn preset_for(url: Option<&str>, name: Option<&str>) -> Option<(&'static str
         let by_name = name
             .filter(|n| !n.is_empty())
             .is_some_and(|n| preset.matcher.name.iter().any(|m| m == n));
-        if !(by_url || by_name) {
-            return None;
-        }
-        parse_value(&preset.manifest)
-            .ok()
-            .map(|parsed| (file, parsed))
+        (by_url || by_name).then_some((file, preset))
     })
+}
+
+/// 认得出这个服务器的预设（文件名、读出来的清单）。`url`：HTTP 服务器的网址；`name`：它自报的名字。
+pub fn preset_for(url: Option<&str>, name: Option<&str>) -> Option<(&'static str, Parsed)> {
+    let (file, preset) = matching_preset(url, name)?;
+    parse_value(&preset.manifest)
+        .ok()
+        .map(|parsed| (file, parsed))
+}
+
+/// 认得出这个服务器的预设建议的插件 id（导入时用它；预设没写 `id` 时用文件名去掉 `.json`）。
+pub fn preset_id(url: Option<&str>, name: Option<&str>) -> Option<String> {
+    let (file, preset) = matching_preset(url, name)?;
+    Some(
+        preset
+            .id
+            .unwrap_or_else(|| file.trim_end_matches(".json").to_string()),
+    )
+}
+
+// ---- 玩家在插件页里加的观察项（写进本地的 manifest.json） ----
+
+/// 读本地文件原样的 JSON（没有文件 = 空对象）：改的时候不丢玩家手写的别的东西。
+fn local_raw(dir: &Path) -> Result<Map<String, Value>, String> {
+    let path = dir.join(LOCAL_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<Value>(text.trim_start_matches('\u{FEFF}')) {
+            Ok(Value::Object(map)) => Ok(map),
+            Ok(_) | Err(_) => Err(format!(
+                "{LOCAL_FILE} 写坏了（不是一个 JSON 对象），先改好或删掉它：{}",
+                path.display()
+            )),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
+        Err(e) => Err(format!("{LOCAL_FILE} 读不出来：{e}")),
+    }
+}
+
+fn write_local(dir: &Path, map: Map<String, Value>) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("建不了 {}：{e}", dir.display()))?;
+    let text = serde_json::to_string_pretty(&Value::Object(map)).map_err(|e| e.to_string())?;
+    if text.len() > MAX_BYTES {
+        return Err(format!("{LOCAL_FILE} 会超过 64 KiB，加不下了"));
+    }
+    std::fs::write(dir.join(LOCAL_FILE), text + "\n")
+        .map_err(|e| format!("{LOCAL_FILE} 写不进去：{e}"))
+}
+
+/// 玩家在插件页加一个观察项：事件和观察项一起写进本地的 `manifest.json`（只加，同一个格式）。
+/// `event` / `watch` 是清单里的写法（`{"name", "label", "data"}`、`{"event", "tool", ...}`）；先按清单的规矩读一遍，
+/// 有任何问题就不写（界面上说原因）。`taken`：已经有的事件名（服务器的、预设的、本地的）。
+pub fn add_local(
+    dir: &Path,
+    event: Value,
+    watch: Value,
+    taken: &[String],
+) -> Result<(EventDecl, Watch), String> {
+    let parsed =
+        parse_value(&serde_json::json!({"events": [event.clone()], "watches": [watch.clone()]}))?;
+    if let Some(problem) = parsed.problems.first() {
+        return Err(problem.clone());
+    }
+    if let Some(field) = parsed.unknown.first() {
+        return Err(format!("不认识的字段 {field}"));
+    }
+    let (Some(decl), Some(w)) = (
+        parsed.manifest.events.first(),
+        parsed.manifest.watches.first(),
+    ) else {
+        return Err("事件和观察项都要写".into());
+    };
+    if w.event != decl.name {
+        return Err("观察项要发的就是这个事件".into());
+    }
+    if taken.contains(&decl.name) {
+        return Err(format!("已经有叫 {} 的事件了，换一个名字", decl.name));
+    }
+    let mut map = local_raw(dir)?;
+    for (key, item) in [("events", event), ("watches", watch)] {
+        let list = map.entry(key).or_insert_with(|| Value::Array(Vec::new()));
+        match list {
+            Value::Array(items) => items.push(item),
+            _ => return Err(format!("{LOCAL_FILE} 里的 {key} 不是数组，先改好它")),
+        }
+    }
+    write_local(dir, map)?;
+    Ok((decl.clone(), w.clone()))
+}
+
+/// 删掉玩家自己加的一个事件和它的观察项（只动本地的 `manifest.json`）。返回删掉了没有。
+pub fn remove_local(dir: &Path, name: &str) -> Result<bool, String> {
+    let mut map = local_raw(dir)?;
+    let mut removed = false;
+    for (key, field) in [("events", "name"), ("watches", "event")] {
+        if let Some(Value::Array(items)) = map.get_mut(key) {
+            let before = items.len();
+            items.retain(|item| item.get(field).and_then(Value::as_str) != Some(name));
+            removed |= items.len() != before;
+        }
+    }
+    if removed {
+        write_local(dir, map)?;
+    }
+    Ok(removed)
 }
 
 /// 网址规范化（预设按它认）：协议和主机小写、`localhost` 当 `127.0.0.1`、去掉默认端口和末尾的 `/`。

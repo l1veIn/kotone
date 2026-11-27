@@ -1,0 +1,52 @@
+{
+  "id": "zzz",
+  "displayName": "绝区零",
+  "processNames": [
+    "ZenlessZoneZero.exe"
+  ],
+  "windowTitlePatterns": [
+    "^绝区零$",
+    "^ZenlessZoneZero$"
+  ],
+  "openChatKey": "Enter",
+  "sendKey": "Enter",
+  "preOpenDelayMs": 50,
+  "prePasteDelayMs": 50,
+  "preSendDelayMs": 150,
+  "preferClipboardPaste": false,
+  "hotwords": [
+    "绝区零",
+    "一条龙",
+    "绳匠",
+    "代理人",
+    "邦布",
+    "空洞",
+    "零号空洞",
+    "电量",
+    "体力",
+    "储蓄电量",
+    "以太",
+    "驱动盘",
+    "音擎",
+    "调频",
+    "菲林",
+    "母盘",
+    "式舆防卫战",
+    "拟真鏖战试炼",
+    "危局强袭战",
+    "迷失之地",
+    "枯萎之都",
+    "恶名狩猎",
+    "实战模拟室",
+    "专业挑战室",
+    "录像店",
+    "六分街",
+    "刮刮卡",
+    "咖啡",
+    "每日委托",
+    "活跃度",
+    "丽都周纪",
+    "绳网",
+    "信用"
+  ]
+}

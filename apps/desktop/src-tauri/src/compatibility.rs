@@ -40,11 +40,13 @@ fn game_profiles() -> Vec<GameProfile> {
         GameProfile::builtin_dota2(),
         GameProfile::builtin_cs2(),
         GameProfile::builtin_genshin(),
+        GameProfile::builtin_zzz(),
         GameProfile::builtin_generic(),
     ] {
         if (builtin.id == "dota2" && profile::builtin_dota2_is_deleted())
             || (builtin.id == "cs2" && profile::builtin_cs2_is_deleted())
             || (builtin.id == "genshin" && profile::builtin_genshin_is_deleted())
+            || (builtin.id == "zzz" && profile::builtin_zzz_is_deleted())
         {
             continue;
         }

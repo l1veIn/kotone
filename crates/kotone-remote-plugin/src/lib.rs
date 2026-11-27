@@ -14,6 +14,7 @@
 //!
 //! - **Kotone 清单**（[`manifest`]，插件标准 0.1，ADR 047）：服务器的 `kotone://manifest` → Kotone 带的预设 →
 //!   玩家本地的 `manifest.json`；插件挂在哪个游戏上（`Manifest::games`）跟着它。
+//! - **观察项**（[`watch`]，ADR 047 D5）：定时调只读工具、比较、变了就发第三方事件（`<id>.<名字>`），只进自动化。
 //!
 //! 宿主那一半（插件表、给第三方的那份更窄的宿主能力、她的工具清单的数量上限、不进工具服务、
 //! 界面用的命令）在桌面端 `remote_plugins.rs`。
@@ -29,6 +30,7 @@ mod plugin;
 pub mod sanitize;
 mod server;
 pub mod tools;
+pub mod watch;
 
 pub use config::{
     check_id, placeholder, placeholders, valid_key_name, Launch, McpFile, ServerSpec, FILE_NAME,
@@ -40,3 +42,5 @@ pub use tools::{fits_main, EFFECT_ACTION, EFFECT_UNTRUSTED_READ, MAX_MAIN_TOOLS}
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod watch_tests;

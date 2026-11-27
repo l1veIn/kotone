@@ -9,6 +9,8 @@
 //! 连上以后清单变了，宿主看 [`RemotePlugin::games_stale`]，用 [`RemotePlugin::refreshed`] 换一个新的
 //! （同一个连接，不断开）。
 //!
+//! 观察项（[`crate::watch`]）跟着插件开始和设置变化对一遍；它产生的事件经宿主的 `game_event` 只进自动化。
+//!
 //! 第三方插件拿到的宿主能力比内置的窄（ADR 038“不做”：给插件的权力是单向门）：远程插件只用宿主的
 //! 开关、设置（信任记在这里）、凭据库（Key）和后台任务；没有替玩家按键、停下琴音、免问、往聊天里发
 //! 推送（ADR 039 D3、ADR 043）。宿主给它的是一份更窄的 `Host`（桌面端 `remote_plugins.rs` 的 `RemoteHost`），
@@ -22,6 +24,7 @@ use serde_json::Value;
 
 use crate::config::ServerSpec;
 use crate::server::Server;
+use crate::watch::{GamesProbe, Timing, Watcher};
 
 /// 信任记在插件设置的哪个键（`plugins.<id>.settings.trusted` = 信任时那份配置的指纹）。
 pub const TRUST_KEY: &str = "trusted";
@@ -59,6 +62,8 @@ pub fn manifest(id: &str, spec: &Result<ServerSpec, String>) -> Manifest {
 pub struct RemotePlugin {
     manifest: Manifest,
     server: Arc<Server>,
+    /// 观察项（和连接一样，换插件对象时共用）。
+    watcher: Arc<Watcher>,
     /// 上一次看到的开关（None = 还没看过）：从关到开时马上连（“开关打开时连”）。
     switch: Mutex<Option<bool>>,
 }
@@ -72,14 +77,37 @@ impl RemotePlugin {
         data_dir: Option<PathBuf>,
         version: &str,
     ) -> Self {
+        Self::with_timing(id, spec, data_dir, version, Timing::default())
+    }
+
+    /// 同 [`RemotePlugin::new`]，观察项的定时另给（测试把“一秒”调小）。
+    pub fn with_timing(
+        id: &str,
+        spec: Result<ServerSpec, String>,
+        data_dir: Option<PathBuf>,
+        version: &str,
+        timing: Timing,
+    ) -> Self {
         let mut manifest = manifest(id, &spec);
         let server = Arc::new(Server::new(id, spec, data_dir, version));
         manifest.games = server.kotone_manifest().manifest.games;
+        let watcher = Arc::new(Watcher::new(id, server.clone(), timing));
         Self {
             manifest,
             server,
+            watcher,
             switch: Mutex::new(None),
         }
+    }
+
+    /// 观察项（ADR 047 D5）：界面要的样子、重试、事件目录要的“为什么不会发生”都在这里。
+    pub fn watcher(&self) -> &Arc<Watcher> {
+        &self.watcher
+    }
+
+    /// 宿主告诉它现在开着哪些游戏（挂在游戏上的观察项只在游戏开着时查）。
+    pub fn set_games_probe(&self, probe: GamesProbe) {
+        self.watcher.set_games_probe(probe);
     }
 
     pub fn server(&self) -> &Arc<Server> {
@@ -104,6 +132,7 @@ impl RemotePlugin {
         Self {
             manifest,
             server: self.server.clone(),
+            watcher: self.watcher.clone(),
             switch: Mutex::new(*self.switch.lock().unwrap()),
         }
     }
@@ -113,6 +142,8 @@ impl RemotePlugin {
     fn sync(&self, host: Arc<dyn Host>) {
         self.server
             .set_trusted(trusted_in(&host.settings(), self.server.fingerprint()));
+        // 观察项对一下设置（开关、确认、信任）：马上看一遍
+        self.watcher.start(host.clone());
         let on = host.enabled();
         let before = self.switch.lock().unwrap().replace(on);
         let server = self.server.clone();

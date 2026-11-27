@@ -119,6 +119,47 @@ fn focus_and_game_specific_events_only_for_running_games() {
     assert!(envelope["match"].as_str().unwrap().starts_with("demo-"));
 }
 
+/// ADR 047 D5：第三方插件的事只交给自动化：不进最近几件事（她看的 `game.state`）；游戏没在跑也收、触发照样匹配。
+#[test]
+fn third_party_events_skip_the_recent_list() {
+    let mut hub = Hub::default();
+    let mut data = Map::new();
+    data.insert("to".into(), json!("success"));
+    let alone = hub.outside_event(
+        "",
+        "zzz-od.run_finished",
+        "third-party/zzz-od",
+        data.clone(),
+        1_000,
+    );
+    assert_eq!(alone.game, "");
+    assert!(alone.match_id.is_empty());
+    hub.observe("zzz", seen(Phase::Running, ""), 2_000);
+    let during = hub.outside_event(
+        "zzz",
+        "zzz-od.run_finished",
+        "third-party/zzz-od",
+        data,
+        3_000,
+    );
+    assert_eq!(during.match_id, "zzz-2000", "在跑的游戏带上这一局");
+    assert_ne!(during.id, alone.id);
+    assert!(
+        hub.recent("zzz", 50)
+            .iter()
+            .all(|e| !e.kind.starts_with("zzz-od.")),
+        "不进最近几件事"
+    );
+    assert!(hub.recent("", 50).is_empty());
+    let on: EventTrigger =
+        serde_json::from_value(json!({"event": ["zzz-od.run_finished"], "game": "zzz"})).unwrap();
+    assert!(trigger_matches(&on, &during));
+    assert!(
+        !trigger_matches(&on, &alone),
+        "限定了游戏的触发不认没有游戏的事"
+    );
+}
+
 #[test]
 fn recent_events_are_capped() {
     let mut hub = Hub::default();

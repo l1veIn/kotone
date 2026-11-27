@@ -11,6 +11,8 @@
 //   问题；`risk` 和第三方插件本身的风险一起进它的“风险和许可”弹窗（ADR 043，一个插件一个弹窗），给作者看的提示在设置里；
 // - `mcp.json` 的情况（`mcp_servers_status`）：读不出来的原因、没加进来的项（名字和 Kotone 自带的撞了、不能当 id），
 //   插件页的第三方一组里说一句人话。插件清单本身还是一个数组，这些另外读。
+// - 观察项（ADR 047 D5，`remote.watches`）：插件设置里“事件”一块的开关（第一次打开要确认）、重试、自己加 / 删；
+//   它产生的第三方事件只进自动化的“当……的时候”（`gameEvents.ts` 并进事件目录）。
 // 浏览器预览（dev:web、Playwright）用 ipc/mcpServersMock。
 import { invoke } from "@tauri-apps/api/core";
 import type { Component } from "svelte";
@@ -75,10 +77,14 @@ export interface KotoneManifestInfo {
     standard: string;
     games: string[];
     events: { name: string; label: string; data: Record<string, string> }[];
-    /** 观察项（第 2 期才运行）。 */
+    /** 观察项（运行时的样子在 `RemoteInfo.watches`）。 */
     watches: Record<string, unknown>[];
     risk?: string | null;
   };
+  /** 每个观察项（按事件名）是哪一层的。 */
+  watchFrom?: Record<string, ManifestSource>;
+  /** 用上了 Kotone 带的哪份预设（`zzz-onedragon`；自动化模板按它找插件）。 */
+  preset?: string | null;
   /** 你本地的 manifest.json 加了东西进来。 */
   local: boolean;
   /** 清单写的标准比这一版 Kotone 新。 */
@@ -90,6 +96,60 @@ export interface KotoneManifestInfo {
   hostStandard: string;
   /** 本地 manifest.json 在哪。 */
   localPath: string;
+}
+
+/** 观察项现在的样子（后端 `watch::State`）。 */
+export type WatchStatus =
+  | { state: "off" | "waiting" | "polling" }
+  | { state: "confirm" | "blocked" | "stopped"; reason: string };
+
+/** 一个观察项（后端 `Watcher::view`）：清单里的写法，加上运行时的样子和玩家的决定。 */
+export interface RemoteWatch {
+  /** 事件名（清单里的 `name`）。 */
+  event: string;
+  /** 宿主里完整的事件名 `<插件 id>.<名字>`。 */
+  type: string;
+  label: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  everySeconds: number;
+  /** 真用的间隔（下限以后）。 */
+  intervalSeconds: number;
+  compare: "changed" | "new";
+  field?: string;
+  to?: string[];
+  list?: string | null;
+  id?: string;
+  /** 从哪来：服务器给的 / Kotone 带的 / 你自己加的。 */
+  from: ManifestSource;
+  /** 工具标了只读（null = 服务器上没有这个工具，或者还没连上过）。 */
+  readOnly: boolean | null;
+  /** 确认要的内容指纹。 */
+  digest: string;
+  on: boolean;
+  /** 确认过的就是现在这份内容。 */
+  confirmed: boolean;
+  allowUnmarked: boolean;
+  status: WatchStatus;
+  lastError?: string | null;
+  failures: number;
+  sent: number;
+}
+
+/** 玩家自己加的观察项（`remote_watch_add`）。 */
+export interface NewWatch {
+  name: string;
+  label: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  everySeconds: number;
+  compare: "changed" | "new";
+  field?: string;
+  /** 逗号分开的几个值（只在变成这些值时发）。 */
+  to?: string;
+  list?: string;
+  idField?: string;
+  allowUnmarked: boolean;
 }
 
 /** `plugins_list` 每项的 `remote`（后端 `remote_plugins::describe`）。 */
@@ -107,6 +167,10 @@ export interface RemoteInfo {
   fingerprint: string;
   toolList?: RemoteTool[];
   kotoneManifest?: KotoneManifestInfo;
+  /** 观察项（ADR 047 D5）。 */
+  watches?: RemoteWatch[];
+  /** 有观察项停下了：哪个、为什么（卡片上显示）。 */
+  watchStopped?: { label: string; reason: string } | null;
 }
 
 export type RemotePluginInfo = PluginInfo & { remote: RemoteInfo };
@@ -258,6 +322,45 @@ export async function setServerKey(id: string, name: string, value: string | nul
   if (isTauri) await invoke("mcp_server_set_key", { id, name, value });
   else await mock.setKey(id, name, value);
   await refresh();
+}
+
+/** 打开 / 关掉一个观察项。第一次打开（或者内容变了）要带上确认时看到的 `digest`；工具没标只读的还要 `allowUnmarked`。 */
+export async function setWatch(id: string, event: string, on: boolean, digest?: string, allowUnmarked?: boolean): Promise<void> {
+  if (isTauri) await invoke("remote_watch_set", { id, event, on, digest: digest ?? null, allowUnmarked: allowUnmarked ?? null });
+  else await mock.setWatch(id, event, on, digest, allowUnmarked);
+  await refresh();
+}
+
+/** 停下的观察项再试一次。 */
+export async function retryWatch(id: string, event: string): Promise<void> {
+  if (isTauri) await invoke("remote_watch_retry", { id, event });
+  else await mock.retryWatch(id, event);
+  await refresh();
+}
+
+/** 自己加一个观察项（写进本地的 manifest.json，加完就开）。 */
+export async function addWatch(id: string, spec: NewWatch): Promise<void> {
+  const plain = JSON.parse(JSON.stringify(spec)) as NewWatch;
+  if (isTauri) await invoke("remote_watch_add", { id, spec: plain });
+  else await mock.addWatch(id, plain);
+  await refresh();
+}
+
+/** 删掉自己加的观察项。 */
+export async function removeWatch(id: string, event: string): Promise<void> {
+  if (isTauri) await invoke("remote_watch_remove", { id, event });
+  else await mock.removeWatch(id, event);
+  await refresh();
+}
+
+/** 用着这份 Kotone 预设的第三方插件（自动化模板“一条龙跑完推一行”按它找插件 id）。 */
+export function pluginForPreset(preset: string, plugins: PluginInfo[]): RemotePluginInfo | null {
+  return plugins.find((p): p is RemotePluginInfo => isRemote(p) && p.remote.kotoneManifest?.preset === preset) ?? null;
+}
+
+/** 重新读一次插件清单（观察项的状态会变：插件页开着时隔一会儿读一次）。 */
+export async function refreshRemote(): Promise<void> {
+  await listPlugins();
 }
 
 /** “总是允许这个工具”：权限里这个工具一条“允许”（角色页 → 权限里也看得到、改得回来）。 */

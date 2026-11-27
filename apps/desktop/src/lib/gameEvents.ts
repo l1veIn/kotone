@@ -3,12 +3,15 @@
 // [[events]] 里登记（带适配器的以适配器 id 开头；没有适配器的插件——语音输入——以插件 id 开头，挂在所有游戏上，ADR 043 D10），
 // 界面从插件清单读（`manifest.events`），名字用插件自己的文案（plugin_<id>_event_<名字>）。
 // 插件关着（或它要的数据开关关着）时它的事不在选择里，但还认得（已经保存的照样显示、能保存）。
+// 第三方插件（ADR 047 D5）的事从它的 Kotone 清单来（`remote.kotoneManifest`，`<插件 id>.<名字>`），挂在清单的 games 上
+// （空 = 只在“任何游戏”下能选）；名字后面标着是第三方插件的；它的观察项没打开、要确认时标着为什么不会发生（`remote.watches`）。
 // 规则和后端 games::event_catalog 一致（保存时后端还会再校验一次）。
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./ipc";
 import type { Settings } from "./ipc/contracts";
 import type { EventTrigger } from "./automation";
 import { pluginEnabled, pluginName, pluginText, sourceEnabled, sourceName, type PluginInfo, type PluginManifest, type PluginEventSpec } from "./plugins";
+import { remoteOf, type RemoteInfo } from "./mcpServers";
 import { m } from "./paraglide/messages.js";
 
 export type GamePhase = "stopped" | "running" | "menu" | "queue" | "pre_match" | "loading" | "in_match" | "post_match";
@@ -40,6 +43,8 @@ export interface GameEventInfo {
   team: boolean;
   /** 现在为什么不会发生（“英雄联盟插件关着”）；null = 会发生 */
   off: string | null;
+  /** 第三方插件登记的（ADR 047 D5）：挂在哪些游戏上（空 = 不挂在哪个游戏上） */
+  thirdParty?: { games: string[] };
 }
 
 /** 本体登记的（和 kotone_core::games::generic_events 一致）。 */
@@ -55,9 +60,35 @@ function eventOff(settings: Settings | null | undefined, plugin: PluginManifest,
   return m.game_event_off_source({ plugin: pluginName(plugin), source: source ? sourceName(plugin, source) : missing });
 }
 
+/** 第三方插件的这件事现在为什么不会发生：插件关着、没有观察项、观察项没打开 / 要确认 / 查不了（照后端 `Watcher::event_off`）。 */
+function remoteOff(settings: Settings | null | undefined, plugin: PluginManifest, remote: RemoteInfo, name: string, label: string): string | null {
+  if (!pluginEnabled(settings, plugin)) return m.game_event_off_plugin({ plugin: plugin.id });
+  const watch = remote.watches?.find((w) => w.event === name);
+  if (!watch) return m.game_event_off_no_watch({ plugin: plugin.id, event: label });
+  switch (watch.status.state) {
+    case "off": return m.game_event_off_watch({ plugin: plugin.id, event: label });
+    case "confirm": return m.game_event_off_watch_confirm({ plugin: plugin.id, event: label });
+    case "blocked": return watch.status.reason;
+    default: return null;
+  }
+}
+
 /** 合并后的事件目录：本体的 game.*，加上每个插件登记的（关着的也在，标着为什么不会发生）。 */
 export function eventCatalog(plugins: PluginInfo[] | null | undefined, settings: Settings | null | undefined): GameEventInfo[] {
   const out: GameEventInfo[] = GENERIC_EVENTS.map((type) => ({ type, label: type, plugin: null, team: false, off: null }));
+  for (const info of plugins ?? []) {
+    const remote = remoteOf(info);
+    const kotone = remote?.kotoneManifest;
+    if (!remote || !kotone) continue;
+    for (const event of kotone.manifest.events) {
+      const type = `${info.manifest.id}.${event.name}`;
+      if (out.some((e) => e.type === type)) continue;
+      out.push({
+        type, label: event.label, plugin: info.manifest, team: "team" in (event.data ?? {}),
+        off: remoteOff(settings, info.manifest, remote, event.name, event.label), thirdParty: { games: kotone.manifest.games },
+      });
+    }
+  }
   for (const { manifest } of plugins ?? []) {
     for (const spec of manifest.events ?? []) {
       if (out.some((e) => e.type === spec.type)) continue;
@@ -67,10 +98,14 @@ export function eventCatalog(plugins: PluginInfo[] | null | undefined, settings:
   return out;
 }
 
-/** 这个游戏配置现在能选的事（不选游戏 = 通用的，加上不是游戏插件的，例如语音输入的）：插件关着的不在里面。 */
+/** 这个游戏配置现在能选的事（不选游戏 = 通用的，加上不是游戏插件的，例如语音输入的）：插件关着的不在里面。
+ * 第三方插件的放在它挂的游戏下；不挂在哪个游戏上的只在“任何游戏”下（它发的事没有游戏）。 */
 export function eventsFor(catalog: GameEventInfo[], game: string | null | undefined): GameEventInfo[] {
-  return catalog.filter((e) => !e.off && (!e.plugin || !e.plugin.adapter
-    || (!!game && (e.plugin.games.length === 0 || e.plugin.games.includes(game)))));
+  return catalog.filter((e) => {
+    if (e.off) return false;
+    if (e.thirdParty) return e.thirdParty.games.length === 0 ? !game : !!game && e.thirdParty.games.includes(game);
+    return !e.plugin || !e.plugin.adapter || (!!game && (e.plugin.games.length === 0 || e.plugin.games.includes(game)));
+  });
 }
 
 /** 这个写法（一种事，或 `<范围>.*`）对上的事。 */
@@ -96,6 +131,8 @@ export function eventLabel(type: string, catalog: GameEventInfo[]): string {
   }
   const info = catalog.find((e) => e.type === type);
   if (!info?.plugin) return type;
+  // 第三方插件的说明是别人写的：照它的原话，后面标着是哪个第三方插件
+  if (info.thirdParty) return m.game_event_third_party({ event: info.label, plugin: info.plugin.id });
   return pluginText(info.plugin.id, `event_${type.slice(type.indexOf(".") + 1)}`, info.label);
 }
 

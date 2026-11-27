@@ -1072,7 +1072,7 @@ fn a_host_error_after_cancel_is_a_cancel() {
     assert!(matches!(report.outcome, Outcome::Error(ref m) if m.contains("missing")));
 }
 
-/// 新建时选的四个模板（kotone-core）：能编译，只填缺省值就能跑。
+/// 新建时选的模板（kotone-core）：能编译，只填缺省值就能跑。
 #[test]
 fn every_template_compiles_and_runs_with_its_defaults() {
     use kotone_core::automation::library::{templates, validate_args};
@@ -1097,7 +1097,7 @@ fn every_template_compiles_and_runs_with_its_defaults() {
         );
         let want = match t.id.as_str() {
             "say" => (1, 0, 0),
-            "push" => (0, 1, 0),
+            "push" | "onedragon-push" => (0, 1, 0),
             "ask" => (0, 0, 1),
             _ => (0, 0, 0),
         };
