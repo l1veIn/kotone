@@ -119,3 +119,60 @@
 ## 怎么定的
 
 主会话的建议（2026-11-27）：两层，内置插件留主仓库，别的仓库的插件只走协议；标准先叫 0.x，三种做法各做出一个插件再定 1.0；外层只加不改。玩家：“可以，写 ADR 吧。这两件事按你推荐的来。”第三方事件的做法（观察项、只进自动化）来自同一天的讨论（调研第十节）。
+
+## 实现情况（2026-11-28，分支 `claude/plugin-standard`，第 1–4 期）
+
+玩家把第 1–4 期交给一个自主会话（人不在电脑前）。主会话只做编排、核对、提交，代码由子代理写；ADR 没写到的细节照本 ADR 的原则定，记在下面。第 5 期（1.0）要真机，没做。
+
+| 期 | 提交 | 做了什么 |
+| --- | --- | --- |
+| 1 | f7730f35 | [`docs/plugin-standard.md`](../plugin-standard.md) 0.1 草案；`kotone-remote-plugin/src/manifest.rs` 读清单；第三方插件设置页的“Kotone 清单”一节，`risk` 进“风险和许可”弹窗 |
+| 3 | 1eda9b50 | 内置插件 CS2（`plugins/cs2`，自己做：GSI） |
+| 3 | d7bef850 | 内置插件原神（`plugins/genshin`，驱动 BetterGI）；内置游戏配置“原神” |
+| 2 | 38612438 | 观察项（`kotone-remote-plugin/src/watch.rs`）；第三方事件进自动化；“事件”一块；绝区零一条龙预设和模板；内置游戏配置“绝区零” |
+| 4 | 63e01371 | `kotone-cli plugin check`；CI 里的老插件测试（0.1 最小插件 + Steam 插件快照） |
+
+别的仓库的插件：[l1veIn/kotone-plugin-steam](https://github.com/l1veIn/kotone-plugin-steam)（MIT，Rust 单个 exe，只读本机 Steam 的库、时长、成就；不依赖 kotone 仓库的任何 crate；它自己的 CI 绿）。
+
+### 实施记录（ADR 没写到、照原则定的）
+
+**清单从哪来（D3 留给第 1 期定的）**
+- 服务器在 MCP 资源 **`kotone://manifest`** 里给（`application/json`）。宿主连上后直接 `resources/read`，不依赖 `resources/list` 列不列、不依赖握手的返回，所以 2025-11-25（`initialize`）和 2026-07-28（`server/discover`）两版一样拿（两版都有测试）。读不到 = 没给清单，不是错；最多等 5 秒；原文记在磁盘，没连上时插件页照样显示。
+- 没给时用 Kotone 带的预设（`crates/kotone-remote-plugin/presets/*.json`，按规范化后的网址或 `serverInfo.name` 认）；玩家本地 `<KOTONE_HOME>/plugins/<id>/manifest.json` 同一个格式，只**加** `events` / `watches`（同名不覆盖）。
+- `_meta` 前缀 `com.l1vein.kotone/`（和应用标识一致）保留，0.1 不用。`$schema`、`_meta` 不算“不认识的字段”；以 `experimental` 开头的忽略、不列。
+- 长度上限：清单 64 KiB、`risk` 2000 字、事件说明 64 字、字段说明 200 字。
+- 事件全名 `<插件 id>.<name>`，插件 id 是玩家在 `mcp.json` 里起的名字；**每个事件最多一个观察项**（观察项没有名字，开关按事件名记）。
+
+**观察项（D5）**
+- 间隔下限：本机（stdio、127.*、localhost、[::1]）10 秒，别的 60 秒；`games` 为空的插件一律 60 秒、一直查（D5 只写了“相关游戏开着时”，没游戏可挂的插件——比如 Steam——只能这样）。
+- `games` 非空时只在其中一个游戏开着时查，**游戏退出后再查 3 分钟**（一条龙这类工具跑完常会关游戏）。
+- 玩家确认绑定“工具 + 参数 + 比较方式 + 服务器配置的指纹”，变了要重新确认；间隔不算。工具没标只读要另外勾选。服务器给的、预设的观察项默认关，玩家自己加的加完即开。
+- 结果只认 `structuredContent`；只有预设可以把文字内容当 JSON 解析。字段名按 camelCase 对上登记的字段（`last_status` → `lastStatus`）。同一轮里同一个工具同样的参数只调一次。
+- 失败退避 ×2、最多 10 分钟，连续 5 次停下；不给结构化结果直接停下。记底只在内存里（Kotone 重开后第一次又是记底）。
+- 第三方事件走单独的 `games::push_third_party`：只交给自动化的触发，不进“最近几件事”（她的 `game.state`）、不给复盘、不推送；来源记成 `third-party/<id>`。
+- **MCP Events（SEP-3415）没接**：rmcp 3.11 的能力里没有 `events`，也没有订阅方法（它的 `subscriptions/listen` 只管列表变化和资源更新）；照 D2 不自己造，标准文档里写明“观察项先补上”。
+
+**检查命令和老插件（D4 第 7 条）**
+- 检查的代码放在 `kotone-remote-plugin/src/check.rs`（宿主同一份解析和比较），CLI 和 CI 测试共用。没清单是 `!`，清单读不出是 `✗`；2026-07-28 连不上是 `!`（现在的宿主还用 `initialize`）。
+- 老插件放 `crates/kotone-remote-plugin/tests/old-plugins/`，假服务器按快照回答；测试走真的 `RemotePlugin` + 观察项 + 检查命令。快照不许为了让测试过而改；改了含义照 D4 第 5 条加新版本的老插件。
+
+**CS2（自己做）**
+- 默认开、cfg 默认写（ADR 036 D9）；没有数据开关、没有风险弹窗（Valve 官方接口；写进游戏目录的文件在页面上说明）。端口缺省 23730，被占换一个并重写 cfg；令牌 32 位十六进制。CS2 开着时不写不删（它下次启动才读）。
+- 下包卡片只在下包时推一次、自己倒数，拆 / 炸 / 回合结束时原地更新；“炸弹还剩 10 秒”是单独的一条（一行 + 语音）；赛点只在一方第一次到赛点时说，只算竞技 / 优先 / 搭档；半场一行 + 语音；比赛结束一张卡片 + 给她留一句。
+- 自己打时 GSI 只给自己的数据；玩家死后 GSI 换成在看的队友，只在 `player.steamid == provider.steamid` 时算玩家自己的。页面是本体里的 Svelte 页面（照同传插件），不是 MCP App。
+
+**原神（驱动 BetterGI）**
+- 默认关（驱动 BetterGI 等于模拟键鼠，米哈游协议禁止）；跑任务要原神游戏配置的“允许自动化输入”开着。停止如实说没有接口，并写出它的“停止任意独立任务”热键，不杀进程。
+- **BetterGI 0.67 一启动就会以管理员身份重开自己**（`App.xaml.cs` 的 `UseElevated()`）：Kotone 照 ADR 044 降权启动它，它照样会要一次管理员（默认 UAC 设置下弹一次）。所以这一轮的副本没运行（这台机器管理员免提示，副本会悄悄变成管理员进程、结束不了，还会占着单实例管道），只做了只读核对。
+- BetterGI 开着时，转发过去只有 `--pulonia-run` 会执行（源码核对，`startOneDragon` / `--startGroups` 只把窗口拿到前面）：页面上 BetterGI 开着时只能交计划。
+- Webhook 地址 `http://127.0.0.1:<端口>/genshin/<令牌>`；“一键填好”只在 BetterGI 没开时可用，先备份、只改 `webhookEnabled` / `webhookEndpoint`。计划没有 Webhook，靠 Pulonia 的 `history/` 判断跑完。
+- 米游社没做（没有能测全的假数据）。
+
+**绝区零一条龙（远程 MCP + 观察项）**
+- 照它的 `mcp.md` 和 `schemas.py`（提交 f0975a64）：`get_run_status` 标了只读，`state` 有 idle / running / success / failed / stopped。预设两条观察项：`state` 变成 `success` → `run_finished`，变成 `failed` → `run_failed`，30 秒一次。导入时建议插件 id `zzz-onedragon`。
+- 模板“一条龙跑完推一行”：只有加了用这份预设的插件时才列出来；选了就是开着的（玩家主动选的，关着存完不生效反而困惑）；推的是固定的两句，不拼它的原话（可能很长、带换行，超过推送的 40 字会推不出去）。
+
+### 实现中发现 ADR 要补的
+- D5“只在相关游戏开着时轮询”对平台类插件（Steam）不成立：补成“`games` 为空时一直查，间隔下限 60 秒”。
+- D5 没说游戏退出时怎么办：补“退出后宽限 3 分钟”，不然跑完关游戏的工具会丢掉“跑完了”。
+- D6 的“驱动现成工具”要真机验证 BetterGI：它会自我提权，是 1.0 前要解决的事（上游加一个不提权的参数，或者玩家接受每次一个 UAC）。
