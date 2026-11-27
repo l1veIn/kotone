@@ -1,0 +1,41 @@
+{
+  "//": "合成的样例：第 8 回合，自己（T）下了包；自己打时没有 phase_countdowns / bomb / allplayers",
+  "provider": {
+    "name": "Counter-Strike 2",
+    "appid": 730,
+    "version": 14070,
+    "steamid": "76561190000000001",
+    "timestamp": 1795400500
+  },
+  "map": {
+    "mode": "competitive",
+    "name": "de_mirage",
+    "phase": "live",
+    "round": 7,
+    "team_ct": { "score": 4, "consecutive_round_losses": 0, "timeouts_remaining": 1, "matches_won_this_series": 0 },
+    "team_t": { "score": 3, "consecutive_round_losses": 1, "timeouts_remaining": 1, "matches_won_this_series": 0 },
+    "num_matches_to_win_series": 0,
+    "round_wins": {
+      "1": "ct_win_elimination",
+      "2": "t_win_bomb",
+      "3": "ct_win_defuse",
+      "4": "t_win_elimination",
+      "5": "ct_win_time",
+      "6": "t_win_elimination",
+      "7": "ct_win_elimination"
+    }
+  },
+  "round": { "phase": "live", "bomb": "planted" },
+  "player": {
+    "steamid": "76561190000000001",
+    "name": "Tester",
+    "observer_slot": 1,
+    "team": "T",
+    "activity": "playing",
+    "state": { "health": 100, "armor": 100, "helmet": true, "flashed": 0, "smoked": 0, "burning": 0, "money": 3200, "round_kills": 1, "round_killhs": 1, "equip_value": 4700 },
+    "match_stats": { "kills": 9, "assists": 2, "deaths": 5, "mvps": 2, "score": 21 }
+  },
+  "previously": { "round": { "bomb": null } },
+  "added": { "round": { "bomb": true } },
+  "auth": { "token": "0123456789abcdef0123456789abcdef" }
+}

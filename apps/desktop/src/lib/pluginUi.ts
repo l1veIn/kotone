@@ -12,6 +12,7 @@ import gameVoice from "$plugins/game-voice/ui/index";
 import music from "$plugins/music/ui/index";
 import interpreter from "$plugins/interpreter/ui/index";
 import voiceInput from "$plugins/voice-input/ui/index";
+import cs2 from "$plugins/cs2/ui/index";
 
 export interface PluginPageProps {
   plugin: PluginInfo;
@@ -109,7 +110,7 @@ export interface PluginUi {
   toolLabels?: Record<string, () => string>;
 }
 
-export const PLUGIN_UI: Record<string, PluginUi> = { "voice-input": voiceInput, lol, "game-voice": gameVoice, music, interpreter };
+export const PLUGIN_UI: Record<string, PluginUi> = { "voice-input": voiceInput, lol, cs2, "game-voice": gameVoice, music, interpreter };
 
 /** 有页面的插件 id（「插件」里卡片的顺序）。 */
 export const PLUGIN_IDS: string[] = Object.keys(PLUGIN_UI);

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="CS2">
+  <title>CS2</title>
+  <!-- Kotone 原创：一个准星和一圈倒数（不用 Valve 的商标）。 -->
+  <rect width="48" height="48" rx="12" fill="#b45309"/>
+  <rect x="0.5" y="0.5" width="47" height="47" rx="11.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+  <circle cx="24" cy="24" r="12.5" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="2.5"/>
+  <path d="M24 11.5a12.5 12.5 0 0 1 12.5 12.5" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M24 15v5M24 28v5M15 24h5M28 24h5" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="24" cy="24" r="1.8" fill="#fff"/>
+</svg>

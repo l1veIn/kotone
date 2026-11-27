@@ -2796,6 +2796,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-plugin-cs2"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "kotone-platform-windows",
+ "kotone-plugin-api",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "kotone-plugin-game-voice"
 version = "0.1.0"
 dependencies = [
@@ -2946,6 +2959,7 @@ dependencies = [
  "kotone-ocr",
  "kotone-platform-windows",
  "kotone-plugin-api",
+ "kotone-plugin-cs2",
  "kotone-plugin-game-voice",
  "kotone-plugin-interpreter",
  "kotone-plugin-lol",

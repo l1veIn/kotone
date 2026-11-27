@@ -1,0 +1,150 @@
+# CS2 插件（ADR 036 D9、ADR 047 第 3 期“自己做”）。清单的写法见 crates/kotone-plugin-api。
+# 界面上的文字以 messages/<语言>.json 为准（plugin_cs2_*）；这里的中文给她（系统提示）、工具服务和设置说明用，
+# 两边要一致（tests::messages_match_the_manifest）。
+#
+# 数据只来自 Valve 官方的游戏状态接口（Game State Integration）：CS2 按 cfg 目录里的 gamestate_integration_kotone.cfg
+# 把状态 POST 到本机 127.0.0.1 上的一个端口，带 cfg 里的随机令牌。不读游戏内存、不注入、不改封包，没有封号风险，所以没有
+# 数据开关和“风险和许可”弹窗；往游戏目录写的那个文件在插件页上写明，有开关能关（关了只删我们写的那个）。
+# 自己打的时候 GSI 只给自己的数据（别人的血量、位置、炸弹在哪只有观战时才有），插件只说这些事实。
+
+id = "cs2"
+name = "CS2"
+description = "CS2 这一局的比分、回合、你的数据和炸弹倒数；用 Valve 官方的游戏状态接口（往游戏的 cfg 目录写一个文件）"
+games = ["cs2"]
+adapter = "cs2"
+enabled_by_default = true
+
+[[pages]]
+uri = "ui://kotone/cs2/home"
+title = "CS2"
+
+# 这一局（cs2.state 的结果、比赛结束的推送）：比分、回合、你的数据；结束时写明胜负
+[[pages]]
+uri = "ui://kotone/cs2/match"
+title = "这一局"
+
+# 只在推送里出现：下包倒数
+[[pages]]
+uri = "ui://kotone/cs2/bomb"
+title = "下包倒数"
+
+[agent]
+overview = "CS2 这一局的比分、回合、你的数据和炸弹（cs2.state、cs2.rounds）"
+rule = """- CS2：玩家问比分、第几回合、这局打得怎么样、包还有多久炸的时候用 cs2.state（马上返回）；问每回合谁赢的、怎么赢的用 cs2.rounds。\
+数据来自游戏自己的接口，自己打时只有玩家自己的（看不到别人的血量、位置），没有的不要编；它说没在玩、收不到数据时照它说的告诉玩家。\n\
+"""
+
+# 内置推送（ADR 043 D3、D4）：插件页「设置 → 推送」里每条一个开关（宿主画、宿主执行），内容不能改。插件经 Host::push 推，
+# trigger 是这里的 id；同一个 key 再推一次就是更新。界面上的名字、时机、做什么在 messages 里（plugin_cs2_push_<id>_title / _when / _what）。
+# 都只说事实（比分、回合、时间、谁赢），同样的输入同样的输出；不评价玩家、不说该怎么打。
+[[pushes]]
+id = "bomb"
+title = "下包倒数"
+when = "这一回合炸弹下了"
+what = "发一张卡片从 40 秒倒数（照游戏里炸弹的时间；观战时用游戏给的倒数），拆了、炸了、回合结束时原地更新"
+forms = ["card"]
+
+[[pushes]]
+id = "bomb-ten"
+title = "炸弹还剩 10 秒"
+when = "炸弹下了以后还剩 10 秒、还没拆也没炸"
+what = "她说一句“包还有十秒”，显示一行"
+forms = ["line", "voice"]
+priority = "high"
+
+[[pushes]]
+id = "match-point"
+title = "赛点"
+when = "竞技、优先、搭档模式里，一方再赢一回合就赢下这张图（照这个模式的回合数，竞技和优先的加时也算）"
+what = "她说一句“我们赛点了”或“对面赛点了”，显示一行比分"
+forms = ["line", "voice"]
+
+[[pushes]]
+id = "halftime"
+title = "半场"
+when = "半场换边（加时的半场也算）"
+what = "她说一句“半场了，7 比 5”，显示一行比分"
+forms = ["line", "voice"]
+priority = "low"
+
+[[pushes]]
+id = "match-end"
+title = "比赛结束"
+when = "这张图打完了"
+what = "发一张卡片：地图、模式、比分、赢了还是输了、你的击杀 / 死亡 / 助攻和 MVP 次数、每回合谁赢的，给她留一句很短的说明"
+forms = ["card"]
+
+# 游戏中心的事（ADR 036 D2、D4）：类型以适配器 id 开头（cs2.），字段 camelCase。按自己打时 GSI 能给的定：
+# 回合、炸弹（round.bomb）、比分（map.team_ct / team_t）、自己的数据（player_* 只在 player 是自己时算）。
+[[events]]
+type = "cs2.round_started"
+label = "回合开始（冻结时间结束）"
+data.round = "第几回合（从 1 数）"
+data.ctScore = "CT 现在的比分"
+data.tScore = "T 现在的比分"
+data.myTeam = "你这一回合在哪边：CT / T（不知道时为空）"
+
+[[events]]
+type = "cs2.round_ended"
+label = "回合结束"
+data.round = "第几回合（从 1 数）"
+data.winner = "这回合谁赢：CT / T"
+data.won = "你这边赢了没有（不知道你在哪边时没有这个字段）"
+data.reason = "怎么赢的：elimination（全灭）/ bomb（炸了）/ defuse（拆了）/ time（时间到）；不知道时为空"
+data.ctScore = "这回合以后 CT 的比分"
+data.tScore = "这回合以后 T 的比分"
+data.myScore = "这回合以后你这边的比分（不知道你在哪边时没有）"
+data.enemyScore = "这回合以后对面的比分（不知道你在哪边时没有）"
+
+[[events]]
+type = "cs2.bomb_planted"
+label = "炸弹下了"
+data.round = "第几回合"
+data.seconds = "离爆炸还有几秒（自己打时按 40 秒算）"
+
+[[events]]
+type = "cs2.bomb_defused"
+label = "炸弹拆了"
+data.round = "第几回合"
+
+[[events]]
+type = "cs2.bomb_exploded"
+label = "炸弹炸了"
+data.round = "第几回合"
+
+[[events]]
+type = "cs2.halftime"
+label = "半场换边"
+data.ctScore = "CT 的比分"
+data.tScore = "T 的比分"
+data.myScore = "你这边的比分（不知道你在哪边时没有）"
+data.enemyScore = "对面的比分（不知道你在哪边时没有）"
+
+[[events]]
+type = "cs2.match_point"
+label = "赛点"
+data.team = "哪边赛点：CT / T"
+data.ours = "是不是你这边（不知道你在哪边时没有）"
+data.ctScore = "CT 的比分"
+data.tScore = "T 的比分"
+
+[[events]]
+type = "cs2.match_ended"
+label = "比赛结束（这张图打完了）"
+data.map = "地图（游戏里的名字，例如 de_mirage）"
+data.mode = "模式（游戏里的名字，例如 competitive）"
+data.ctScore = "CT 的比分"
+data.tScore = "T 的比分"
+data.myScore = "你这边的比分（不知道你在哪边时没有）"
+data.enemyScore = "对面的比分（不知道你在哪边时没有）"
+data.result = "win（赢）/ loss（输）/ tie（平）；不知道你在哪边时为空"
+data.kills = "你的击杀"
+data.deaths = "你的死亡"
+data.assists = "你的助攻"
+data.mvps = "你的 MVP 次数"
+data.score = "你的得分"
+
+[[events]]
+type = "cs2.my_death"
+label = "你阵亡了"
+data.round = "第几回合"

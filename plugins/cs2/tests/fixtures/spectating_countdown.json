@@ -1,0 +1,27 @@
+{
+  "//": "合成的样例：观战（GOTV）时才有 phase_countdowns（炸弹的倒数）",
+  "provider": {
+    "name": "Counter-Strike 2",
+    "appid": 730,
+    "version": 14070,
+    "steamid": "76561190000000001",
+    "timestamp": 1795400600
+  },
+  "map": {
+    "mode": "competitive",
+    "name": "de_inferno",
+    "phase": "live",
+    "round": 12,
+    "team_ct": { "score": 6 },
+    "team_t": { "score": 6 }
+  },
+  "round": { "phase": "live", "bomb": "planted" },
+  "phase_countdowns": { "phase": "bomb", "phase_ends_in": "31.2" },
+  "player": {
+    "steamid": "76561190000000009",
+    "name": "Pro",
+    "team": "CT",
+    "activity": "playing"
+  },
+  "auth": { "token": "0123456789abcdef0123456789abcdef" }
+}

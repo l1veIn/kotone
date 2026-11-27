@@ -1,0 +1,21 @@
+[package]
+name = "kotone-plugin-cs2"
+version = "0.1.0"
+description = "Kotone CS2 插件（ADR 036 D9、047 第 3 期）：Valve 官方的游戏状态接口（GSI）只听 127.0.0.1、游戏中心的 cs2 适配器、炸弹 / 赛点 / 半场 / 比赛结束的推送"
+edition = "2021"
+rust-version = "1.77.2"
+
+# 插件只依赖插件契约、kotone-core 的纯数据类型、系统适配层里没有状态的系统调用和自己的第三方库（ADR 038 D6），不碰 Tauri。
+[dependencies]
+kotone-plugin-api.workspace = true
+# 找 Steam 库里的 CS2（注册表 + libraryfolders.vdf + appmanifest，和 games.installed 同一套）
+kotone-platform-windows.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# GSI 的本机 HTTP 接收（只听 127.0.0.1）
+tokio.workspace = true
+# cfg 里的随机令牌（版本已在工作区锁文件里）
+getrandom = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

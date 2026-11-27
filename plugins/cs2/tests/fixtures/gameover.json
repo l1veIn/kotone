@@ -1,0 +1,28 @@
+{
+  "//": "合成的样例：这张图打完了（13 : 9，自己在 CT）",
+  "provider": {
+    "name": "Counter-Strike 2",
+    "appid": 730,
+    "version": 14070,
+    "steamid": "76561190000000001",
+    "timestamp": 1795402600
+  },
+  "map": {
+    "mode": "competitive",
+    "name": "de_mirage",
+    "phase": "gameover",
+    "round": 22,
+    "team_ct": { "score": 13 },
+    "team_t": { "score": 9 }
+  },
+  "round": { "phase": "over", "win_team": "CT" },
+  "player": {
+    "steamid": "76561190000000001",
+    "name": "Tester",
+    "team": "CT",
+    "activity": "playing",
+    "state": { "health": 100, "armor": 92, "helmet": true, "money": 9800, "round_kills": 2, "round_killhs": 1, "equip_value": 5700 },
+    "match_stats": { "kills": 21, "assists": 5, "deaths": 14, "mvps": 4, "score": 52 }
+  },
+  "auth": { "token": "0123456789abcdef0123456789abcdef" }
+}

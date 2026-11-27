@@ -1,0 +1,30 @@
+{
+  "//": "合成的样例：竞技模式热身",
+  "provider": {
+    "name": "Counter-Strike 2",
+    "appid": 730,
+    "version": 14070,
+    "steamid": "76561190000000001",
+    "timestamp": 1795400010
+  },
+  "map": {
+    "mode": "competitive",
+    "name": "de_mirage",
+    "phase": "warmup",
+    "round": 0,
+    "team_ct": { "score": 0, "consecutive_round_losses": 0, "timeouts_remaining": 1, "matches_won_this_series": 0 },
+    "team_t": { "score": 0, "consecutive_round_losses": 0, "timeouts_remaining": 1, "matches_won_this_series": 0 },
+    "num_matches_to_win_series": 0
+  },
+  "round": { "phase": "warmup" },
+  "player": {
+    "steamid": "76561190000000001",
+    "name": "Tester",
+    "observer_slot": 1,
+    "team": "T",
+    "activity": "playing",
+    "state": { "health": 100, "armor": 0, "helmet": false, "flashed": 0, "smoked": 0, "burning": 0, "money": 800, "round_kills": 0, "round_killhs": 0, "equip_value": 200 },
+    "match_stats": { "kills": 0, "assists": 0, "deaths": 0, "mvps": 0, "score": 0 }
+  },
+  "auth": { "token": "0123456789abcdef0123456789abcdef" }
+}
