@@ -159,9 +159,10 @@ test("the match summary card lists each enemy's augments (icon + name), and 我�
   await sides.first().click();
   await narrow(app, "lol-app-game");
   const chips = block.getByTestId("lol-game-augment-row").first().getByTestId("lol-game-augment");
-  const [a, b, c] = [await chips.nth(0).boundingBox(), await chips.nth(1).boundingBox(), await chips.nth(2).boundingBox()];
-  expect(Math.abs(a!.y - b!.y)).toBeLessThan(2);
-  expect(c!.y).toBeGreaterThan(a!.y + 10);
+  // 宿主可能还在按卡片高度滚动；在 iframe 内的同一次布局中比较三个格子。
+  const [firstY, secondY, thirdY] = await chips.evaluateAll((cells) => cells.map((el) => el.getBoundingClientRect().top));
+  expect(Math.abs(firstY - secondY)).toBeLessThan(2);
+  expect(thirdY).toBeGreaterThan(firstY + 10);
   for (let i = 0; i < 4; i++) {
     expect(await chips.nth(i).evaluate((el) => el.getBoundingClientRect().right <= el.closest("[data-testid='lol-game-augment-row']")!.getBoundingClientRect().right + 1)).toBe(true);
   }
