@@ -6,7 +6,7 @@
 //! 由私有类型读进来、转成等价的程序（[`AutomationLibrary::open`] 转完存盘；工具 `automation.save`
 //! 收到的旧写法在解析 [`AutomationDraft`] 时就转好）。
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
 
 use serde_json::{Map, Value};
 
@@ -294,6 +294,11 @@ pub struct Automation {
     /// 游戏事件触发（ADR 036 D6）；None = 不按事件运行。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on: Option<EventTrigger>,
+    /// 玩家确认过这段程序可以调的工具（ADR 046 D3）：工具 → 确认时它的副作用。只有 Kotone 窗口能写
+    /// （[`AutomationLibrary::confirm`]）；提交的草稿带它直接拒；程序一改就清掉（谁改的都算），只改名字、参数、
+    /// 触发不动它。rc.13 读到这个字段会忽略。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub confirmed: BTreeMap<String, Vec<String>>,
 }
 
 /// 存盘里的自动化：和 [`Automation`] 一样，只是动作还可能是旧写法。
@@ -314,6 +319,8 @@ struct StoredAutomation {
     schedule: Option<Schedule>,
     #[serde(default)]
     on: Option<EventTrigger>,
+    #[serde(default)]
+    confirmed: BTreeMap<String, Vec<String>>,
 }
 
 impl StoredAutomation {
@@ -331,6 +338,12 @@ impl StoredAutomation {
             updated_at_ms: self.updated_at_ms,
             schedule: self.schedule,
             on: self.on,
+            // 旧写法转出来的程序不调工具，没有确认可留
+            confirmed: if upgraded {
+                BTreeMap::new()
+            } else {
+                self.confirmed
+            },
         };
         (automation, upgraded)
     }
@@ -377,12 +390,20 @@ struct DraftFields {
     schedule: Option<Schedule>,
     #[serde(default)]
     on: Option<EventTrigger>,
+    /// 只为认出来、说清楚再拒（ADR 046 D3）：确认只有玩家在 Kotone 窗口里能做。
+    #[serde(default)]
+    confirmed: Option<serde::de::IgnoredAny>,
 }
 
 impl TryFrom<DraftFields> for AutomationDraft {
     type Error = String;
 
     fn try_from(fields: DraftFields) -> Result<Self, String> {
+        if fields.confirmed.is_some() {
+            return Err(
+                "保存时不能带 confirmed：要调的工具由玩家在「自动化」页点“允许”确认".into(),
+            );
+        }
         fields.action.check(&fields.params)?;
         let (action, _) = fields.action.upgrade(&fields.params);
         Ok(Self {
@@ -602,8 +623,8 @@ pub const WINDOW_FUNCTIONS: &[&str] = &[
     "game_focused",
 ];
 
-/// 不用游戏窗口的函数：时钟、等待、说话、弹幕、推送、交给她、日志。脚本引擎的测试保证白名单里每个函数都在
-/// 这两张表之一里。
+/// 不用游戏窗口的函数：时钟、等待、说话、弹幕、推送、交给她、调工具、日志。脚本引擎的测试保证白名单里每个函数都在
+/// 这两张表之一里。`tool` 不算用到游戏窗口（ADR 046 D1）：往游戏里打字、按键的工具程序里调不了（D2）。
 pub const PLAIN_FUNCTIONS: &[&str] = &[
     "wait",
     "now",
@@ -614,12 +635,17 @@ pub const PLAIN_FUNCTIONS: &[&str] = &[
     "toast",
     "push",
     "ask",
+    "tool",
     "log",
     "stop",
 ];
 
+/// 说出或显示文字的函数（她开口说、弹幕、推送）：她运行这样的自动化，副作用是“显示或说出文字”（ADR 046 D5）。
+const SPEAK_FUNCTIONS: &[&str] = &["say", "toast", "push"];
+
 /// 程序里用到了什么：按源码保守判断，宁可多算（注释和字符串里的不算；`args.key`、`t:find`、`{ key = 1 }`
 /// 不算；反引号字符串里出现的名字都算）。算漏了也不出事：窗口函数在没绑窗口的执行里一调用就报错。
+/// 会调哪些工具另算（[`tools_called`]：名字要直接写，否则存不进来）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgramUses {
@@ -627,6 +653,8 @@ pub struct ProgramUses {
     pub window: bool,
     /// 会叫她（`ask`）：每次花一次 AI 调用；会叫她的自动化不当 `saved.*` 工具给她。
     pub asks: bool,
+    /// 会说出或显示文字（`say` / `toast` / `push`）。
+    pub speaks: bool,
 }
 
 impl ProgramUses {
@@ -635,9 +663,66 @@ impl ProgramUses {
         for name in used_names(source) {
             uses.window |= WINDOW_FUNCTIONS.contains(&name);
             uses.asks |= name == "ask";
+            uses.speaks |= SPEAK_FUNCTIONS.contains(&name);
         }
         uses
     }
+}
+
+// ---------- 程序里调哪些工具（ADR 046 D1） ----------
+
+/// 工具名的格式：字母开头，只有字母、数字、`_`、`-`、`.`，最多 64 个字符，不以 `.` 结尾、没有连着的 `..`
+/// （没有点的 `music`、第三方的大写和连字符都认）。和脚本引擎的 `kotone_script::is_tool_name` 同一条规矩
+/// （那边的测试对着查）。
+pub fn is_tool_name(name: &str) -> bool {
+    name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && !name.ends_with('.')
+        && !name.contains("..")
+}
+
+const NOT_A_LITERAL: &str =
+    "tool() 的第一个参数要直接写工具名，例如 tool(\"music\", { action = \"play\" })：\
+     不能用变量或拼出来的名字，也别拿 tool 当变量名";
+
+/// 程序里会调哪些工具（按出现的先后，不重复）。和“用到游戏窗口”用同一个记号器：注释、字符串里的不算，
+/// `t.tool`、`{ tool = 1 }` 不算。`tool` 只能这样用：`tool("名字", …)` / `tool "名字"`（名字直接写成 `"…"` 或 `'…'`
+/// 字符串）；别的用法（变量、拼出来的名字、`local f = tool`、写进反引号字符串）一律报错——存不进来、也不让跑。
+/// 运行时宿主再查一遍名字在不在这张单子上（`_G["to" .. "ol"]` 这类绕过记号器的写法到那里就报错）。
+pub fn tools_called(source: &str) -> Result<Vec<String>, String> {
+    let tokens = tokens(source);
+    let mut out: Vec<String> = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let name = match *token {
+            Token::Quoted("tool") => return Err(NOT_A_LITERAL.into()),
+            Token::Name("tool") if global_use(&tokens, i) => {
+                match (tokens.get(i + 1), tokens.get(i + 2), tokens.get(i + 3)) {
+                    (
+                        Some(Token::Open),
+                        Some(Token::Str(name)),
+                        Some(Token::Comma | Token::Close),
+                    ) => *name,
+                    (Some(Token::Str(name)), _, _) => *name,
+                    _ => return Err(NOT_A_LITERAL.into()),
+                }
+            }
+            _ => continue,
+        };
+        if !is_tool_name(name) {
+            return Err(format!(
+                "tool(\"{}\") 的工具名不对：工具名是 music、lol.match 这样的（字母开头，只有字母、数字、_ - .，\
+                 最多 64 个字符）",
+                name.chars().take(64).collect::<String>()
+            ));
+        }
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -645,12 +730,20 @@ enum Token<'a> {
     Name(&'a str),
     /// 反引号字符串里的名字（插值 `{…}` 是代码）：一律算用到。
     Quoted(&'a str),
+    /// `"…"` / `'…'` 字符串（引号里的原文，不解转义）。
+    Str(&'a str),
     /// 单个 `.`（不是 `..`、`...`）。
     Dot,
     /// 单个 `:`（不是 `::`）。
     Colon,
     /// 单个 `=`（不是 `==`、`~=`、`<=`、`>=`）。
     Assign,
+    /// `(`
+    Open,
+    /// `)`
+    Close,
+    /// `,`
+    Comma,
     Other,
 }
 
@@ -713,11 +806,13 @@ fn tokens(source: &str) -> Vec<Token<'_>> {
             }
         } else if c == b'"' || c == b'\'' {
             i += 1;
+            let start = i;
             while i < b.len() && b[i] != c && b[i] != b'\n' {
                 i += if b[i] == b'\\' { 2 } else { 1 };
             }
+            let end = i.min(b.len());
             i += 1;
-            out.push(Token::Other);
+            out.push(Token::Str(source.get(start..end).unwrap_or("")));
         } else if c == b'`' {
             let start = i + 1;
             i += 1;
@@ -782,6 +877,9 @@ fn tokens(source: &str) -> Vec<Token<'_>> {
                     i += 1;
                     Token::Other
                 }
+                b'(' => Token::Open,
+                b')' => Token::Close,
+                b',' => Token::Comma,
                 _ => Token::Other,
             };
             i += 1;
@@ -796,26 +894,25 @@ fn used_names(source: &str) -> Vec<&str> {
     let tokens = tokens(source);
     let mut out = Vec::new();
     for (i, token) in tokens.iter().enumerate() {
-        let name = match *token {
-            Token::Quoted(name) => {
-                out.push(name);
-                continue;
-            }
-            Token::Name(name) => name,
-            _ => continue,
-        };
-        let before = |n: usize| i.checked_sub(n).map(|j| tokens[j]);
-        let field = match before(1) {
-            Some(Token::Dot) => before(2) != Some(Token::Name("_G")),
-            Some(Token::Colon) => true,
-            _ => false,
-        };
-        let assigned = tokens.get(i + 1) == Some(&Token::Assign);
-        if !field && !assigned {
-            out.push(name);
+        match *token {
+            Token::Quoted(name) => out.push(name),
+            Token::Name(name) if global_use(&tokens, i) => out.push(name),
+            _ => {}
         }
     }
     out
+}
+
+/// 第 `i` 个记号（一个名字）是不是当全局名字用：不是字段 `a.b`（`_G.b` 算）、方法 `a:b`、表键 / 赋值目标 `b = …`。
+fn global_use(tokens: &[Token<'_>], i: usize) -> bool {
+    let before = |n: usize| i.checked_sub(n).map(|j| tokens[j]);
+    let field = match before(1) {
+        Some(Token::Dot) => before(2) != Some(Token::Name("_G")),
+        Some(Token::Colon) => true,
+        _ => false,
+    };
+    let assigned = tokens.get(i + 1) == Some(&Token::Assign);
+    !field && !assigned
 }
 
 // ---------- 模板（ADR 045 D9） ----------
@@ -977,8 +1074,20 @@ impl AutomationDraft {
         if chars == 0 || chars > MAX_SOURCE_CHARS {
             return Err(format!("自动化内容为空或超过 {MAX_SOURCE_CHARS} 字"));
         }
+        for tool in tools_called(&program.source)? {
+            if is_automation_tool(&tool) {
+                return Err(format!(
+                    "程序里不能调自动化自己的工具（{tool}）：会绕圈，也能绕过确认"
+                ));
+            }
+        }
         Ok(self)
     }
+}
+
+/// 自动化自己的工具（运行、改、停自动化，`saved.<id>` 也是运行自动化）：程序里不能调（ADR 046 D2）。
+pub fn is_automation_tool(name: &str) -> bool {
+    name.starts_with("automation.") || name.starts_with("saved.")
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1036,6 +1145,7 @@ fn builtin_remind(now: u64) -> Automation {
         updated_at_ms: now,
         schedule: None,
         on: None,
+        confirmed: BTreeMap::new(),
     }
 }
 
@@ -1078,6 +1188,7 @@ fn program(
         updated_at_ms: now,
         schedule: None,
         on: None,
+        confirmed: BTreeMap::new(),
     }
 }
 
@@ -1113,6 +1224,7 @@ fn builtin_lol_scout(now: u64) -> Automation {
             cooldown_seconds: 0,
             enabled: false,
         }),
+        confirmed: BTreeMap::new(),
     }
 }
 
@@ -1187,6 +1299,8 @@ fn refresh_builtin(automations: &mut [Automation], now: u64) -> Vec<String> {
         stored.params = params;
         stored.description = next.description.clone();
         stored.action = next.action.clone();
+        // 程序换了：确认作废（ADR 046 D3）
+        stored.confirmed.clear();
         stored.updated_at_ms = now;
         refreshed.push(stored.id.clone());
     }
@@ -1435,7 +1549,8 @@ impl AutomationLibrary {
             .cloned()
     }
 
-    /// 新建（`draft.id` 为空）或覆盖已有定义。覆盖时保留创建者与创建时间。
+    /// 新建（`draft.id` 为空）或覆盖已有定义。覆盖时保留创建者与创建时间；程序变了，玩家对它调工具的确认清掉
+    /// （ADR 046 D3：谁改的都算；只改名字、参数、触发不动它）。程序里的工具名要直接写、不能调自动化自己的工具。
     /// `events`：合并后的事件目录（宿主按插件开关算好），游戏事件触发按它校验。
     pub fn save(
         &self,
@@ -1454,6 +1569,9 @@ impl AutomationLibrary {
                     .iter_mut()
                     .find(|a| a.id == id)
                     .ok_or_else(|| format!("找不到自动化 {id}"))?;
+                if existing.action.source().trim() != draft.action.source() {
+                    existing.confirmed.clear();
+                }
                 existing.name = draft.name;
                 existing.description = draft.description;
                 existing.params = draft.params;
@@ -1480,6 +1598,7 @@ impl AutomationLibrary {
                     updated_at_ms: now,
                     schedule: draft.schedule,
                     on: draft.on,
+                    confirmed: BTreeMap::new(),
                 };
                 next.automations.push(automation.clone());
                 automation
@@ -1520,6 +1639,63 @@ impl AutomationLibrary {
     /// 全部内置自动化的定义（“X 秒之后提醒我”、突破口、按键程序；测试与文档用）。
     pub fn builtin_programs_preview() -> Vec<Automation> {
         all_builtin(0)
+    }
+
+    /// 玩家在「自动化」页点“允许”（编辑器里是“允许并保存”，ADR 046 D3）：记下这段程序可以调这些工具，`map` 是
+    /// 工具 → 这时它的副作用（宿主先按权限算好哪些要确认）。**只给 Kotone 窗口的命令用**，工具服务里没有这条路。
+    /// `source_seen` 是玩家看到的那份程序：和现在存的不一样（这期间被她、外部 Agent 或另一个窗口改了）就不认。
+    /// 和以前的确认合在一起；程序里已经不调的工具去掉。不改 `updated_at_ms`（确认不是修改）。
+    pub fn confirm(
+        &self,
+        id: &str,
+        source_seen: &str,
+        map: BTreeMap<String, Vec<String>>,
+    ) -> Result<Automation, String> {
+        let mut state = self.state.lock().unwrap();
+        let mut next = state.clone();
+        let automation = next
+            .automations
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or_else(|| format!("找不到自动化 {id}"))?;
+        if automation.action.source().trim() != source_seen.trim() {
+            return Err("这段程序刚被改过：刷新一下，看过现在的程序再允许".into());
+        }
+        let called = tools_called(automation.action.source())?;
+        for (tool, mut effects) in map {
+            if !called.contains(&tool) {
+                return Err(format!("程序里没有调用 {tool}，不用允许"));
+            }
+            effects.sort();
+            effects.dedup();
+            automation.confirmed.insert(tool, effects);
+        }
+        automation.confirmed.retain(|tool, _| called.contains(tool));
+        let confirmed = automation.clone();
+        self.persist(&next)?;
+        *state = next;
+        Ok(confirmed)
+    }
+
+    /// 清掉以 `prefix` 开头的工具的确认（第三方插件的配置变了，确认的就不是现在这个服务器的工具了；照热键的
+    /// `Settings::forget_confirmations`）。返回有没有清掉什么。
+    pub fn forget_confirmations(&self, prefix: &str) -> Result<bool, String> {
+        let mut state = self.state.lock().unwrap();
+        let mut next = state.clone();
+        let mut changed = false;
+        for automation in &mut next.automations {
+            let before = automation.confirmed.len();
+            automation
+                .confirmed
+                .retain(|tool, _| !tool.starts_with(prefix));
+            changed |= automation.confirmed.len() != before;
+        }
+        if !changed {
+            return Ok(false);
+        }
+        self.persist(&next)?;
+        *state = next;
+        Ok(true)
     }
 
     /// 删除；返回是否存在。已安排的执行保存了快照，不受影响。
@@ -1687,7 +1863,8 @@ mod tests {
             ok.action.uses(),
             ProgramUses {
                 window: false,
-                asks: true
+                asks: true,
+                speaks: false
             }
         );
         assert!(ok.on.as_ref().unwrap().once_per_match);
@@ -2105,7 +2282,8 @@ mod tests {
             a.action.uses(),
             ProgramUses {
                 window: false,
-                asks: true
+                asks: true,
+                speaks: false
             }
         );
         let draft = as_draft(&a).normalized(&EventCatalog::generic()).unwrap();
@@ -2155,6 +2333,25 @@ mod tests {
         assert!(uses("local f = ask f('x')").asks);
         assert!(!uses("say('ask')").asks);
         assert!(!uses("args.ask = 1").asks);
+        // 说出或显示文字（ADR 046 D5：她运行它的副作用）
+        for source in [
+            "say('x')",
+            "toast('x')",
+            "push('x')",
+            "local f = say f('x')",
+        ] {
+            assert!(uses(source).speaks, "{source}");
+        }
+        for source in [
+            "log('say')",
+            "tool('music')",
+            "local t = { say = 1 }",
+            "key('Q')",
+        ] {
+            assert!(!uses(source).speaks, "{source}");
+        }
+        // 调工具不算用到游戏窗口
+        assert!(!uses("tool('music', { action = 'play' })").window);
         // 两张表没有重名
         for name in WINDOW_FUNCTIONS {
             assert!(!PLAIN_FUNCTIONS.contains(name), "{name}");
@@ -2221,5 +2418,247 @@ mod tests {
             Value::Object(event_args(&params, &event)),
             json!({"killer_name": "某人", "team": "enemy"})
         );
+    }
+
+    // ---------- ADR 046：程序里调工具 ----------
+
+    /// D1：会调哪些工具按源码列（名字直接写成字符串）；名字不是直接写的一律报错。
+    #[test]
+    fn tools_called_lists_the_names_written_out_and_rejects_the_rest() {
+        let called = |source: &str| tools_called(source);
+        for (source, want) in [
+            ("say('好')", vec![]),
+            ("tool('music')", vec!["music"]),
+            (
+                "local r = tool(\"music\", { action = \"play\" }) tool('lol.match') tool('music')",
+                vec!["music", "lol.match"],
+            ),
+            ("tool 'lol.match'", vec!["lol.match"]),
+            (
+                "local r = _G.tool('My-Plugin.Get_Thing')",
+                vec!["My-Plugin.Get_Thing"],
+            ),
+            ("-- tool(x)\nsay('tool(x)')", vec![]),
+            ("--[[ tool(args.name) ]] log(\"tool\")", vec![]),
+            (
+                "local t = { tool = 1 } say(tostring(t.tool)) x:tool(y)",
+                vec![],
+            ),
+            ("local s = [[ tool(x) ]] say(s)", vec![]),
+        ] {
+            assert_eq!(called(source).unwrap(), want, "{source}");
+        }
+        for source in [
+            "tool(args.name)",
+            "local name = 'music' tool(name)",
+            "tool('lol.' .. 'match')",
+            "tool(('music'))",
+            "tool([[music]])",
+            "tool(`music`)",
+            "local f = tool f('music')",
+            "pcall(tool, 'music')",
+            "local x = `{tool(args.n)}`",
+            "tool",
+            "tool('mu\\115ic')",
+            "tool('a b')",
+            "tool('')",
+        ] {
+            assert!(called(source).is_err(), "{source}");
+        }
+        assert!(called("tool(args.name)")
+            .unwrap_err()
+            .contains("直接写工具名"));
+    }
+
+    /// D1、D2：保存时名字要直接写；自动化自己的工具（运行、改、停自动化）不能调。
+    #[test]
+    fn saving_rejects_tool_names_not_written_out_and_automation_tools() {
+        let with = |source: &str| {
+            draft(json!({"name": "x", "action": {"kind": "program", "source": source}}))
+                .normalized(&EventCatalog::generic())
+        };
+        assert!(with("tool('music', { action = 'play' })").is_ok());
+        assert!(with("tool(args.tool_name)")
+            .unwrap_err()
+            .contains("直接写工具名"));
+        for tool in [
+            "automation.run",
+            "automation.save",
+            "automation.stop",
+            "saved.auto-1",
+        ] {
+            let err = with(&format!("tool('{tool}', {{ id = 'auto-1' }})")).unwrap_err();
+            assert!(err.contains("自动化自己的工具"), "{tool}: {err}");
+        }
+    }
+
+    fn calls_music() -> AutomationDraft {
+        draft(json!({
+            "name": "队友都倒了放首歌",
+            "params": [{"name": "song", "type": "text", "maxLength": 100, "default": "Legends Never Die"}],
+            "action": {"kind": "program", "source": "local r = tool(\"music\", { action = \"play\", query = args.song })\nif not r then log(\"没放成\") end\ntool('settings.get')"},
+            "on": {"event": ["game.phase_changed"], "game": "demo", "match": {"to": "in_game"}, "cooldownSeconds": 60}
+        }))
+    }
+
+    fn effects(map: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        map.iter()
+            .map(|(tool, effects)| {
+                (
+                    tool.to_string(),
+                    effects.iter().map(|e| e.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// D3：确认写不进来（草稿带 `confirmed` 直接拒，只有 `confirm` 能写，还要核对玩家看到的那份程序）；程序一改
+    /// 就清掉；只改名字、参数、触发不动它；第三方插件的配置变了按前缀清掉；存盘读回一样。
+    #[test]
+    fn confirmations_come_only_from_confirm_and_go_when_the_program_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("automations.json");
+        let library = AutomationLibrary::open(path.clone()).unwrap();
+        let catalog = EventCatalog::generic();
+        // 草稿带 confirmed：说清楚再拒（她、外部 Agent 伪造不进来）
+        let mut forged = serde_json::to_value(calls_music()).unwrap();
+        forged["confirmed"] = json!({"music": ["plays-media"]});
+        let err = serde_json::from_value::<AutomationDraft>(forged).unwrap_err();
+        assert!(err.to_string().contains("「自动化」页"), "{err}");
+        let saved = library
+            .save(calls_music(), CreatedBy::Companion, &catalog)
+            .unwrap();
+        assert!(saved.confirmed.is_empty());
+        let source = saved.action.source().to_string();
+        // 玩家看到的不是现在这份 → 不认；程序里没有的工具 → 不认
+        assert!(library
+            .confirm(
+                &saved.id,
+                "tool('music')",
+                effects(&[("music", &["plays-media"])])
+            )
+            .unwrap_err()
+            .contains("刚被改过"));
+        assert!(library
+            .confirm(
+                &saved.id,
+                &source,
+                effects(&[("game.act", &["sends-game-input"])])
+            )
+            .is_err());
+        assert!(library
+            .confirm("auto-99", &source, effects(&[("music", &["plays-media"])]))
+            .is_err());
+        let confirmed = library
+            .confirm(
+                &saved.id,
+                &format!("  {source}\n"),
+                effects(&[("music", &["plays-media", "plays-media"])]),
+            )
+            .unwrap();
+        assert_eq!(confirmed.confirmed, effects(&[("music", &["plays-media"])]));
+        assert_eq!(confirmed.updated_at_ms, saved.updated_at_ms, "确认不是修改");
+        // 和以前的合在一起
+        let both = library
+            .confirm(&saved.id, &source, effects(&[("settings.get", &[])]))
+            .unwrap()
+            .confirmed;
+        assert_eq!(
+            both,
+            effects(&[("music", &["plays-media"]), ("settings.get", &[])])
+        );
+        // 只改名字、参数缺省值、触发：确认还在
+        let mut renamed = calls_music();
+        renamed.id = Some(saved.id.clone());
+        renamed.name = "最后一个队友倒下放歌".into();
+        renamed.params[0].default = Some(json!("晴天"));
+        renamed.on.as_mut().unwrap().cooldown_seconds = 120;
+        let kept = library.save(renamed, CreatedBy::User, &catalog).unwrap();
+        assert_eq!(kept.confirmed, both);
+        // 存盘读回一样；文件里有 confirmed
+        drop(library);
+        let library = AutomationLibrary::open(path.clone()).unwrap();
+        assert_eq!(library.get(&saved.id).unwrap().confirmed, both);
+        let file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            file["automations"][0]["confirmed"]["music"],
+            json!(["plays-media"])
+        );
+        // 第三方插件的配置变了：按前缀清掉
+        assert!(!library.forget_confirmations("demo.").unwrap());
+        assert!(library.forget_confirmations("settings.").unwrap());
+        assert_eq!(
+            library.get(&saved.id).unwrap().confirmed,
+            effects(&[("music", &["plays-media"])])
+        );
+        // 改了程序（谁改的都算，多一个空格不算）：确认没了
+        let mut same = calls_music();
+        same.id = Some(saved.id.clone());
+        let AutomationBody::Program(program) = &mut same.action;
+        program.source = format!("\n{}  ", program.source);
+        let still = library.save(same, CreatedBy::Agent, &catalog).unwrap();
+        assert!(!still.confirmed.is_empty(), "首尾空白不算改了程序");
+        let mut edited = calls_music();
+        edited.id = Some(saved.id.clone());
+        let AutomationBody::Program(program) = &mut edited.action;
+        program.source.push_str("\nsay('好')");
+        let cleared = library.save(edited, CreatedBy::User, &catalog).unwrap();
+        assert!(cleared.confirmed.is_empty());
+        let file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            file["automations"][0].get("confirmed").is_none(),
+            "空的不写"
+        );
+    }
+
+    /// 兼容：rc.13 的定义不认识 `confirmed`、也不拒（它的 `Automation` 没有 `deny_unknown_fields`），读新文件不出错；
+    /// 文件版本号还是 1。这里照 rc.13 的样子写一份读法对着查。
+    #[test]
+    fn rc13_reads_a_file_with_confirmations() {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct Rc13Automation {
+            id: String,
+            name: String,
+            #[serde(default)]
+            description: String,
+            #[serde(default)]
+            params: Vec<ParamSpec>,
+            action: AutomationBody,
+            created_by: CreatedBy,
+            created_at_ms: u64,
+            updated_at_ms: u64,
+            #[serde(default)]
+            schedule: Option<Schedule>,
+            #[serde(default)]
+            on: Option<EventTrigger>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct Rc13File {
+            version: u32,
+            next_id: u64,
+            automations: Vec<Rc13Automation>,
+            #[serde(default)]
+            builtin: Vec<String>,
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("automations.json");
+        let library = AutomationLibrary::open(path.clone()).unwrap();
+        let saved = library
+            .save(calls_music(), CreatedBy::User, &EventCatalog::generic())
+            .unwrap();
+        library
+            .confirm(
+                &saved.id,
+                saved.action.source(),
+                effects(&[("music", &["plays-media"])]),
+            )
+            .unwrap();
+        let file: Rc13File = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(file.version, 1);
+        assert_eq!(file.automations[0].action, saved.action);
     }
 }

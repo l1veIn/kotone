@@ -13,6 +13,9 @@
 //!   取消标记随时生效；游戏窗口失去焦点时按键与打字先暂停等待。
 //! - **数据不是指令**：`ocr()` 返回不透明的 `ScreenText`，只能问 `:has("文字")` / `:count()` /
 //!   `:find("文字")`（位置），拿不到字符串，因此屏幕上的字无法拼进 `type_text` / `chat` / `say` 的内容。
+//!   `tool()` 不是后门：结果不可信的工具宿主只交回 `{status}`（kotone-core 的 `program_view`，ADR 046 D4）。
+//! - **调工具**（ADR 046 D1）：`tool(name, args)` 经 [`ScriptHost::tool`]；名字格式、参数大小（≤4 KB）、两次至少隔
+//!   1 秒、结果转只读表（最多 8 层、256 KB）在这里；名字在不在程序的单子上、权限、确认、30 秒、停下由宿主管。
 //! - **找色 / 找图 / 找字**：`find_color` / `find_image` 参照 AutoHotkey 的 `PixelSearch` /
 //!   `ImageSearch`（区域、颜色、`variation` 容差、透明色、第一个匹配），`find_text` 对区域做 OCR；
 //!   都返回窗口比例坐标，可直接交给 `click`。
@@ -86,6 +89,17 @@ pub struct TextLine {
     pub rect: Option<Region>,
 }
 
+/// 程序里 `tool()` 调一个工具的结果（ADR 046 D1）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolReply {
+    /// 做成了：交给程序的数据。宿主已经按“数据不是指令”挑好（可信的工具是结构化结果，没有就是给她的那份内容；
+    /// 不可信的只有 `{status}`，kotone-core 的 `program_view`）。脚本引擎转成只读的表（最多
+    /// [`MAX_TOOL_RESULT_DEPTH`] 层、[`MAX_TOOL_RESULT_BYTES`]），太大就当没成。
+    Value(serde_json::Value),
+    /// 工具自己说没成（插件返回错误、工具服务 ok = false、超时）：程序拿到 `nil, 原因`，接着跑。
+    Failed(String),
+}
+
 /// 脚本能用到的全部外部能力。实现必须只作用于启动脚本时的游戏窗口。
 pub trait ScriptHost: Send + Sync {
     /// 单调时钟（毫秒）。
@@ -127,6 +141,14 @@ pub trait ScriptHost: Send + Sync {
     /// 看屏幕）一调用就报这个错，不进“游戏不在前台就暂停”的等待；`game_focused()` 返回 false。默认绑了。
     fn require_window(&self) -> Result<(), String> {
         Ok(())
+    }
+    /// 调一个工具（ADR 046 D1）：阻塞到工具回来。名字格式、`args`（总是 JSON 对象，≤4 KB）、两次之间至少隔 1 秒由
+    /// 脚本引擎保证。宿主负责：名字在不在这段程序的单子上（kotone-core 的 `tools_called`）、能不能调（范围、权限、
+    /// 确认、插件开关），调不了返回 Err（程序出错结束，执行记录写原因）；最多等 [`TOOL_TIMEOUT_MS`]，超时回
+    /// `Ok(Failed(..))`；停下就跟着停，返回的错误记成“已取消”。默认：这里调不了工具。
+    fn tool(&self, name: &str, args: &serde_json::Value) -> Result<ToolReply, String> {
+        let _ = (name, args);
+        Err("这里调不了工具".into())
     }
 }
 
@@ -206,6 +228,7 @@ struct State {
     keys: AtomicU64,
     last_key: Mutex<Option<u64>>,
     last_push: Mutex<Option<u64>>,
+    last_tool: Mutex<Option<u64>>,
     log: Mutex<Vec<String>>,
     images: Mutex<std::collections::HashMap<String, Arc<Pixels>>>,
 }
@@ -220,6 +243,7 @@ impl State {
             keys: AtomicU64::new(0),
             last_key: Mutex::new(None),
             last_push: Mutex::new(None),
+            last_tool: Mutex::new(None),
             log: Mutex::new(Vec::new()),
             images: Mutex::new(std::collections::HashMap::new()),
         })
@@ -309,9 +333,19 @@ impl State {
 
     /// 推送前：两次之间至少隔 [`MIN_PUSH_INTERVAL_MS`]，太快就等（和按键间隔一样，不报错）。
     fn before_push(&self) -> mlua::Result<()> {
+        self.space_out(&self.last_push, MIN_PUSH_INTERVAL_MS)
+    }
+
+    /// 调工具前：两次之间至少隔 [`MIN_TOOL_INTERVAL_MS`]（从上一次回来算），太快就等。
+    fn before_tool(&self) -> mlua::Result<()> {
+        self.space_out(&self.last_tool, MIN_TOOL_INTERVAL_MS)
+    }
+
+    /// 离 `last` 记下的时刻不到 `interval` 毫秒就等到够了再继续。
+    fn space_out(&self, last: &Mutex<Option<u64>>, interval: u64) -> mlua::Result<()> {
         let wait = {
-            let last = self.last_push.lock().unwrap();
-            last.map(|t| (t + MIN_PUSH_INTERVAL_MS).saturating_sub(self.host.now_ms()))
+            let last = last.lock().unwrap();
+            last.map(|t| (t + interval).saturating_sub(self.host.now_ms()))
         };
         if let Some(ms) = wait.filter(|ms| *ms > 0) {
             self.sleep(ms)?;
@@ -330,6 +364,33 @@ pub const MAX_PUSH_CHARS: usize = 40;
 pub const MIN_PUSH_INTERVAL_MS: u64 = 1_000;
 /// `ask()` 那句话最多几个字（和以前的“让她做”一样）。
 pub const MAX_ASK_CHARS: usize = 500;
+/// `tool()` 的工具名最多几个字符（ADR 046 D1）。
+pub const MAX_TOOL_NAME_CHARS: usize = 64;
+/// `tool()` 的参数（转成 JSON）最多多少字节。
+pub const MAX_TOOL_ARGS_BYTES: usize = 4_096;
+/// 交给程序的工具结果（JSON）最多多少字节；超过就当没成。
+pub const MAX_TOOL_RESULT_BYTES: usize = 256 * 1024;
+/// 交给程序的工具结果最多几层表。
+pub const MAX_TOOL_RESULT_DEPTH: usize = 8;
+/// 两次 `tool()` 之间至少隔多久（从上一次回来算，太快自动等）。
+pub const MIN_TOOL_INTERVAL_MS: u64 = 1_000;
+/// 宿主等一个工具最多多久（到了回 [`ToolReply::Failed`]）。脚本引擎打断不了阻塞中的宿主调用，由宿主照这个数等。
+pub const TOOL_TIMEOUT_MS: u64 = 30_000;
+/// 工具没成时交给程序的原因最多几个字。
+const MAX_TOOL_REASON_CHARS: usize = 300;
+
+/// 工具名的格式（ADR 046 D1）：字母开头，只有字母、数字、`_`、`-`、`.`，最多 [`MAX_TOOL_NAME_CHARS`] 个字符，
+/// 不以 `.` 结尾、没有连着的 `..`。没有点的（`music`）、第三方的大写和连字符都认。kotone-core 的
+/// `library::is_tool_name` 是同一条规矩（测试对着查）。
+pub fn is_tool_name(name: &str) -> bool {
+    name.len() <= MAX_TOOL_NAME_CHARS
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && !name.ends_with('.')
+        && !name.contains("..")
+}
 
 /// 按键名：字母、数字、F1–F24、常用功能键，可带 Ctrl/Alt/Shift 组合（交给宿主再精确解析）。
 fn check_key(key: &str) -> mlua::Result<()> {
@@ -1020,6 +1081,46 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
             s.host_result(s.host.ask(&text))
         })?,
     )?;
+    // tool(name, args) → 结果（只读的表）；工具自己说没成 → nil, 原因；调不了 → 程序出错结束（ADR 046 D1）。
+    let s = state.clone();
+    g.set(
+        "tool",
+        lua.create_function(move |lua, (name, args): (Value, Value)| {
+            let name = match &name {
+                Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
+                _ => None,
+            }
+            .filter(|n| is_tool_name(n))
+            .ok_or_else(|| {
+                mlua::Error::runtime(
+                    "tool() 的第一个参数要直接写工具名，例如 tool(\"music\", { action = \"play\" })",
+                )
+            })?;
+            let args = tool_args(&args)?;
+            s.before_tool()?;
+            s.deadline_check()?;
+            let reply = s.host_result(s.host.tool(&name, &args));
+            *s.last_tool.lock().unwrap() = Some(s.host.now_ms());
+            let reply = reply?;
+            // 停下了：正在等的那次记成已取消，不再往下跑
+            s.deadline_check()?;
+            let failed = |reason: &str| -> mlua::Result<(Value, Value)> {
+                let reason: String = reason.trim().chars().take(MAX_TOOL_REASON_CHARS).collect();
+                let reason = if reason.is_empty() { "没成".into() } else { reason };
+                Ok((Value::Nil, Value::String(lua.create_string(reason)?)))
+            };
+            match reply {
+                ToolReply::Failed(reason) => failed(&reason),
+                ToolReply::Value(value) => match tool_result(lua, &value) {
+                    Some(result) => Ok((result?, Value::Nil)),
+                    None => failed(&format!(
+                        "{name} 的结果太大（超过 {} KB）或嵌套太深（超过 {MAX_TOOL_RESULT_DEPTH} 层），程序拿不到",
+                        MAX_TOOL_RESULT_BYTES / 1024
+                    )),
+                },
+            }
+        })?,
+    )?;
     let s = state.clone();
     g.set(
         "log",
@@ -1056,9 +1157,17 @@ fn classify(error: &mlua::Error) -> Outcome {
     }
 }
 
-/// JSON 值 → 只读的 Luau 值（对象、数组递归转换为只读表）。
-fn lua_value(lua: &Lua, value: &serde_json::Value, depth: usize) -> mlua::Result<Value> {
-    if depth > 4 {
+/// 入参（`args`）最多嵌套几层。
+const MAX_ARGS_DEPTH: usize = 4;
+
+/// JSON 值 → 只读的 Luau 值（对象、数组递归转换为只读表）；比 `max_depth` 深就报错。
+fn lua_value(
+    lua: &Lua,
+    value: &serde_json::Value,
+    depth: usize,
+    max_depth: usize,
+) -> mlua::Result<Value> {
+    if depth > max_depth {
         return Err(mlua::Error::runtime("入参嵌套过深"));
     }
     Ok(match value {
@@ -1069,12 +1178,12 @@ fn lua_value(lua: &Lua, value: &serde_json::Value, depth: usize) -> mlua::Result
         serde_json::Value::Array(items) => {
             let t = lua.create_table()?;
             for (i, item) in items.iter().enumerate() {
-                t.set(i + 1, lua_value(lua, item, depth + 1)?)?;
+                t.set(i + 1, lua_value(lua, item, depth + 1, max_depth)?)?;
             }
             t.set_readonly(true);
             Value::Table(t)
         }
-        serde_json::Value::Object(map) => Value::Table(args_table(lua, map, depth + 1)?),
+        serde_json::Value::Object(map) => Value::Table(args_table(lua, map, depth + 1, max_depth)?),
     })
 }
 
@@ -1082,13 +1191,133 @@ fn args_table(
     lua: &Lua,
     map: &serde_json::Map<String, serde_json::Value>,
     depth: usize,
+    max_depth: usize,
 ) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     for (k, v) in map {
-        t.set(k.as_str(), lua_value(lua, v, depth)?)?;
+        t.set(k.as_str(), lua_value(lua, v, depth, max_depth)?)?;
     }
     t.set_readonly(true);
     Ok(t)
+}
+
+/// JSON 有几层表（对象、数组各算一层，文字、数字 0 层）。
+fn json_depth(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Array(items) => 1 + items.iter().map(json_depth).max().unwrap_or(0),
+        serde_json::Value::Object(map) => 1 + map.values().map(json_depth).max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// 工具结果 → 只读的 Luau 值（ADR 046 D1）。超过 [`MAX_TOOL_RESULT_BYTES`] 或 [`MAX_TOOL_RESULT_DEPTH`] 层返回
+/// None（当没成）。做成了的结果总是真值：没有内容（null）给一张空表，`if not r` 只在没成时成立。
+fn tool_result(lua: &Lua, value: &serde_json::Value) -> Option<mlua::Result<Value>> {
+    let bytes = serde_json::to_vec(value).map_or(usize::MAX, |b| b.len());
+    if bytes > MAX_TOOL_RESULT_BYTES || json_depth(value) > MAX_TOOL_RESULT_DEPTH {
+        return None;
+    }
+    Some(match value {
+        serde_json::Value::Null => lua.create_table().map(|t| {
+            t.set_readonly(true);
+            Value::Table(t)
+        }),
+        value => lua_value(lua, value, 0, MAX_TOOL_RESULT_DEPTH),
+    })
+}
+
+/// `tool()` 的第二个参数 → JSON 对象（不写 = `{}`）。表里只能有文字、数字、真假和表；数组从 1 连续编号；
+/// 转出来不超过 [`MAX_TOOL_ARGS_BYTES`]。
+fn tool_args(value: &Value) -> mlua::Result<serde_json::Value> {
+    let bad = || {
+        mlua::Error::runtime(
+            "tool() 的第二个参数要写成表，例如 { action = \"play\", query = \"晴天\" }",
+        )
+    };
+    let args = match value {
+        Value::Nil => serde_json::Value::Object(serde_json::Map::new()),
+        Value::Table(_) => match json_from_lua(value, 1)? {
+            args @ serde_json::Value::Object(_) => args,
+            _ => return Err(bad()),
+        },
+        _ => return Err(bad()),
+    };
+    if serde_json::to_vec(&args).map_or(usize::MAX, |b| b.len()) > MAX_TOOL_ARGS_BYTES {
+        return Err(mlua::Error::runtime(format!(
+            "tool() 的参数超过 {} KB",
+            MAX_TOOL_ARGS_BYTES / 1024
+        )));
+    }
+    Ok(args)
+}
+
+/// 数字 → JSON：整数写成整数（Luau 的数都是小数，工具的参数常要整数）。
+fn number_json(n: f64) -> mlua::Result<serde_json::Value> {
+    if !n.is_finite() {
+        return Err(mlua::Error::runtime("tool() 的参数里不能有 NaN 或无穷大"));
+    }
+    if n.fract() == 0.0 && n.abs() < 9.0e15 {
+        return Ok(serde_json::Value::from(n as i64));
+    }
+    Ok(serde_json::Number::from_f64(n).map_or(serde_json::Value::Null, serde_json::Value::Number))
+}
+
+/// Luau 值 → JSON（`tool()` 的参数用）：空表是 `{}`；键都是 1..n 的表是数组；键都是名字的是对象。
+fn json_from_lua(value: &Value, depth: usize) -> mlua::Result<serde_json::Value> {
+    use serde_json::Value as Json;
+    let fail = |why: &str| mlua::Error::runtime(format!("tool() 的参数{why}"));
+    if matches!(value, Value::Table(_)) && depth > MAX_TOOL_RESULT_DEPTH {
+        return Err(fail(&format!(
+            "嵌套太深（最多 {MAX_TOOL_RESULT_DEPTH} 层）"
+        )));
+    }
+    Ok(match value {
+        Value::Nil => Json::Null,
+        Value::Boolean(b) => Json::Bool(*b),
+        Value::Integer(i) => Json::from(*i),
+        Value::Number(n) => number_json(*n)?,
+        Value::String(s) => Json::String(
+            s.to_str()
+                .map_err(|_| fail("里有不是 UTF-8 的文字"))?
+                .to_string(),
+        ),
+        Value::Table(t) => {
+            let mut items: Vec<(i64, Json)> = Vec::new();
+            let mut fields = serde_json::Map::new();
+            for pair in t.pairs::<Value, Value>() {
+                let (key, item) = pair?;
+                let item = json_from_lua(&item, depth + 1)?;
+                match key {
+                    Value::String(key) => {
+                        let key = key.to_str().map_err(|_| fail("里有不是 UTF-8 的名字"))?;
+                        fields.insert(key.to_string(), item);
+                    }
+                    Value::Integer(i) => items.push((i64::from(i), item)),
+                    Value::Number(n) if n.fract() == 0.0 && n.abs() < 9.0e15 => {
+                        items.push((n as i64, item))
+                    }
+                    _ => return Err(fail("里，表的键只能是名字或 1、2、3……")),
+                }
+            }
+            if !items.is_empty() && !fields.is_empty() {
+                return Err(fail("里，一张表不能既有名字又有 1、2、3……"));
+            }
+            if items.is_empty() {
+                Json::Object(fields)
+            } else {
+                items.sort_by_key(|(i, _)| *i);
+                if items
+                    .iter()
+                    .enumerate()
+                    .any(|(n, (i, _))| *i != n as i64 + 1)
+                {
+                    return Err(fail("里的列表要从 1 开始连续编号"));
+                }
+                Json::Array(items.into_iter().map(|(_, item)| item).collect())
+            }
+        }
+        _ => return Err(fail("里只能有文字、数字、真假和表")),
+    })
 }
 
 /// 运行一段脚本直到结束、取消或触发上限（阻塞；调用方放到专用线程）。
@@ -1111,7 +1340,8 @@ pub fn run_with_args(
         let lua = Lua::new_with(libs, LuaOptions::default())?;
         lua.set_memory_limit(limits.memory_bytes)?;
         install(&lua, state.clone())?;
-        lua.globals().set("args", args_table(&lua, args, 0)?)?;
+        lua.globals()
+            .set("args", args_table(&lua, args, 0, MAX_ARGS_DEPTH)?)?;
         lua.sandbox(true)?;
         let steps = Arc::new(AtomicU64::new(0));
         let s = state.clone();

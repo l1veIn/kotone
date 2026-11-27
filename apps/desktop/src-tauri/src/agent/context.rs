@@ -78,7 +78,9 @@ pub(super) fn offered_automations(
     crate::automation::saved_list(app)
         .into_iter()
         .filter(|a| !hidden.contains(&a.id))
-        .filter(|a| saved_entry(a).is_some())
+        // TODO(ADR 046 C): 这里只看给不给（会叫她、必填图片、工具名不是直接写的不给），和工具清单无关，所以传空清单；
+        // 副作用在 `Catalog::build` 里按她的工具清单算。
+        .filter(|a| saved_entry(a, &[]).is_some())
         .take(MAX_SAVED_TOOLS)
         .collect()
 }

@@ -23,7 +23,7 @@
 //! 这一项，和 [`UNTRUSTED_RESULTS`] 一样在这里标）。主会话里慢了也不卡：超过 3 秒没回来就转到后台
 //! （[`crate::background`]）。
 
-use kotone_core::automation::library::{Automation, ParamKind};
+use kotone_core::automation::library::{tools_called, Automation, ParamKind};
 use serde_json::{json, Map, Value};
 
 pub const TOOL_FIND: &str = "tools.find";
@@ -740,8 +740,14 @@ pub fn plugin_entries(offers: &[kotone_plugin_api::Offer]) -> Vec<ToolEntry> {
         .collect()
 }
 
-/// 已保存的自动化 → 工具。有必填的图片参数（模型给不出）时返回 None。
-pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
+/// 已保存的自动化 → 工具。有必填的图片参数（模型给不出）、会叫她、程序里的工具名不是直接写的（存不进来、也跑不了）
+/// 时返回 None。
+///
+/// 副作用按程序算（ADR 046 D5）：用到游戏窗口 → 按键、截图（`input`、`captures-screen`）；说话、弹幕、推送 → 显示或说出
+/// 文字（`speaks-or-shows-text`）；`tool()` 调的 → 那些工具在 `tools`（她这段对话的工具清单）里的副作用。所以只读模式下
+/// 她能运行只说一句的自动化，会按键、会放歌的照旧不行。清单里没有的工具（插件关着、数据开关关着）不算：那样的程序
+/// 安排时就起不来，宿主每次 `tool()` 还会按当时的权限再判一次。
+pub fn saved_entry(automation: &Automation, tools: &[ToolEntry]) -> Option<ToolEntry> {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for param in &automation.params {
@@ -813,11 +819,33 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
     if uses.asks {
         return None;
     }
-    let kind = if uses.window {
-        "程序，对当前前台的游戏窗口执行"
-    } else {
-        "只说一句、弹幕或推送，不用切到游戏"
+    let called = tools_called(automation.action.source()).ok()?;
+    let mut side_effects: Vec<String> = Vec::new();
+    let mut add = |effect: &str| {
+        if !side_effects.iter().any(|e| e == effect) {
+            side_effects.push(effect.to_string());
+        }
     };
+    if uses.window {
+        add("input");
+        add("captures-screen");
+    }
+    if uses.speaks {
+        add("speaks-or-shows-text");
+    }
+    for tool in tools.iter().filter(|t| called.contains(&t.name)) {
+        tool.side_effects.iter().for_each(|e| add(e));
+    }
+    let mut kind = if uses.window {
+        "程序，对当前前台的游戏窗口执行".to_string()
+    } else if called.is_empty() {
+        "只说一句、弹幕或推送，不用切到游戏".to_string()
+    } else {
+        "不用切到游戏".to_string()
+    };
+    if !called.is_empty() {
+        kind = format!("{kind}；会调用 {}", called.join("、"));
+    }
     let mut description = format!("运行已保存的自动化「{}」（{kind}）", automation.name);
     if !automation.description.is_empty() {
         description = format!("{description}：{}", automation.description);
@@ -828,7 +856,7 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
         description,
         parameters: json!({"type": "object", "additionalProperties": false,
                            "properties": properties, "required": required}),
-        side_effects: vec!["input".into(), "captures-screen".into(), "may-speak".into()],
+        side_effects,
         group: "automation",
         source: Source::Saved {
             id: automation.id.clone(),
@@ -864,7 +892,13 @@ impl Catalog {
         entries.extend(exec_entries(&kotone_exec::tool_specs()));
         entries.extend(crate::browser::entries());
         entries.extend(plugin_entries(plugins));
-        entries.extend(saved.iter().filter_map(saved_entry).take(MAX_SAVED_TOOLS));
+        // 已保存的自动化的副作用要查它调的工具（ADR 046 D5）：拿前面这些条目查
+        let saved: Vec<ToolEntry> = saved
+            .iter()
+            .filter_map(|a| saved_entry(a, &entries))
+            .take(MAX_SAVED_TOOLS)
+            .collect();
+        entries.extend(saved);
         let plugins = plugins
             .iter()
             .filter(|o| o.tools.iter().any(|t| t.for_model()))

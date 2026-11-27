@@ -5,7 +5,9 @@
 //! - 默认需要询问：改设置与配置、删除、退出 / 重启、管理员提权、开机自启、下载模型、
 //!   **AI 新写的程序第一次运行**（`automation.run` 带 `source`）；读状态、截图、识别、播报、
 //!   提醒、打字、运行已保存的自动化、停止，直接执行；不认识的副作用标记一律询问；
-//! - 用户在询问时选“本段对话都允许”，同一段对话里不再问（AI 写的程序按源码区分）。
+//! - 用户在询问时选“本段对话都允许”，同一段对话里不再问（AI 写的程序按源码区分）；
+//! - 玩家设下的热键（ADR 040 D9）和自动化程序里的 `tool()`（ADR 046 D3）用同一张表、同一个判定
+//!   （[`binding_decision`]、[`program_decision`]）：要问的在设下的时候确认一次，跑的时候不问。
 //!
 //! 外部 Agent 不经过这里（全部能力开放，权限由它们自己的运行框架管）。
 
@@ -239,14 +241,14 @@ impl Decide for Policy {
     }
 }
 
-/// 玩家自己加的热键调这个工具（ADR 040 D9）：绑的时候问，按的时候不问。
+/// 玩家设下的（热键、自动化）调这个工具（ADR 040 D9、ADR 046 D3）：设下的时候问，跑的时候不问。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingDecision {
     /// 按了就跑（只读的、默认允许的、确认过的）。
     Run,
-    /// 要玩家在「设置 → 热键」确认一次：这个工具会做什么（权限的原因）。
+    /// 要玩家确认一次（热键在「设置 → 热键」，自动化在「自动化」页）：这个工具会做什么（权限的原因）。
     Confirm { reason: String },
-    /// 不能跑：规则设成了禁止、只读模式。
+    /// 不能跑：规则设成了禁止、只读模式；程序里调不了的工具（[`program_callable`]）。
     Refused { reason: String },
 }
 
@@ -269,6 +271,74 @@ pub fn binding_decision(
             }
             _ => BindingDecision::Confirm { reason },
         },
+    }
+}
+
+/// 往游戏里打字、按键的副作用（ADR 046 D2）：程序自己有 `chat` / `key` / `click`，按键只有一套规矩（绑窗口、输入锁、名额）。
+const GAME_INPUT_EFFECTS: &[&str] = &["input", "sends-game-input", "may-type-into-game"];
+
+/// 程序里能不能调这个工具（ADR 046 D2）：热键能绑的（[`ToolEntry::bindable`]：工具服务的、插件的、本体 ToolSpec 的）
+/// 再去掉三类——
+/// - 自动化自己的工具（`automation.*`）：程序运行、改、停自动化会绕圈，也能绕过确认；
+/// - 往游戏里打字、按键的（副作用 `input` / `sends-game-input`）：`game_chat.send`、`lol.shout`、`game.act`；
+/// - 结果不可信又只读的：程序只拿得到 `{status}`（D4），调了只是白花时间和钱（在线文字识别、读聊天、`game.look`、
+///   `lol.scout`）。第三方插件说只读的（`third-party-read`）也算只读。
+///
+/// 她对话里才有的（说话、问玩家、交给后台、联网搜索、浏览器、执行命令、记忆、`saved.*`）本来就不能绑。
+pub fn program_callable(entry: &ToolEntry) -> Result<(), String> {
+    let name = &entry.name;
+    if !entry.bindable() {
+        return Err(format!("{name} 只在和她的对话里用，程序里调不了"));
+    }
+    if kotone_core::automation::library::is_automation_tool(name) {
+        return Err(format!(
+            "程序里不能调自动化自己的工具（{name}）：会绕圈，也能绕过确认"
+        ));
+    }
+    if entry
+        .side_effects
+        .iter()
+        .any(|e| GAME_INPUT_EFFECTS.contains(&e.as_str()))
+    {
+        return Err(format!(
+            "{name} 会往游戏里打字或按键，程序里不能调：用程序自己的 chat() / key() / click()"
+        ));
+    }
+    let only_reads = entry
+        .side_effects
+        .iter()
+        .all(|e| READ_ONLY_EFFECTS.contains(&e.as_str()) || e == "third-party-read");
+    if entry.untrusted && only_reads {
+        return Err(format!(
+            "{name} 的结果是别人写的字，程序拿不到（只回 status），调了也白调"
+        ));
+    }
+    Ok(())
+}
+
+/// 程序里这一次 `tool()` 能不能调（ADR 046 D3）：先看 [`program_callable`]，再和热键同一个判定（[`binding_decision`]，
+/// 同一张权限表、含整体模式）——允许 → 调；禁止、只读模式下有副作用的 → 不能调；要问的 → 保存的自动化确认过才调
+/// （`confirmed` 是确认时这个工具的副作用，工具后来多了副作用要重新确认），没确认是 `Confirm`。
+/// 临时程序（`saved = false`：她和外部 Agent 的 `automation.run {source}`）没人确认过，要问的就是不能调，先存起来让
+/// 玩家确认。宿主在安排时和每次 `tool()` 时都判一次（规则可能刚改过）；插件、数据开关关着由宿主先查。
+pub fn program_decision(
+    policy: &Policy,
+    entry: &ToolEntry,
+    confirmed: Option<&[&str]>,
+    saved: bool,
+) -> BindingDecision {
+    if let Err(reason) = program_callable(entry) {
+        return BindingDecision::Refused { reason };
+    }
+    let confirmed = if saved { confirmed } else { None };
+    // 确认的是“这段程序可以调这个工具”，不看某一次的参数
+    match binding_decision(policy, entry, &Value::Object(Default::default()), confirmed) {
+        BindingDecision::Confirm { reason } if !saved => BindingDecision::Refused {
+            reason: format!(
+                "{reason}：临时程序只能调不用确认的工具，先存成自动化，让玩家在「自动化」页允许"
+            ),
+        },
+        other => other,
     }
 }
 

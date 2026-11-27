@@ -25,7 +25,15 @@ struct Fake {
     /// 带位置的识别结果（设置了就优先于 `screen_text`）。
     text_lines: Vec<TextLine>,
     mouse: Mutex<Vec<(u64, MouseAction)>>,
+    /// `tool()`：(开始时刻, 回来时刻, 名字, 参数)
+    tool_calls: Mutex<Vec<(u64, u64, String, serde_json::Value)>>,
+    /// 工具怎么回（没设 = 做成了，`{status = "ok"}`）。
+    tool_reply: Option<ToolAnswer>,
+    /// 一次工具调用要多久（推进虚拟时钟）。
+    tool_ms: u64,
 }
+
+type ToolAnswer = Arc<dyn Fn(&str, &serde_json::Value) -> Result<ToolReply, String> + Send + Sync>;
 
 /// 100×50 的测试画面：白底；(10..15, 5..10) 一小块红、(60..80, 20..30) 一大块红；
 /// (90, 40) 一个蓝点；(30..34, 30..34) 一个 4×4 的绿框（中心白）。
@@ -101,6 +109,9 @@ impl Fake {
             screen_text: vec![],
             text_lines: vec![],
             mouse: Mutex::default(),
+            tool_calls: Mutex::default(),
+            tool_reply: None,
+            tool_ms: 0,
         })
     }
     fn with(f: impl FnOnce(&mut Fake)) -> Arc<Self> {
@@ -210,6 +221,22 @@ impl ScriptHost for Fake {
             Ok(())
         } else {
             Err("这段程序没有绑定游戏窗口".into())
+        }
+    }
+    fn tool(&self, name: &str, args: &serde_json::Value) -> Result<ToolReply, String> {
+        let started = self.now_ms();
+        self.clock.fetch_add(self.tool_ms, Ordering::SeqCst);
+        self.tool_calls
+            .lock()
+            .unwrap()
+            .push((started, self.now_ms(), name.into(), args.clone()));
+        if let Some(cancel) = &self.interrupt {
+            cancel.cancel();
+            return Err("等工具的时候停下了".into());
+        }
+        match &self.tool_reply {
+            Some(reply) => reply(name, args),
+            None => Ok(ToolReply::Value(serde_json::json!({"status": "ok"}))),
         }
     }
 }
@@ -950,7 +977,7 @@ fn without_a_window_window_functions_fail_at_once() {
     }
     let host = unbound();
     let report = go(
-        "if not game_focused() then say('不在前台') end toast('好') push('记一下')",
+        "if not game_focused() then say('不在前台') end toast('好') push('记一下') tool('music')",
         &host,
     );
     assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
@@ -959,6 +986,8 @@ fn without_a_window_window_functions_fail_at_once() {
         vec![("不在前台".to_string(), false)]
     );
     assert_eq!(*host.toasted.lock().unwrap(), vec!["好".to_string()]);
+    // 调工具不算用到游戏窗口（ADR 046 D1）
+    assert_eq!(host.tool_calls.lock().unwrap().len(), 1);
     // 绑了窗口时照旧
     let report = go("if game_focused() then log('在') end", &Fake::new());
     assert_eq!(report.log, vec!["在".to_string()]);
@@ -1141,4 +1170,330 @@ fn converted_old_actions_say_the_same_words() {
     );
     assert_eq!(report.outcome, Outcome::Finished, "{source}: {report:?}");
     assert_eq!(*host.asked.lock().unwrap(), vec![said.to_string()]);
+}
+
+// ---------- ADR 046：程序里调工具 ----------
+
+fn answering(
+    reply: impl Fn(&str, &serde_json::Value) -> Result<ToolReply, String> + Send + Sync + 'static,
+) -> Arc<Fake> {
+    Fake::with(|f| f.tool_reply = Some(Arc::new(reply)))
+}
+
+fn tool_calls(host: &Fake) -> Vec<(String, serde_json::Value)> {
+    host.tool_calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, _, name, args)| (name.clone(), args.clone()))
+        .collect()
+}
+
+/// 参数转成 JSON 对象交给宿主（整数是整数、列表是数组、不写是 `{}`）；结果是只读的表，没有内容也是真值。
+#[test]
+fn tool_hands_its_args_to_the_host_and_its_result_back_as_a_read_only_table() {
+    use serde_json::json;
+    let host = answering(|name, _| {
+        Ok(ToolReply::Value(match name {
+            "lol.match" => {
+                json!({"status": "ok", "alive": {"ally": 1}, "players": [{"champion": "Ahri", "dead": true}]})
+            }
+            "empty" => serde_json::Value::Null,
+            _ => json!("一段文字"),
+        }))
+    });
+    let report = run_with_args(
+        r#"
+        local r, err = tool("lol.match")
+        log(r.players[1].champion .. " " .. tostring(r.players[1].dead) .. " " .. r.alive.ally .. " " .. tostring(err))
+        local e = tool("empty")
+        if e then log("空的也是真值") end
+        log(tool("music", { action = "play", query = args.song, n = 3, half = 1.5, list = { 1, "b" }, opts = { loud = true }, none = {} }))
+        local ok = pcall(function() r.status = "改" end)
+        if not ok then log("只读") end
+        "#,
+        &serde_json::from_value(json!({"song": "晴天"})).unwrap(),
+        host.clone(),
+        Limits::default(),
+        Cancel::default(),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(
+        report.log,
+        ["Ahri true 1 nil", "空的也是真值", "一段文字", "只读"]
+    );
+    let calls = tool_calls(&host);
+    assert_eq!(calls[0], ("lol.match".to_string(), json!({})));
+    assert_eq!(
+        calls[2].1,
+        json!({"action": "play", "query": "晴天", "n": 3, "half": 1.5, "list": [1, "b"], "opts": {"loud": true}, "none": {}})
+    );
+    assert_eq!(calls[2].1["n"].as_i64(), Some(3), "整数交成整数");
+}
+
+/// 工具自己说没成 → `nil, 原因`，程序接着跑；调不了（宿主报错）→ 程序出错结束；结果太大、太深当没成。
+#[test]
+fn tool_failures_come_back_as_nil_and_a_reason_and_refusals_end_the_program() {
+    use serde_json::json;
+    let deep = |n: usize| (0..n).fold(json!(1), |v, _| json!({ "a": v }));
+    let host = answering(move |name, _| match name {
+        "slow" => Ok(ToolReply::Failed("超时（30 秒）".into())),
+        "blank" => Ok(ToolReply::Failed("  ".into())),
+        "big" => Ok(ToolReply::Value(
+            json!({"text": "字".repeat(MAX_TOOL_RESULT_BYTES / 3 + 1)}),
+        )),
+        "deep8" => Ok(ToolReply::Value(deep(MAX_TOOL_RESULT_DEPTH))),
+        "deep9" => Ok(ToolReply::Value(deep(MAX_TOOL_RESULT_DEPTH + 1))),
+        _ => Err("music 要先在「自动化」页允许".into()),
+    });
+    let report = go(
+        r#"
+        for _, name in ipairs({ "slow", "blank", "big", "deep8", "deep9" }) do
+          local r, err = tool(name)
+          if r then log(name .. " 成了") else log(name .. "：" .. err) end
+        end
+        "#,
+        &host,
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(report.log[0], "slow：超时（30 秒）");
+    assert_eq!(report.log[1], "blank：没成");
+    assert!(
+        report.log[2].starts_with("big：big 的结果太大"),
+        "{:?}",
+        report.log
+    );
+    assert_eq!(report.log[3], "deep8 成了");
+    assert!(report.log[4].contains("嵌套太深"), "{:?}", report.log);
+    let report = go("tool('music') log('不该到这里')", &host);
+    assert!(
+        matches!(&report.outcome, Outcome::Error(m) if m.contains("要先在「自动化」页允许")),
+        "{report:?}"
+    );
+    assert!(report.log.is_empty());
+    // 宿主没接工具（默认实现）：调不了，程序出错结束
+    let report = run(
+        "tool('music')",
+        Arc::new(Bare),
+        Limits::default(),
+        Cancel::default(),
+    );
+    assert!(
+        matches!(&report.outcome, Outcome::Error(m) if m.contains("这里调不了工具")),
+        "{report:?}"
+    );
+}
+
+/// 只实现必须实现的方法的宿主（`tool` 用默认实现）。
+struct Bare;
+
+impl ScriptHost for Bare {
+    fn now_ms(&self) -> u64 {
+        0
+    }
+    fn sleep(&self, _: u64, cancel: &Cancel) -> bool {
+        !cancel.is_cancelled()
+    }
+    fn game_focused(&self) -> bool {
+        true
+    }
+    fn key(&self, _: KeyAction, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn type_text(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn chat(&self, _: &str, _: Option<&str>) -> Result<(), String> {
+        Ok(())
+    }
+    fn brightness(&self, _: Region) -> Result<f64, String> {
+        Ok(0.0)
+    }
+    fn color_at(&self, _: f64, _: f64) -> Result<[u8; 3], String> {
+        Ok([0, 0, 0])
+    }
+    fn pixels(&self, _: Region) -> Result<Pixels, String> {
+        Err("没有画面".into())
+    }
+    fn ocr(&self, _: Region) -> Result<Vec<TextLine>, String> {
+        Ok(vec![])
+    }
+    fn image(&self, _: &str) -> Result<Pixels, String> {
+        Err("没有图片".into())
+    }
+    fn mouse(&self, _: MouseAction) -> Result<(), String> {
+        Ok(())
+    }
+    fn say(&self, _: &str, _: bool) -> Result<(), String> {
+        Ok(())
+    }
+    fn toast(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn push(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn ask(&self, _: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+}
+
+/// 名字和参数先在引擎里查，不合法的不交给宿主，程序出错结束。
+#[test]
+fn tool_names_and_args_are_checked_before_the_host_sees_them() {
+    for source in [
+        "tool(1)",
+        "tool()",
+        "tool('')",
+        "tool('a b')",
+        "tool('x..y')",
+        "tool('.x')",
+        "tool('x.')",
+        "tool('1x')",
+        "tool('中文')",
+        &format!("tool('{}')", "a".repeat(MAX_TOOL_NAME_CHARS + 1)),
+        "tool('music', 'play')",
+        "tool('music', { 1, 2 })",
+        "tool('music', { f = function() end })",
+        "tool('music', { [true] = 1 })",
+        "tool('music', { 1, a = 2 })",
+        "tool('music', { list = { [1] = 1, [3] = 3 } })",
+        "tool('music', { x = 0/0 })",
+        "tool('music', { q = string.rep('a', 5000) })",
+        "local t = {} t.self = t tool('music', t)",
+    ] {
+        let host = Fake::new();
+        let report = go(source, &host);
+        assert!(
+            matches!(&report.outcome, Outcome::Error(m) if m.contains("tool()")),
+            "{source}: {report:?}"
+        );
+        assert!(tool_calls(&host).is_empty(), "{source}");
+    }
+    for name in [
+        "music",
+        "lol.match",
+        "My-Plugin.Get_Thing",
+        &"a".repeat(MAX_TOOL_NAME_CHARS),
+    ] {
+        let host = Fake::new();
+        let report = go(&format!("tool('{name}')"), &host);
+        assert_eq!(report.outcome, Outcome::Finished, "{name}: {report:?}");
+        assert_eq!(tool_calls(&host)[0].0, name);
+    }
+}
+
+/// 两次之间至少隔 1 秒（从上一次回来算，太快自动等，不报错）。
+#[test]
+fn tool_calls_are_spaced_a_second_apart() {
+    let host = Fake::with(|f| f.tool_ms = 300);
+    let report = go("for i = 1, 3 do tool('lol.match') end", &host);
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let calls = host.tool_calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3);
+    for pair in calls.windows(2) {
+        assert!(pair[1].0 - pair[0].1 >= MIN_TOOL_INTERVAL_MS, "{calls:?}");
+    }
+    // 中间隔得够久的不用等
+    let host = Fake::new();
+    go("tool('lol.match') wait(1500) tool('lol.match')", &host);
+    let calls = host.tool_calls.lock().unwrap().clone();
+    assert_eq!(calls[1].0 - calls[0].1, 1500);
+}
+
+/// 停下时正在等的那次记成已取消；宿主停下后还交回了结果也一样，不再往下跑。
+#[test]
+fn stopping_while_waiting_for_a_tool_is_a_cancel() {
+    let cancel = Cancel::default();
+    let host = Fake::with(|f| f.interrupt = Some(cancel.clone()));
+    let report = run(
+        "tool('music') log('不该到这里')",
+        host,
+        Limits::default(),
+        cancel,
+    );
+    assert_eq!(report.outcome, Outcome::Cancelled, "{report:?}");
+    assert!(report.log.is_empty());
+    let cancel = Cancel::default();
+    let stop = cancel.clone();
+    let host = answering(move |_, _| {
+        stop.cancel();
+        Ok(ToolReply::Failed("没成".into()))
+    });
+    let report = run(
+        "tool('music') log('不该到这里')",
+        host,
+        Limits::default(),
+        cancel,
+    );
+    assert_eq!(report.outcome, Outcome::Cancelled, "{report:?}");
+}
+
+/// 工具名的格式 core（保存时扫描）和引擎（运行时）是同一条规矩：存得下的，运行时也认。
+#[test]
+fn the_core_scanner_and_the_engine_agree_on_tool_names() {
+    use kotone_core::automation::library::{is_tool_name as core_name, tools_called};
+    let long = "a".repeat(MAX_TOOL_NAME_CHARS);
+    let longer = "a".repeat(MAX_TOOL_NAME_CHARS + 1);
+    for name in [
+        "music",
+        "lol.match",
+        "My-Plugin.Get_Thing",
+        "a.b.c",
+        &long,
+        &longer,
+        "",
+        "1x",
+        "x.",
+        ".x",
+        "x..y",
+        "a b",
+        "中文",
+        "a/b",
+        "a:b",
+    ] {
+        assert_eq!(is_tool_name(name), core_name(name), "{name}");
+        let saved = tools_called(&format!("tool(\"{name}\")"));
+        assert_eq!(saved.is_ok(), is_tool_name(name), "{name}: {saved:?}");
+    }
+}
+
+/// ADR 046 的验收程序“队友都倒了放首歌”：放成了不出声；没登录弹一句；没成记日志。不用游戏窗口、不会叫她。
+#[test]
+fn the_acceptance_program_plays_a_song_or_says_why_not() {
+    use kotone_core::automation::library::{tools_called, ProgramUses};
+    use serde_json::json;
+    let source = "local r = tool(\"music\", { action = \"play\", query = args.song })\nif not r then\n  log(\"没放成\")\nelseif r.status == \"need_login\" then\n  toast(\"网易云音乐还没登录，没放成\")\nend";
+    assert_eq!(tools_called(source).unwrap(), ["music"]);
+    let uses = ProgramUses::of(source);
+    assert!(!uses.window && !uses.asks);
+    let args: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_value(json!({"song": "Legends Never Die"})).unwrap();
+    for (reply, toasted, logged) in [
+        (ToolReply::Value(json!({"status": "ok"})), 0, 0),
+        (ToolReply::Value(json!({"status": "need_login"})), 1, 0),
+        (ToolReply::Failed("没成".into()), 0, 1),
+    ] {
+        let unbound = Fake::with(|f| {
+            f.window = false;
+            f.tool_reply = Some(Arc::new(move |_, _| Ok(reply.clone())));
+        });
+        let report = run_with_args(
+            source,
+            &args,
+            unbound.clone(),
+            Limits::default(),
+            Cancel::default(),
+        );
+        assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+        assert_eq!(unbound.toasted.lock().unwrap().len(), toasted);
+        assert_eq!(report.log.len(), logged);
+        assert_eq!(
+            tool_calls(&unbound),
+            [(
+                "music".to_string(),
+                json!({"action": "play", "query": "Legends Never Die"})
+            )]
+        );
+    }
 }

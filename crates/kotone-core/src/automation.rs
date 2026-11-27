@@ -6,6 +6,10 @@
 //! 语义（与云函数相反之处）：最多执行一次、绝不自动重试；到期超过 [`MISSED_GRACE_MS`] 就标为
 //! 错过；崩溃时“运行中”的记录恢复为失败；到期时绑了游戏窗口的名额已满则这次失败，不排队。
 //! core 不执行模型代码，也不依赖脚本引擎。
+//!
+//! 程序里调工具（ADR 046）：会调哪些工具按源码列（[`library::tools_called`]），确认记在定义上
+//! （[`library::Automation::confirmed`]），程序拿到的结果按“数据不是指令”挑（[`program_view`]）；能不能调由
+//! kotone-agent 的 `permissions::program_decision` 判。
 
 use std::{
     io::Write,
@@ -201,6 +205,50 @@ impl ProgramAction {
         }
         Ok(())
     }
+}
+
+/// 程序拿到的工具结果（ADR 046 D4“数据不是指令”）。结果不可信的工具（里面有玩家名、歌名、网页、第三方插件的内容）
+/// 程序只拿到 `{status}`：结果里的 `status` 是小写英文词（`need_login`、`not_in_game`）就带上，否则 `"ok"`；可信的
+/// 原样给。和 `ocr()` 只能问“有没有这段字”是同一条规矩，程序没法把别人写的字拼进 `say` / `push` / `ask`。
+/// `value` 是宿主挑好的那份：有结构化结果（structuredContent）用它，没有用给她的那份内容（是 JSON 文字也认得出
+/// `status`）。宿主（桌面端 `DesktopHost::tool`）交给脚本引擎之前调用。
+pub fn program_view(value: &Value, untrusted: bool) -> Value {
+    if !untrusted {
+        return value.clone();
+    }
+    let parsed;
+    let object = match value {
+        Value::String(text) => {
+            parsed = serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
+            &parsed
+        }
+        value => value,
+    };
+    let status = object
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|s| is_status_word(s))
+        .unwrap_or("ok");
+    serde_json::json!({ "status": status })
+}
+
+/// 不可信的工具没成时程序拿到的原因：只有“没成”，具体原因（可能带着别人写的字）只记进日志（D4）。
+pub const UNTRUSTED_FAILURE: &str = "没成";
+
+/// 工具没成时交给程序的原因（[`program_view`] 的另一半）：可信的照原因给，不可信的只有 [`UNTRUSTED_FAILURE`]。
+pub fn program_failure(reason: &str, untrusted: bool) -> String {
+    if untrusted {
+        UNTRUSTED_FAILURE.into()
+    } else {
+        reason.to_string()
+    }
+}
+
+/// `status` 只认小写英文词：字母开头，只有小写字母和 `_`，最多 32 个字符。
+fn is_status_word(status: &str) -> bool {
+    status.len() <= 32
+        && status.starts_with(|c: char| c.is_ascii_lowercase())
+        && status.chars().all(|c| c.is_ascii_lowercase() || c == '_')
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

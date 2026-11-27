@@ -214,6 +214,7 @@ fn saved(id: &str, params: Vec<ParamSpec>) -> Automation {
         updated_at_ms: 0,
         schedule: None,
         on: None,
+        confirmed: Default::default(),
     }
 }
 
@@ -351,7 +352,7 @@ async fn tools_find_only_searches_and_the_tool_list_never_changes() {
 #[test]
 fn saved_automation_becomes_a_typed_tool() {
     let region = param("area", ParamKind::Region, None);
-    let entry = saved_entry(&saved("auto-2", vec![region])).unwrap();
+    let entry = saved_entry(&saved("auto-2", vec![region]), &[]).unwrap();
     assert_eq!(entry.name, "saved.auto-2");
     assert_eq!(
         entry.source,
@@ -364,7 +365,7 @@ fn saved_automation_becomes_a_typed_tool() {
     assert!(entry.parameters["properties"]["delaySeconds"].is_object());
     // 模型给不出图片：没有缺省模板的自动化不交给模型。
     let image = param("template", ParamKind::Image, None);
-    assert!(saved_entry(&saved("auto-3", vec![image])).is_none());
+    assert!(saved_entry(&saved("auto-3", vec![image]), &[]).is_none());
     // ADR 045：种类说明按“用不用游戏窗口”写——按键的要先切到游戏；以前的播报转成只说话的程序，不用切
     assert!(
         entry.description.contains("前台的游戏窗口"),
@@ -378,14 +379,16 @@ fn saved_automation_becomes_a_typed_tool() {
         ..saved(id, Vec::new())
     };
     for source in ["say(\"喝水\")", "toast(\"喝水\")", "push(\"记得买眼\")"] {
-        let description = saved_entry(&program("auto-4", source)).unwrap().description;
+        let description = saved_entry(&program("auto-4", source), &[])
+            .unwrap()
+            .description;
         assert!(
             description.contains("不用切到游戏") && !description.contains("游戏窗口"),
             "{source}: {description}"
         );
     }
     // 会叫她的（以前的“让她做”）不当工具给她：交给她的那一轮又会叫她
-    assert!(saved_entry(&program("auto-5", "ask(\"看看对面谁是突破口\")")).is_none());
+    assert!(saved_entry(&program("auto-5", "ask(\"看看对面谁是突破口\")"), &[]).is_none());
 }
 
 /// ADR 045：系统提示里已保存的自动化按“用不用游戏窗口”写，会叫她的不列；聊天窗口里只有要按键、看画面的
@@ -671,6 +674,259 @@ fn hotkeys_ask_once_when_bound() {
     // 能绑的
     assert!(entry(&f, "settings.get").bindable() && chat.bindable());
     assert!(!entry(&f, "speak").bindable() && !entry(&f, "saved.auto-1").bindable());
+}
+
+// ---------- ADR 046：程序里调工具 ----------
+
+/// 程序里调工具用的目录：工具服务的、本体的，加几个插件的工具（放歌、这一局、查战绩、喊话、第三方的读和写）。
+fn program_catalog(saved: &[Automation]) -> Catalog {
+    use kotone_plugin_api::{AgentText, Offer, ToolSpec};
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let schema = || json!({"type": "object", "properties": {}});
+    let offer = |plugin: &str, tools: Vec<ToolSpec>| Offer {
+        plugin: plugin.into(),
+        name: plugin.into(),
+        text: AgentText::default(),
+        tools,
+    };
+    let offers = [
+        offer(
+            "music",
+            vec![ToolSpec::new("music", "放歌", schema())
+                .side_effects(&["plays-media"])
+                .untrusted()],
+        ),
+        offer(
+            "lol",
+            vec![
+                ToolSpec::new("lol.match", "这一局", schema()),
+                ToolSpec::new("lol.scout", "查战绩", schema()).untrusted(),
+                ToolSpec::new("lol.shout", "喊话", schema()).side_effects(&["sends-game-input"]),
+            ],
+        ),
+        offer(
+            "demo",
+            vec![
+                ToolSpec::new("demo.read", "读", schema())
+                    .side_effects(&["third-party-read"])
+                    .untrusted(),
+                ToolSpec::new("demo.write", "写", schema())
+                    .side_effects(&["third-party-action"])
+                    .untrusted(),
+            ],
+        ),
+    ];
+    Catalog::build(&specs, saved, &offers)
+}
+
+fn program_automation(id: &str, source: &str) -> Automation {
+    Automation {
+        name: format!("程序 {id}"),
+        description: String::new(),
+        action: AutomationBody::Program(ProgramBody {
+            source: source.into(),
+        }),
+        ..saved(id, Vec::new())
+    }
+}
+
+/// D2：能调的 = 热键能绑的，再去掉自动化自己的、往游戏里打字按键的、结果不可信又只读的。屏幕上的字照样拿不到。
+#[test]
+fn programs_can_call_what_hotkeys_can_bind_minus_three_kinds() {
+    use crate::permissions::program_callable;
+    let catalog = program_catalog(&[]);
+    let callable = |name: &str| program_callable(catalog.get(name).unwrap());
+    for name in [
+        "music",
+        "lol.match",
+        "settings.get",
+        "settings.update",
+        "game.state",
+        "demo.write",
+    ] {
+        assert_eq!(callable(name), Ok(()), "{name}");
+    }
+    for (name, why) in [
+        ("automation.run", "自动化自己的工具"),
+        ("automation.save", "自动化自己的工具"),
+        ("automation.stop", "自动化自己的工具"),
+        ("game_chat.send", "打字或按键"),
+        ("lol.shout", "打字或按键"),
+        ("game.act", "打字或按键"),
+        ("ocr.recognize", "别人写的字"),
+        ("companion.read_chat", "别人写的字"),
+        ("game.look", "别人写的字"),
+        ("lol.scout", "别人写的字"),
+        ("demo.read", "别人写的字"),
+        ("speak", "和她的对话里"),
+        ("web.search", "和她的对话里"),
+        ("reply.ask", "和她的对话里"),
+    ] {
+        let err = callable(name).unwrap_err();
+        assert!(err.contains(why), "{name}: {err}");
+    }
+    // 她对话里才有的（已保存的自动化）也调不了
+    let with_saved = program_catalog(&[program_automation("auto-9", "say('好')")]);
+    assert!(program_callable(with_saved.get("saved.auto-9").unwrap()).is_err());
+}
+
+/// D3：和热键同一个判定。允许的直接调；要问的，保存的自动化确认过才调（工具多了副作用要重新确认），临时程序不能调；
+/// 禁止、只读模式下有副作用的不能调。
+#[test]
+fn program_tool_calls_use_the_hotkey_decision_and_confirmations_on_the_automation() {
+    use crate::permissions::{program_decision, BindingDecision};
+    let catalog = program_catalog(&[]);
+    let get = |name: &str| catalog.get(name).unwrap();
+    let policy = Policy::default();
+    // 放歌（plays-media）默认允许：保存的、临时的都直接调
+    assert_eq!(
+        program_decision(&policy, get("music"), None, true),
+        BindingDecision::Run
+    );
+    assert_eq!(
+        program_decision(&policy, get("music"), None, false),
+        BindingDecision::Run
+    );
+    // 改设置要问：没确认 → 等你确认；确认过 → 调；临时程序 → 不能调（确认了也不算）
+    let update = get("settings.update");
+    let effects: Vec<&str> = update.side_effects.iter().map(String::as_str).collect();
+    let BindingDecision::Confirm { reason } = program_decision(&policy, update, None, true) else {
+        panic!("改设置要确认");
+    };
+    assert_eq!(reason, "会修改设置");
+    assert_eq!(
+        program_decision(&policy, update, Some(&effects), true),
+        BindingDecision::Run
+    );
+    let BindingDecision::Refused { reason } =
+        program_decision(&policy, update, Some(&effects), false)
+    else {
+        panic!("临时程序不能调要确认的");
+    };
+    assert!(reason.contains("先存成自动化"), "{reason}");
+    // 工具后来多了副作用：要重新确认
+    let mut grown = update.clone();
+    grown.side_effects.push("launches-rockets".into());
+    assert!(matches!(
+        program_decision(&policy, &grown, Some(&effects), true),
+        BindingDecision::Confirm { .. }
+    ));
+    // 第三方插件的写操作要问
+    assert!(matches!(
+        program_decision(&policy, get("demo.write"), None, true),
+        BindingDecision::Confirm { .. }
+    ));
+    // 玩家设成禁止：不能调（确认过也不行）
+    let mut rules = Policy::default();
+    rules.rules.insert("music".into(), Rule::Deny);
+    assert!(matches!(
+        program_decision(&rules, get("music"), Some(&["plays-media"]), true),
+        BindingDecision::Refused { .. }
+    ));
+    // 只读模式：放歌被拒，只读的照常
+    let read_only = Policy {
+        mode: Mode::ReadOnly,
+        ..Default::default()
+    };
+    let BindingDecision::Refused { reason } =
+        program_decision(&read_only, get("music"), None, true)
+    else {
+        panic!("只读模式不能放歌");
+    };
+    assert!(reason.contains("只读"), "{reason}");
+    assert_eq!(
+        program_decision(&read_only, get("lol.match"), None, false),
+        BindingDecision::Run
+    );
+    // 范围外的：怎么都不能调
+    for name in ["game_chat.send", "automation.run", "ocr.recognize"] {
+        let all = Policy {
+            mode: Mode::AllowAll,
+            ..Default::default()
+        };
+        assert!(
+            matches!(
+                program_decision(&all, get(name), Some(&["input"]), true),
+                BindingDecision::Refused { .. }
+            ),
+            "{name}"
+        );
+    }
+}
+
+/// D5：她运行已保存自动化的副作用按程序算。只读模式下只说一句的能跑；按键的、放歌的照旧不行；会改设置的要问。
+#[test]
+fn saved_automations_carry_the_side_effects_of_their_programs() {
+    let automations = [
+        program_automation("auto-say", "say('喝水') toast('喝水') push('喝水')"),
+        program_automation("auto-key", "key('Q')"),
+        program_automation(
+            "auto-music",
+            "local r = tool(\"music\", { action = \"play\", query = args.song })",
+        ),
+        program_automation(
+            "auto-settings",
+            "tool('settings.update', { patch = {} }) say('改好了')",
+        ),
+        program_automation("auto-quiet", "log('x')"),
+        program_automation("auto-off", "tool('cs2.round')"),
+        program_automation("auto-bad", "tool(args.name)"),
+    ];
+    let catalog = program_catalog(&automations);
+    let effects = |id: &str| {
+        catalog
+            .get(&format!("saved.{id}"))
+            .unwrap()
+            .side_effects
+            .clone()
+    };
+    assert_eq!(effects("auto-say"), ["speaks-or-shows-text"]);
+    assert_eq!(effects("auto-key"), ["input", "captures-screen"]);
+    assert_eq!(effects("auto-music"), ["plays-media"]);
+    assert_eq!(
+        effects("auto-settings"),
+        [
+            "speaks-or-shows-text",
+            "writes-settings",
+            "may-register-hotkeys"
+        ]
+    );
+    assert!(effects("auto-quiet").is_empty());
+    // 清单里没有的工具（插件关着）不算：那样的程序安排时就起不来
+    assert!(effects("auto-off").is_empty());
+    // 工具名不是直接写的：存不进来、也跑不了，不当工具给她
+    assert!(catalog.get("saved.auto-bad").is_none());
+    // 说明里写会调用哪些工具
+    let music = catalog.get("saved.auto-music").unwrap();
+    assert!(
+        music.description.contains("不用切到游戏") && music.description.contains("会调用 music"),
+        "{}",
+        music.description
+    );
+    let read_only = Policy {
+        mode: Mode::ReadOnly,
+        ..Default::default()
+    };
+    let decide = |policy: &Policy, id: &str| {
+        policy.decide(catalog.get(&format!("saved.{id}")).unwrap(), &json!({}))
+    };
+    assert_eq!(decide(&read_only, "auto-say"), Decision::Allow);
+    assert_eq!(decide(&read_only, "auto-quiet"), Decision::Allow);
+    for id in ["auto-key", "auto-music"] {
+        assert!(
+            matches!(decide(&read_only, id), Decision::Deny { .. }),
+            "{id}"
+        );
+    }
+    let policy = Policy::default();
+    for id in ["auto-say", "auto-key", "auto-music"] {
+        assert_eq!(decide(&policy, id), Decision::Allow, "{id}");
+    }
+    assert!(matches!(
+        decide(&policy, "auto-settings"),
+        Decision::Ask { .. }
+    ));
 }
 
 #[test]

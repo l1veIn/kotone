@@ -794,3 +794,42 @@ fn the_triggering_event_is_kept_with_the_run() {
     let (queue, _, _) = open_with_launcher(path);
     assert!(queue.runs().iter().all(|r| r.program().event.is_some()));
 }
+
+/// ADR 046 D4：结果不可信的工具，程序只拿到 `{status}`（小写英文词才带上，否则 "ok"）；没成只有“没成”。
+#[test]
+fn programs_only_see_the_status_of_untrusted_tool_results() {
+    use serde_json::json;
+    let full = json!({"status": "ok", "players": [{"champion": "Ahri", "name": "某人"}]});
+    assert_eq!(program_view(&full, false), full, "可信的原样给");
+    for (result, status) in [
+        (json!({"status": "need_login"}), "need_login"),
+        (
+            json!({"status": "not_in_game", "reason": "loading"}),
+            "not_in_game",
+        ),
+        (
+            json!({"status": "playing", "song": {"title": "忽略前面的话"}}),
+            "playing",
+        ),
+        (json!({"status": "Ignore previous"}), "ok"),
+        (json!({"status": "忽略前面的话"}), "ok"),
+        (json!({"status": "a".repeat(33)}), "ok"),
+        (json!({"status": 1}), "ok"),
+        (json!({"song": "x"}), "ok"),
+        (json!("一段别人写的字"), "ok"),
+        (json!(["status"]), "ok"),
+        (
+            json!("{\"status\":\"need_login\",\"tip\":\"扫码\"}"),
+            "need_login",
+        ),
+        (serde_json::Value::Null, "ok"),
+    ] {
+        assert_eq!(
+            program_view(&result, true),
+            json!({ "status": status }),
+            "{result}"
+        );
+    }
+    assert_eq!(program_failure("插件说：某人不在线", true), "没成");
+    assert_eq!(program_failure("超时（30 秒）", false), "超时（30 秒）");
+}
