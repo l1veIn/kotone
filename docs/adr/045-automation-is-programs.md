@@ -4,6 +4,8 @@
 
 修订：[ADR 013](013-automation-domain-model.md) §2（动作只剩程序）、§3（一个调度器只剩程序循环）、§4（名额、停下）；[ADR 036](036-game-state-and-events.md) D6（`mode`）、D8（“让她做”变成 `ask()`）；[ADR 043](043-plugin-shape-and-pushes.md)（推送不再只属于插件）；[ADR 040](040-hotkeys-belong-to-core.md) 第 3 期 P2（热键运行自动化成功时不出声也不弹）。
 
+**2026-11-27 被 [ADR 046](046-programs-call-tools.md) 修订**：函数清单多一个 `tool(name, args)`（程序里调工具，不算用到游戏窗口）；定义对外多了 `tools[]`、`needsConfirm`；等玩家允许的自动化允许之前完全不运行；`saved.*` 的副作用不再写死成按键、截图、说话，按程序算。
+
 ## 背景
 
 玩家测试自动化时发现，用热键运行自动化每次都会弹一条弹幕。那是宿主自己加的“成功了”提示。玩家的话：

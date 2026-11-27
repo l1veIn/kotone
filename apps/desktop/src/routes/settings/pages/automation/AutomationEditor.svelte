@@ -2,12 +2,15 @@
   // 新建 / 编辑一个已保存的自动化（ADR 045 D9）。动作只有程序：新建时先选模板（说一句 / 推送一条 / 让她做 / 空白程序），
   // 预填参数和程序；程序默认折叠，玩家多半只填参数（参数的缺省值就是平时运行用的值）；空白程序和没有参数的直接展开源码。
   // 按键类不另做模板：在列表里复制内置的按键程序改。程序在后端检查语法，参数声明在后端校验；这里只做基本输入。
+  // 程序里调的工具（ADR 046 D9）：改程序时防抖查一次，程序下面一行“会调用：…”；有要你允许的，存的按钮变成“允许并保存”
+  // （改了程序的要再允许一次）；调不了的写原因，照样能存。
   import { untrack, onMount } from "svelte";
   import { BellRing, Code, Sparkles, Volume2 } from "@lucide/svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import { Button } from "$lib/components/ui/button";
   import {
-    ASKS_PER_MATCH, PARAM_TYPES, saveAutomation, type Automation, type AutomationTemplate, type EventTrigger, type ParamSpec, type ParamType,
+    ASKS_PER_MATCH, PARAM_TYPES, programTools, saveAutomation, type Automation, type AutomationTemplate, type EventTrigger, type ParamSpec, type ParamType,
+    type ToolsPreview,
   } from "../../../../lib/automation";
   import { eventCatalog, eventLabel, eventsFor, phaseLabel, TRIGGER_PHASES } from "../../../../lib/gameEvents";
   import { pluginsStore } from "../../../../lib/plugins";
@@ -17,6 +20,7 @@
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import ParamInput from "./ParamInput.svelte";
   import ArgsForm from "./ArgsForm.svelte";
+  import ProgramTools from "./ProgramTools.svelte";
   import { cronToPreset, presetToCron, type SchedulePreset } from "../../../../lib/automation";
   import { m } from "$lib/paraglide/messages.js";
 
@@ -84,6 +88,25 @@
   const sourcePreview = $derived(source.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "");
   /** 参数的缺省值（折叠时在上面直接填）。 */
   const defaults = $derived(Object.fromEntries(params.flatMap((p) => (p.default === undefined || p.default === null ? [] : [[p.name, p.default]]))));
+
+  // 程序里调的工具：照编辑器里现在这份程序算（`for` 是算的时候的程序，和现在的不一样就是还没算好）
+  let tools = $state<ToolsPreview & { for: string }>({ tools: [], needsConfirm: false, error: null, for: "" });
+  let toolsVersion = 0;
+  async function checkTools(text: string): Promise<ToolsPreview & { for: string }> {
+    const version = ++toolsVersion;
+    try {
+      const result = { ...(await programTools(text, initial?.id ?? null)), for: text };
+      if (version === toolsVersion) tools = result;
+      return result;
+    } catch {
+      return tools;
+    }
+  }
+  $effect(() => {
+    const text = source;
+    const timer = setTimeout(() => void checkTools(text), 300);
+    return () => clearTimeout(timer);
+  });
 
   /** 模板的名字和说明按 id 取文案；不认得的 id（以后加的）用后端给的。 */
   function templateText(t: AutomationTemplate): { name: string; description: string } {
@@ -168,6 +191,11 @@
     saving = true;
     error = "";
     try {
+      // 允许的得是你看到的那几个工具：程序刚改过、“会调用”还没跟上时先算好，要允许的变了就停下给你看，再点一次
+      const shown = tools;
+      const fresh = shown.for === source ? shown : await checkTools(source);
+      const waiting = (t: ToolsPreview) => t.tools.filter((x) => x.state === "confirm").map((x) => x.name).join(",");
+      if (fresh.needsConfirm && waiting(fresh) !== waiting(shown)) return;
       const saved = await saveAutomation({
         id: initial?.id ?? null, name, description,
         params: params.map((p) => ({ ...p, default: p.default ?? undefined })),
@@ -175,7 +203,7 @@
         on: trigger(),
         // 关掉定时时保留写好的时间（暂停），下次打开还在
         schedule: scheduled || base?.schedule ? { cron, enabled: scheduled, args: $state.snapshot(scheduleArgs) as Record<string, unknown> } : null,
-      });
+      }, fresh.needsConfirm);
       toast(true, initial ? m.auto_editor_saved() : m.auto_editor_created());
       onSaved(saved);
     } catch (err) {
@@ -300,6 +328,8 @@
         </p>
       </div>
 
+      <ProgramTools editor tools={tools.tools} error={tools.error} />
+
       {@render paramsEditor()}
     {:else}
       <div class="row" data-testid="automation-program">
@@ -307,6 +337,7 @@
         <code class="min-w-0 truncate rounded-md bg-muted/60 px-2 py-1 font-mono text-[11px] text-foreground/85" data-testid="automation-source-preview">{sourcePreview}</code>
         <button type="button" class="shrink-0 text-xs text-primary hover:underline" onclick={() => { showSource = true; }} data-testid="automation-source-toggle">{m.auto_editor_source_show()}</button>
       </div>
+      <ProgramTools editor tools={tools.tools} error={tools.error} />
     {/if}
 
     {#if asks}
@@ -390,7 +421,9 @@
   {#if error}<p class="mt-3 mb-0 text-xs text-destructive" role="alert">{error}</p>{/if}
   <div class="mt-5 flex justify-end gap-2">
     <Button variant="outline" size="sm" onclick={onCancel}>{m.auto_action_cancel()}</Button>
-    <Button type="submit" size="sm" disabled={saving || !name.trim()}>{saving ? m.auto_action_saving() : m.auto_action_save()}</Button>
+    <Button type="submit" size="sm" disabled={saving || !name.trim()} data-testid="automation-save">
+      {saving ? m.auto_action_saving() : tools.needsConfirm ? m.auto_editor_allow_save() : m.auto_action_save()}
+    </Button>
   </div>
 </form>
 {/if}

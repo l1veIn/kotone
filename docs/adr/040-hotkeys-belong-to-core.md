@@ -74,6 +74,8 @@
 | 2 | 命令登记和回调；本体的动作、语音输入的 5 个键改成命令；表可以改；别处改成“去改”；`Settings` 里的旧字段迁移 | 只在一个地方改 | 迁移的单元测试；`voice_input_real.py`；真按键的快捷键测试 |
 | 3 | 快捷指令并进表；工具、页面可以绑；绑的时候问权限 | 自己加快捷键 | Playwright；一个第三方 MCP 示例服务器的工具绑键测试 |
 
+**2026-11-27 被 [ADR 046](046-programs-call-tools.md) 修订**：第 3 期热键调工具的那份代码（`hotkey_run::call`）抽成热键和自动化程序共用的一份（`tool_call.rs`），`Caller::Hotkey` 改名 `Caller::Automation`（“玩家设下的：热键、自动化”），判法不变；D9 的“设下的时候问、跑的时候不问”同样用在程序里的 `tool()`：要问的工具在「自动化」页允许一次。
+
 顺手修（两条 2026-11-25 都做了）：~~语音识别开着时改快捷指令的键不立即生效（`settings_cmd.rs` 的 `hotkey_registration_changed` 没比较 `quickMessages[].hotkey`，先复现）~~ 已修，`f8e5315a`，见实施记录第一条；~~ADR 028 的默认呼叫键（文档写 `~`，代码是 Ctrl + ~）~~ 已改，ADR 028 现在写的和代码一样是 `Ctrl+Backquote`，`1a5b59bb`。
 
 ## 实施记录

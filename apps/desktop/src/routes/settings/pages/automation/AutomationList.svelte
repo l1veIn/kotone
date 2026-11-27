@@ -4,13 +4,15 @@
   // 不属于任何已保存自动化的执行（琴音设的提醒、她临时写的程序）排在最上面，也能停。
   // 动作只有程序（ADR 045）：▶ 只对用到游戏窗口的先倒数（让你切到游戏），别的直接运行；等待中的执行（例如内置提醒排上的
   // “打小龙”）挂在它那一项下面，一条一条能取消；■ 只停正在跑的。
+  // 程序里调的工具（ADR 046 D9）：要你允许的标“等你确认”、调不了的标“用不了”；点开是和编辑器同一块，等你确认的带上
+  // 你允许的那份程序和“允许”（核对的就是这份：这期间被她改了就不认）。等你确认的 ▶ 直接点开这一块。
   import { companionName } from "$lib/stores/companion";
   import { ChevronRight, CircleAlert, Clock, Gamepad2, LoaderCircle, MessageSquare, Play, Plus, Square, Zap } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
   import {
-    ASKS_PER_MATCH, BUILTIN_LOL_SCOUT_ID, BUILTIN_REMIND_ID, deleteAutomation, describeSchedule, getAutomation, reminderOf, runAutomation, runTitle,
-    type Automation, type AutomationRun, type AutomationTemplate,
+    ASKS_PER_MATCH, BUILTIN_LOL_SCOUT_ID, BUILTIN_REMIND_ID, confirmAutomation, deleteAutomation, describeSchedule, getAutomation, reminderOf,
+    runAutomation, runTitle, unusableTools, type Automation, type AutomationRun, type AutomationTemplate,
   } from "../../../../lib/automation";
   import { agentSetAutomationHidden } from "../../../../lib/agent";
   import { describeTrigger, eventCatalog, triggerOff } from "../../../../lib/gameEvents";
@@ -21,6 +23,7 @@
   import AutomationEditor from "./AutomationEditor.svelte";
   import ArgsForm from "./ArgsForm.svelte";
   import RunList from "./RunList.svelte";
+  import ProgramTools from "./ProgramTools.svelte";
   import { m } from "$lib/paraglide/messages.js";
   import { listSeparator } from "$lib/locale";
   import { getLocale } from "$lib/paraglide/runtime.js";
@@ -105,7 +108,42 @@
       : run.status === "cancelled" ? m.auto_list_last_stopped() : m.auto_list_last_missed();
   }
 
+  // 等你确认的：点开时读一份程序给你看（列表里不带源码），“允许”核对的就是这份；她改了（updatedAtMs 变了）就重读
+  let seen = $state<Record<string, { source: string | null; at: number }>>({});
+  let allowing = $state("");
+  $effect(() => {
+    const item = automations.find((a) => a.id === expanded);
+    if (!item?.needsConfirm || seen[item.id]?.at === item.updatedAtMs) return;
+    const { id, updatedAtMs: at } = item;
+    seen[id] = { source: null, at };
+    getAutomation(id)
+      .then((full) => { if (seen[id]?.at === at) seen[id] = { source: full.action.source ?? "", at }; })
+      .catch((error) => { toast(false, m.auto_list_read_failed({ error: errText(error) })); });
+  });
+  async function allow(item: Automation) {
+    const source = seen[item.id]?.source;
+    if (allowing || source == null) return;
+    allowing = item.id;
+    try {
+      await confirmAutomation(item.id, source);
+      toast(true, m.auto_tools_allowed({ name: item.name }));
+      onChanged();
+    } catch (error) {
+      toast(false, m.auto_tools_allow_failed({ error: errText(error) }));
+      // 多半是这期间被改了：重读一份给你看
+      delete seen[item.id];
+      onChanged();
+    } finally {
+      allowing = "";
+    }
+  }
+
   function play(item: Automation) {
+    // 等你确认的先点开确认那一块（允许之前它不运行）
+    if (item.needsConfirm) {
+      expanded = item.id;
+      return;
+    }
     // 有参数的先填参数（内置提醒一定要填提醒什么）
     if (item.params.length) {
       runPanel = runPanel === item.id ? "" : item.id;
@@ -205,6 +243,10 @@
                 {#if item.id === BUILTIN_REMIND_ID || item.id === BUILTIN_LOL_SCOUT_ID}<span class="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">{m.auto_list_builtin()}</span>{/if}
                 {#if item.asks}<span class="rounded bg-brand-pink/12 px-1 text-[10px] font-normal text-brand-pink" title={m.auto_list_asks_cost()}
                   data-testid="automation-item-asks">{m.auto_list_asks_badge({ name: $companionName })}</span>{/if}
+                {#if item.needsConfirm}<span class="rounded bg-warning/12 px-1 text-[10px] font-normal text-warning"
+                  data-testid="automation-item-waiting">{m.auto_list_waiting_badge()}</span>{/if}
+                {#if unusableTools(item.tools ?? []).length}<span class="rounded bg-destructive/10 px-1 text-[10px] font-normal text-destructive"
+                  data-testid="automation-item-unusable">{m.auto_list_unusable_badge()}</span>{/if}
               </p>
               <p class="m-0 mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
                 {#if item.usesWindow}<span data-testid="automation-item-window">{m.auto_list_uses_window()}</span>{/if}
@@ -268,6 +310,8 @@
                 <dt class="text-muted-foreground">{m.auto_list_created()}</dt>
                 <dd class="m-0">{by[item.createdBy]} · {new Date(item.createdAtMs).toLocaleDateString()}</dd>
               </dl>
+              <ProgramTools tools={item.tools ?? []} source={item.needsConfirm ? (seen[item.id]?.source ?? undefined) : null}
+                busy={allowing === item.id} onAllow={() => void allow(item)} />
               <div>
                 <p class="m-0 mb-1 text-muted-foreground">{m.auto_list_recent_runs()}</p>
                 {#if recentRuns(item).length}

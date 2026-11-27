@@ -39,7 +39,7 @@
 | 停止 / 取消 / 打断 | 停止 = 停一件具体的事（这个自动化、播放、本地语音识别）；取消 = 不做还没做的（对话框、下载、这次录音）；打断 = 她说话时被你打断 | | | stop / cancel / interrupt |
 | 权限 | 每个工具是 允许 / 先问我 / 禁止（角色页 → 权限；以前在「设置」里） | `授权`、`设置 → 权限` | `agent.permissions` | permissions: Allow / Ask first / Block |
 | 用量 | 今天 / 本月花了多少 token 和钱、命中缓存多少、对话多长整理成摘要（角色页 → 用量；以前在「设置」里） | `设置 → 用量` | `usage.jsonl`、`agent.compactAtTokens` | usage |
-| 确认 | 她做某件事前问你一次（“这一步……，可以吗？”），回答是 允许 / 拒绝 / 这段对话都允许；通话里直接说“可以 / 不要”。给一个要问的工具绑热键时，在「设置 → 热键」确认一次，按的时候不再问（ADR 040 D9） | `授权`、`批准` | `Asker`、`PermissionRequest`；热键的 `hotkeys.bindings[].confirmed` | confirmation: Allow / Deny / Allow for this conversation |
+| 确认 | 她做某件事前问你一次（“这一步……，可以吗？”），回答是 允许 / 拒绝 / 这段对话都允许；通话里直接说“可以 / 不要”。给一个要问的工具绑热键时，在「设置 → 热键」确认一次，按的时候不再问（ADR 040 D9）。自动化的程序调要问的工具时也一样：在「自动化」页点“允许”（编辑器里存的时候是“允许并保存”），没允许的标“等你确认”、允许之前不运行，运行时不再问，她运行它时也不再问一遍；改了程序要再允许一次（ADR 046 D3） | `授权`、`批准` | `Asker`、`PermissionRequest`；热键的 `hotkeys.bindings[].confirmed`；自动化的 `Automation.confirmed`、`automation_confirm`、`needsConfirm` | confirmation: Allow / Deny / Allow for this conversation |
 | Key | 服务商给你的那串钥匙（“DeepSeek Key”） | `密钥`、`API Key`、`API 密钥`、`凭据` | `apiKey`、`SecretStore` | API key |
 | API 连接 | 一个服务商的地址、模型和 Key（设置 → API 连接）；她用哪个连接、哪个模型在聊天页输入框旁的“她用的模型”里选 | `AI 连接`、`API连接` | `Connection`、`connectionId` | API connection |
 | 服务商 | DeepSeek、阿里云百炼、火山等 | `提供商`、`厂商` | `provider` | provider |
@@ -48,7 +48,7 @@
 | 语音识别 | 把说的话变成字（本地 / 在线）。只有一份，在本体：呼叫、语音输入、同传都用它，同一个模型只加载一份（ADR 039 D2）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` | speech recognition |
 | 同传 | 插件（ADR 021、038）：她在后台听你指定的程序（游戏、Discord、KOOK……，按程序录音）里队友说的话——不是你的麦克风，也录不到她自己——一句一句翻成你的语言，用气泡（默认，悬浮窗里一行）或弹幕显示，并记进聊天里一局一张的“这局的同传”卡片（推送，ADR 043 D11）。识别用本体的语音识别：你选的识别听得懂外语（自动判语种的在线识别，或本地 SenseVoice）就用它，否则用本地 SenseVoice（中英日韩粤）；用在线识别时队友的每一句都会发给它识别、每句计费。停止本地语音识别时，用本地识别的同传一起停（ADR 039 实施记录“同传用本体的识别”） | | `plugins/interpreter`、`voice.listen.*`、`voice_listen.rs`、`kotone_stt::listen` | interpreter |
 | 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` | conversation (聊天 = chat) |
-| 自动化 | 替你持续或稍后做事。每个自动化都是一段程序（ADR 045）：按键、点鼠标、看画面、发到游戏聊天的会**操作游戏窗口**（运行前要切到游戏，▶ 先倒数）；要告诉你就在程序里说一句、出弹幕、推送一条，要她看着办就交给她（**会叫她**，每运行一次花一次 AI 调用），程序里不写就安静。新建时先选一个样子：说一句 / 推送一条 / 让{name}做 / 空白程序。以前的“播报”“让她做”两种动作已经没有了（旧的打开时转成程序），“让{name}做”只剩模板名 | `脚本` | `automation.*`、`ProgramUses`（`usesWindow` / `asks`） | automation |
+| 自动化 | 替你持续或稍后做事。每个自动化都是一段程序（ADR 045）：按键、点鼠标、看画面、发到游戏聊天的会**操作游戏窗口**（运行前要切到游戏，▶ 先倒数）；要告诉你就在程序里说一句、出弹幕、推送一条，要她看着办就交给她（**会叫她**，每运行一次花一次 AI 调用），程序里不写就安静。新建时先选一个样子：说一句 / 推送一条 / 让{name}做 / 空白程序。以前的“播报”“让她做”两种动作已经没有了（旧的打开时转成程序），“让{name}做”只剩模板名。程序还能**调工具**（ADR 046）：`tool("名字", {…})`，名字直接写；往游戏里打字、按键的不调工具，用程序自己的写法；结果是别人写的字的工具只回一个状态。要问的工具要你在「自动化」页**允许**一次（见“确认”），没允许的标“等你确认”，调不了的（插件关着、权限里禁止）标“用不了” | `脚本` | `automation.*`、`ProgramUses`（`usesWindow` / `asks`）、`tool()`、`tools[]` / `needsConfirm` | automation |
 | 网易云音乐 | 放歌插件的名字（ADR 034、038；2026-11-25 起，以前叫“音乐”）：从左侧栏“插件”的卡片点开，搜歌、每日推荐、私人 FM、我的歌单、播放条。插件 id、配置（`plugins.music`）、她的工具名还是 `music`。“音乐”只说放歌这件事本身（音乐音量、她说话时音乐压低） | | `plugins/music`、`MusicPage` | NetEase Cloud Music |
 | 放歌 / 正在放 | Kotone 自己放歌（不用浏览器）：你在网易云音乐的页面里点，或者她用 `music` 工具放；“正在放”是播放条和左侧栏小播放条上的那首 | | `music`、`Player` | play music / Now playing |
 | 登录网易云音乐 | 点“登录网易云音乐”打开网易云官方登录页的窗口，用网易云音乐 App 扫码；第一次放歌要登录一次，登录信息交给 Windows 保管。她要放歌而你没登录时，聊天页出这个按钮（她不自己弹窗，免得游戏里抢焦点）；登录过期了（以前登录过、网易云说要重新登录），聊天里来一张“登录过期”卡片带这个按钮，登好了原地变成“已登录”（推送，ADR 043 D11） | | `music_login_start`、`login.stage = needed` | Log in to NetEase Cloud Music |

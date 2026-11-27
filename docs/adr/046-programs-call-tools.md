@@ -111,4 +111,23 @@ ADR 045 之后，自动化的动作就是程序，通知、交给她都是程序
 
 ## 实现情况
 
-（实现时填写。）
+分四步提交（2026-11-27，分支 `claude/automation-functions`）。玩家同一天自己做的自动化活动首页、本机游戏详情页（`e71cd75f`）在第 3 步之前，第 4 步的界面加在它上面。
+
+**第 1 步 英雄联盟插件（`24761cca`，D6–D8）**：`lol.death` 以 `isDead` 由假变真为准，同一份数据里的 `ChampionKill` 补击杀者，`who()` 认 `summonerName`（隐藏身份的人也对得上）；一份数据里死几个按击杀时间排、人数逐个递减。`lol.my_death` / `lol.my_respawn` / `lol.ace` 保留、字段不变，改由报 `lol.death` 的同一处报，删掉单独的那套判断（`lol.my_death` 的 `respawnSeconds` 从 `12.0` 变成 `12`）。`lol.match` 给她的文字去掉玩家名、工具改成可信，`structured_content` 是给程序的结构化数据（没有页面，不进她的上下文、不出卡片）。新加 6 个测试。
+
+**第 2 步 规则（`8af29601`，D1–D5）**：脚本引擎的 `tool(name, args)`（`ScriptHost::tool` → `ToolReply`；两次至少隔 1 秒、参数 ≤4 KB、结果转只读表，超过 8 层 / 256 KB 回 `nil, 原因`）。core：`tools_called` 和“用到游戏窗口”用同一个记号器，名字不是直接写的报错；保存时拒 `automation.*` / `saved.*`；`Automation.confirmed`（草稿带它直接拒；`AutomationLibrary::confirm` 核对玩家看到的程序，和以前的合并、去掉不再调的；程序一改就清掉；`forget_confirmations` 按前缀清）；`program_view`（不可信工具只回 `status`）。她的权限：`program_callable`（D2 三类，第三方插件自称只读的也算只读）、`program_decision`（照热键的 `binding_decision`；临时程序遇到要确认的就是不能调）；`saved_entry` 的副作用按程序算（D5）。新加 15 个测试。
+
+**第 3 步 桌面端（`aa09a32c`）**：`tool_call.rs` 从热键里抽出“按来源调工具”，热键和程序共用一份（`Caller::Hotkey` 改名 `Caller::Automation`，判法不变）；`DesktopHost::tool`（名字在单子上、权限和插件开关、确认只在存着的程序没变时算数、30 秒和停下、不可信只回 `status`）；`ToolRules` 安排时查一遍（等你确认的、调不了的不运行：▶ 和热键说原因、她拿到错误、游戏事件和定时只记日志）；对外的定义不带 `confirmed`，改成 `tools[{name, title, state, reason}]` 和 `needsConfirm`；命令 `automation_save(draft, confirm)`、`automation_confirm(id, source)`、`automation_tools(source, id)`；第三方插件的配置变了清掉确认。验收场景写成了测试（最后一个队友倒下、我还活着时放歌，别的情况不触发）。新加 11 个测试。
+
+**第 4 步 界面、她和文档（这个提交）**：
+- 界面（D9）：编辑器改程序时防抖 0.3 秒查一次 `automation_tools`，程序下面一行“会调用：放歌（music）……”（工具说明的第一句截到第一个括号或逗号前，短的中文写成“放歌（music）”，英文说明、太长的只写工具名；完整说明在鼠标悬停里）。有要允许的写出原因、存的按钮变成“允许并保存”；点的时候“会调用”还没跟上刚改的程序，就先算一遍，要允许的工具变了就停下给玩家看，不替玩家没看到的工具点允许。调不了的写原因，照样能存。列表上“等你确认”“用不了”两个小标记，点开是同一块（新组件 `ProgramTools.svelte`）：等你确认的先读一份程序显示出来，“允许”把这份交给 `automation_confirm` 核对（这期间被她改了就不认，重读一份）；等你确认的 ▶ 不运行，直接点开这一块。活动首页最上面加一栏“等你确认”（写着要允许什么），点开跳到程序库里它那一项；“已启用的触发规则”的行也带两个小标记。没加页面、没加模板。浏览器预览照后端的规矩算 `tools[]` / `needsConfirm`，测试可以在页面加载前放 `window.__kotoneAutomationSeed` 当作她存的。
+- 她的规矩（共用规矩一条）：`tool("名字", {…})` 名字直接写、没成回 `nil` 和原因；调不了的三类（用 `chat()` / `key()`）；结果里有别人写的字的工具程序只拿得到 `status`；要确认的工具试运行调不了，先存起来；保存结果里 `needsConfirm` 是 true 时告诉玩家去「自动化」页点“允许”。
+- **确认过的不问两次**（主会话定的）：她运行 `saved.<id>` 时，程序里玩家在「自动化」页允许过的工具（确认时的副作用盖得住现在的，和热键、宿主同一个认法），默认要问的副作用换成新的 `runs-confirmed-tools`：默认允许，聊天里不再问一遍；不算只读，只读模式照样拒；玩家把这个自动化设成先问我、禁止照常；默认允许的副作用（放歌的 `plays-media`）原样留着。确认过时了的、没确认的照旧问（问了也只是到安排时被“要先在「自动化」页点允许”拦下）。
+- 工具说明（`catalog_host.rs`）：`automation.run` 的函数清单加 `tool(name, args)`（名字直接写、30 秒、两次隔 1 秒、停下取消、`nil, reason`、不可信只回 `{status}`、调不了的范围、权限和「自动化」页的允许、临时程序只调不用确认的、改程序作废、查不过不开始）；`save` / `get` / `list` 写 `tools[]` 的四种状态和 `needsConfirm`，不提 `confirmed`。
+- 测试：`kotone-agent` 新加 1 个（允许过的工具她运行时不问；只读照样拒；过时的、确认的是别的工具、没确认的照常问；玩家设的规则照常；默认允许的副作用不换），改 1 个（系统提示里的规矩）；`kotone-tools` 改 1 个（自动化工具的说明）；Playwright 新加 1 个（她存的显示“等你确认”、首页最上面也有，点允许后都没了、▶ 能运行；改了程序按钮变“允许并保存”，改回原样又是“保存”；名字不是直接写的存不进来；调不了的标“用不了”、▶ 说原因）。`cargo test -p kotone-agent -p kotone-tools` 118 + 114 个全过；clippy 没有警告；Playwright `automation`、`terminology`、`game-profile`、`plugin-events`、`plugin-risk`、`sidebar-edit`、`hotkeys-*`、`lol-plugin` 共 43 个全过。
+- 文档：本节；ADR 038 D2、040 第 3 期、045 的修订说明；ADR 目录；术语表“确认”“自动化”；`docs/tool-service.md`（程序里的 `tool()`、`automation.*` 的 `tools[]` / `needsConfirm`、`lol.match` 的结构化数据和不带玩家名）；`docs/assistant.md`；`CHANGELOG.md`。
+
+**待真机**：
+- D6 里照接口推的说法，没录到：守护天使、基兰大招、赛恩被动、艾尼维亚的蛋、扎克被动时 `isDead` 会不会闪一下（要每 0.5 秒读一次局内接口录一局）；塔、小兵、野怪杀的和处决时 `ChampionKill` 是什么样（`KillerName` 写什么、`killer` 是不是空的）；隐藏身份的佛耶戈附身后阵亡；观战（应该不报）和斗魂竞技场（几队人时 `alliesAlive` 怎么算）。
+- 验收场景真机跑一遍：最后一个队友倒下、我还活着时真的放歌；网易云没登录时出弹幕“网易云音乐还没登录，没放成”。
+- 真 DeepSeek：跟她说“队友都倒了给我放首歌”，看她写的程序（`team: "ally"` 有没有省）；存了调要确认的工具时她会不会叫玩家去「自动化」页点“允许”。

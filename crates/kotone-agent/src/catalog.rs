@@ -746,7 +746,8 @@ pub fn plugin_entries(offers: &[kotone_plugin_api::Offer]) -> Vec<ToolEntry> {
 /// 副作用按程序算（ADR 046 D5）：用到游戏窗口 → 按键、截图（`input`、`captures-screen`）；说话、弹幕、推送 → 显示或说出
 /// 文字（`speaks-or-shows-text`）；`tool()` 调的 → 那些工具在 `tools`（她这段对话的工具清单）里的副作用。所以只读模式下
 /// 她能运行只说一句的自动化，会按键、会放歌的照旧不行。清单里没有的工具（插件关着、数据开关关着）不算：那样的程序
-/// 安排时就起不来，宿主每次 `tool()` 还会按当时的权限再判一次。
+/// 安排时就起不来，宿主每次 `tool()` 还会按当时的权限再判一次。玩家在「自动化」页允许过的工具，默认要问的副作用换成
+/// [`crate::permissions::CONFIRMED_TOOL_EFFECT`]：她运行时不再问一次，只读模式照样拒。
 pub fn saved_entry(automation: &Automation, tools: &[ToolEntry]) -> Option<ToolEntry> {
     let mut properties = Map::new();
     let mut required = Vec::new();
@@ -834,7 +835,19 @@ pub fn saved_entry(automation: &Automation, tools: &[ToolEntry]) -> Option<ToolE
         add("speaks-or-shows-text");
     }
     for tool in tools.iter().filter(|t| called.contains(&t.name)) {
-        tool.side_effects.iter().for_each(|e| add(e));
+        // 玩家在「自动化」页允许过（确认时的副作用盖得住现在的，和热键、宿主同一个认法）：她运行时不再因为它在聊天里
+        // 问一次（确认过的不问两次）。默认要问的副作用换成 CONFIRMED_TOOL_EFFECT：默认允许，但不算只读，只读模式照样拒
+        let confirmed = automation
+            .confirmed
+            .get(&tool.name)
+            .is_some_and(|seen| tool.side_effects.iter().all(|e| seen.contains(e)));
+        for effect in &tool.side_effects {
+            if confirmed && crate::permissions::asks_by_default(effect) {
+                add(crate::permissions::CONFIRMED_TOOL_EFFECT);
+            } else {
+                add(effect);
+            }
+        }
     }
     let mut kind = if uses.window {
         "程序，对当前前台的游戏窗口执行".to_string()

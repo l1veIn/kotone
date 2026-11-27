@@ -2,7 +2,7 @@
   import { companionName } from "$lib/stores/companion";
   import { onMount } from "svelte";
   import {
-    describeSchedule, listRuns, listSaved, stopRuns, subscribeAutomations,
+    describeSchedule, listRuns, listSaved, stopRuns, subscribeAutomations, toolReason, unusableTools,
     type Automation, type AutomationRun, type AutomationTemplate, type RunsSnapshot,
   } from "../../../lib/automation";
   import { describeTrigger, eventCatalog, triggerOff } from "$lib/gameEvents";
@@ -12,7 +12,8 @@
   import { errText, settingsStore, toast } from "../../../lib/stores/ui";
   import RunList from "./automation/RunList.svelte";
   import AutomationList from "./automation/AutomationList.svelte";
-  import { Activity, ArrowLeft, ChevronRight, Clock, Library, RefreshCw, Square, Zap } from "@lucide/svelte";
+  import { Activity, ArrowLeft, ChevronRight, Clock, Library, RefreshCw, ShieldQuestionMark, Square, Zap } from "@lucide/svelte";
+  import { listSeparator } from "$lib/locale";
   import { Button } from "$lib/components/ui/button";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import { m } from "$lib/paraglide/messages.js";
@@ -33,6 +34,8 @@
   let profileNames = $state<Record<string, string>>({});
   const catalog = $derived(eventCatalog($pluginsStore, $settingsStore));
   const rules = $derived(automations.filter(a => a.schedule?.enabled || a.on?.enabled));
+  // 等你确认的（她或外部 Agent 存的、调了要你允许的工具，ADR 046 D9）：允许之前完全不运行，放在最上面，点开就是“允许”那一块
+  const waiting = $derived(automations.filter((a) => a.needsConfirm));
   function showRule(id: string) {
     expanded = id;
     library = true;
@@ -108,6 +111,18 @@
   {:else if library}
     <AutomationList bind:expanded {automations} {templates} runs={snapshot.runs} {now} {busyId} onStop={stop} onChanged={refresh} />
   {:else}
+    {#if waiting.length}
+      <section class="rounded-xl border border-warning/35 bg-warning/5" data-testid="automation-waiting">
+        <h2 class="flex items-center gap-2 px-4 pt-4 pb-1 text-xs font-semibold text-warning"><ShieldQuestionMark class="size-4" />{m.auto_home_waiting()}</h2>
+        {#each waiting as item (item.id)}
+          <button class="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-warning/8" onclick={() => showRule(item.id)} data-testid="automation-waiting-item">
+            <span class="min-w-0 flex-1"><strong class="block truncate text-[13px] font-medium">{item.name}</strong>
+              <span class="block truncate text-xs text-muted-foreground">{item.tools.filter((t) => t.state === "confirm").map(toolReason).join(listSeparator())}</span>
+            </span><ChevronRight class="size-4 shrink-0 text-muted-foreground" />
+          </button>
+        {/each}
+      </section>
+    {/if}
     {#if active.length}
       <section class="rounded-xl border border-primary/25 bg-primary/5" data-testid="automation-active">
         <h2 class="flex items-center gap-2 px-4 pt-4 text-xs font-semibold text-primary"><Activity class="size-4" />{m.auto_home_running()}</h2>
@@ -132,7 +147,10 @@
         {#each rules as item (item.id)}
           <button class="flex w-full items-center gap-3 border-b border-hairline py-3 text-left hover:bg-muted/40" onclick={() => showRule(item.id)}>
             <Zap class="size-4 shrink-0 text-muted-foreground" />
-            <span class="min-w-0 flex-1"><strong class="block text-[13px] font-medium">{item.name}</strong>
+            <span class="min-w-0 flex-1"><strong class="flex items-center gap-1.5 text-[13px] font-medium">{item.name}
+                {#if item.needsConfirm}<span class="rounded bg-warning/12 px-1 text-[10px] font-normal text-warning" data-testid="automation-rule-waiting">{m.auto_list_waiting_badge()}</span>{/if}
+                {#if unusableTools(item.tools ?? []).length}<span class="rounded bg-destructive/10 px-1 text-[10px] font-normal text-destructive" data-testid="automation-rule-unusable">{m.auto_list_unusable_badge()}</span>{/if}
+              </strong>
               {#if item.schedule?.enabled}<span class="block text-xs text-muted-foreground">{describeSchedule(item.schedule.cron)}{#if item.nextRunAtMs} · {m.auto_list_next_run({time: new Date(item.nextRunAtMs).toLocaleString(getLocale(), {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})})}{/if}</span>{/if}
               {#if item.on?.enabled}
                 {@const off = triggerOff(item.on, catalog)}

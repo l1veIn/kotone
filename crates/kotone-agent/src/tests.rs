@@ -437,6 +437,13 @@ fn the_prompt_says_which_automations_need_the_game_and_how_programs_notify() {
             "别拼游戏事件里的字",
             "delay_seconds",
             "不要在程序里 wait 几分钟",
+            // ADR 046：程序里调工具、调不了的、要玩家在「自动化」页允许的
+            "tool(\"music\", { action = \"play\"",
+            "名字直接写成字符串",
+            "用 chat() / key()",
+            "只拿得到 status",
+            "needsConfirm",
+            "「自动化」页点“允许”",
         ] {
             assert!(text.contains(rule), "{rule}");
         }
@@ -927,6 +934,83 @@ fn saved_automations_carry_the_side_effects_of_their_programs() {
         decide(&policy, "auto-settings"),
         Decision::Ask { .. }
     ));
+}
+
+/// 确认过的不问两次（ADR 046 D3）：程序里要问的工具玩家在「自动化」页允许过，她运行这个自动化时不再在聊天里问；
+/// 只读模式照样拒（还是有副作用）；确认过时了（工具多了副作用）、确认的是别的工具、玩家把这个自动化设成先问我，照常问。
+#[test]
+fn tools_allowed_on_the_automation_page_are_not_asked_again_when_she_runs_it() {
+    use std::collections::BTreeMap;
+    let source = "tool('settings.update', { patch = {} }) say('改好了')";
+    let confirmed = |map: &[(&str, &[&str])]| -> BTreeMap<String, Vec<String>> {
+        map.iter()
+            .map(|(tool, effects)| {
+                (
+                    tool.to_string(),
+                    effects.iter().map(|e| e.to_string()).collect(),
+                )
+            })
+            .collect()
+    };
+    let with = |id: &str, map: &[(&str, &[&str])]| Automation {
+        confirmed: confirmed(map),
+        ..program_automation(id, source)
+    };
+    let automations = [
+        with(
+            "auto-ok",
+            &[(
+                "settings.update",
+                &["writes-settings", "may-register-hotkeys"],
+            )],
+        ),
+        // 确认时它还没有改热键这一项：过时了
+        with("auto-stale", &[("settings.update", &["writes-settings"])]),
+        with("auto-other", &[("music", &["plays-media"])]),
+        with("auto-none", &[]),
+    ];
+    let catalog = program_catalog(&automations);
+    let entry = |id: &str| catalog.get(&format!("saved.{id}")).unwrap();
+    assert_eq!(
+        entry("auto-ok").side_effects,
+        [
+            "speaks-or-shows-text",
+            crate::permissions::CONFIRMED_TOOL_EFFECT
+        ]
+    );
+    let policy = Policy::default();
+    let decide = |policy: &Policy, id: &str| policy.decide(entry(id), &json!({}));
+    assert_eq!(decide(&policy, "auto-ok"), Decision::Allow);
+    for id in ["auto-stale", "auto-other", "auto-none"] {
+        let Decision::Ask { reason } = decide(&policy, id) else {
+            panic!("{id} 要问");
+        };
+        assert_eq!(reason, "会修改设置", "{id}");
+    }
+    // 只读模式：确认过也不能跑
+    let read_only = Policy {
+        mode: Mode::ReadOnly,
+        ..Default::default()
+    };
+    assert!(matches!(
+        decide(&read_only, "auto-ok"),
+        Decision::Deny { .. }
+    ));
+    // 玩家自己把这个自动化设成先问我、禁止：照常
+    let mut rules = Policy::default();
+    rules.rules.insert("saved.auto-ok".into(), Rule::Ask);
+    assert!(matches!(decide(&rules, "auto-ok"), Decision::Ask { .. }));
+    rules.rules.insert("saved.auto-ok".into(), Rule::Deny);
+    assert!(matches!(decide(&rules, "auto-ok"), Decision::Deny { .. }));
+    // 默认允许的副作用（放歌）照原样留着，不换
+    let music = program_catalog(&[Automation {
+        confirmed: confirmed(&[("music", &["plays-media"])]),
+        ..program_automation("auto-music", "tool('music', { action = 'pause' })")
+    }]);
+    assert_eq!(
+        music.get("saved.auto-music").unwrap().side_effects,
+        ["plays-media"]
+    );
 }
 
 #[test]

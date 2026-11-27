@@ -356,3 +356,79 @@ test("activity controls and the schedule shortcut work in a narrow window", asyn
   await expect(item.getByTestId("automation-item-toggle")).toBeFocused();
   await expect(item.getByTestId("automation-details")).toBeVisible();
 });
+
+test("an automation she saved waits for your OK; allowing clears it, and a changed program needs it again (ADR 046)", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1040, height: 1100 });
+  // 她存的：改设置要你允许，放歌默认能调
+  const source = 'tool("settings.update", { patch = { ui = { theme = "dark" } } })\ntool("music", { action = "play", query = "晚安" })\nsay("换好了")';
+  await page.addInitScript((source) => {
+    (window as unknown as { __kotoneAutomationSeed: unknown }).__kotoneAutomationSeed = [{ name: "晚上换深色", source }];
+  }, source);
+  const automation = await openAutomation(page, false);
+
+  // 活动首页：等你确认的在最上面，写着要允许什么；点开就是程序库里它那一项
+  const waiting = automation.getByTestId("automation-waiting");
+  await expect(waiting.getByTestId("automation-waiting-item")).toHaveCount(1);
+  await expect(waiting).toContainText("晚上换深色");
+  await expect(waiting).toContainText("settings.update：会修改设置");
+  await screenshot(page, { path: testInfo.outputPath("activity-waiting.png"), animations: "disabled" });
+  await waiting.getByTestId("automation-waiting-item").click();
+  const item = automation.getByTestId("automation-item").filter({ hasText: "晚上换深色" });
+  await expect(item.getByTestId("automation-item-waiting")).toHaveText("等你确认");
+  await expect(item.getByTestId("automation-item-unusable")).toHaveCount(0);
+  // 点开：会调用哪些、要允许什么、你允许的是哪段程序
+  const tools = item.getByTestId("automation-details").getByTestId("automation-tools");
+  await expect(tools.getByTestId("automation-tool")).toHaveText(["settings.update", "放歌（music）"]);
+  await expect(tools.getByTestId("automation-tools-confirm")).toContainText("settings.update：会修改设置");
+  await expect(tools.getByTestId("automation-tools-source")).toContainText('tool("settings.update"');
+  await screenshot(page, { path: testInfo.outputPath("automation-waiting.png"), animations: "disabled", fullPage: true });
+  // 允许之前 ▶ 不运行，只是点开这一块
+  await item.getByTestId("automation-item-toggle").click();
+  await expect(item.getByTestId("automation-details")).toHaveCount(0);
+  await item.getByTestId("automation-item-play").click();
+  await expect(item.getByTestId("automation-tools-confirm")).toBeVisible();
+  await expect(item.getByTestId("automation-run-panel")).toHaveCount(0);
+
+  // 允许：标记和确认那一块都没了，首页也不再列；▶ 能运行了
+  await item.getByTestId("automation-allow").click();
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "允许了：「晚上换深色」运行的时候不再问你" })).toBeVisible();
+  await expect(item.getByTestId("automation-item-waiting")).toHaveCount(0);
+  await expect(item.getByTestId("automation-tools-confirm")).toHaveCount(0);
+  await expect(item.getByTestId("automation-tool")).toHaveText(["settings.update", "放歌（music）"]);
+  await item.getByTestId("automation-item-play").click();
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "已开始" })).toBeVisible();
+  await automation.getByTestId("automation-library").click();
+  await expect(automation.getByTestId("automation-waiting")).toHaveCount(0);
+  await automation.getByTestId("automation-library").click();
+
+  // 改了程序要重新允许：存的按钮变成“允许并保存”；改回原样又不用
+  await item.getByTestId("automation-item-toggle").click();
+  await item.getByTestId("automation-edit").click();
+  const editor = automation.getByTestId("automation-editor");
+  await expect(editor.getByTestId("automation-tool")).toHaveText(["settings.update", "放歌（music）"]);
+  await expect(editor.getByTestId("automation-save")).toHaveText("保存");
+  await editor.getByTestId("automation-source").fill(`${source}\ntool("lol.scout")`);
+  await expect(editor.getByTestId("automation-save")).toHaveText("允许并保存");
+  await expect(editor.getByTestId("automation-tools-confirm")).toContainText("settings.update：会修改设置");
+  // 调不了的写原因，照样能存
+  await expect(editor.getByTestId("automation-tools-unusable")).toContainText("lol.scout 的结果是别人写的字");
+  await expect(editor.getByTestId("automation-tools-unusable")).toContainText("照样能存");
+  await screenshot(page, { path: testInfo.outputPath("automation-editor-allow.png"), animations: "disabled", fullPage: true });
+  await editor.getByTestId("automation-source").fill(source);
+  await expect(editor.getByTestId("automation-save")).toHaveText("保存");
+  // 工具名不是直接写的：说清楚，存不进来
+  await editor.getByTestId("automation-source").fill("tool(args.name)");
+  await expect(editor.getByTestId("automation-tools-error")).toContainText("tool() 的第一个参数要直接写工具名");
+  await editor.getByTestId("automation-save").click();
+  await expect(editor.getByRole("alert")).toContainText("tool() 的第一个参数要直接写工具名");
+  // 存下改过的程序：点“允许并保存”就一起允许了；调不了的那个让它标“用不了”
+  await editor.getByTestId("automation-source").fill(`${source}\ntool("lol.scout")`);
+  await expect(editor.getByTestId("automation-save")).toHaveText("允许并保存");
+  await editor.getByTestId("automation-save").click();
+  await expect(editor).toHaveCount(0);
+  await expect(item.getByTestId("automation-item-waiting")).toHaveCount(0);
+  await expect(item.getByTestId("automation-item-unusable")).toHaveText("用不了");
+  await expect(item.getByTestId("automation-tools-unusable")).toContainText("lol.scout");
+  await item.getByTestId("automation-item-play").click();
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "lol.scout 的结果是别人写的字" })).toBeVisible();
+});

@@ -83,7 +83,19 @@ const ALLOWED_EFFECTS: &[&str] = &[
     "plays-media",
     // ADR 038：在 Kotone 窗口里打开一个页面（不把窗口拉到前面）。
     "shows-ui",
+    // ADR 046：她运行的已保存自动化里，玩家在「自动化」页允许过的工具（见 CONFIRMED_TOOL_EFFECT）。
+    CONFIRMED_TOOL_EFFECT,
 ];
+
+/// 她运行已保存的自动化（`saved.<id>`）时，程序里玩家在「自动化」页允许过的工具，默认要问的那些副作用换成这一个
+/// （[`crate::catalog::saved_entry`]，ADR 046 D3）：默认允许——确认过的不在聊天里再问一次；但不算只读——只读模式照样拒。
+/// 玩家把这个自动化设成“先问我”、禁止照常生效。
+pub const CONFIRMED_TOOL_EFFECT: &str = "runs-confirmed-tools";
+
+/// 这个副作用默认要问（要问的、不认识的）：确认过的工具只换掉这些（[`CONFIRMED_TOOL_EFFECT`]）。
+pub fn asks_by_default(effect: &str) -> bool {
+    !ALLOWED_EFFECTS.contains(&effect)
+}
 
 /// 默认询问的副作用及原因。
 const ASK_EFFECTS: &[(&str, &str)] = &[

@@ -102,6 +102,38 @@ export interface Automation {
   usesWindow: boolean;
   /** 程序里会叫她（ask）：每次花一次 AI 调用，不当工具交给她。 */
   asks: boolean;
+  /** 程序里 `tool()` 调的工具（按出现的先后）现在怎么样（ADR 046 D9，后端按权限和插件开关算）。 */
+  tools: ProgramTool[];
+  /** 有要你在「自动化」页点“允许”的工具：允许之前它完全不运行（ADR 046 D3）。 */
+  needsConfirm: boolean;
+}
+
+/** 程序里调的一个工具现在怎么样：ready 能调；confirm 要你允许；off 插件或数据开关关着；blocked 调不了。 */
+export type ToolState = "ready" | "confirm" | "off" | "blocked";
+
+/** `title` 是工具说明的第一句（可能很长、可能是英文），界面上用 `toolLabel`；`reason` 说为什么（ready 是空的）。 */
+export interface ProgramTool { name: string; title: string; state: ToolState; reason: string }
+
+/** 编辑器里“会调用：…”那一行（`automation_tools`，照编辑器里还没存的程序算）：工具名不是直接写的时 `tools` 为空、
+ * `error` 说原因（这样存不进来）。 */
+export interface ToolsPreview { tools: ProgramTool[]; needsConfirm: boolean; error: string | null }
+
+const HAN = /[\u4e00-\u9fff]/;
+/** 工具在界面上的名字（`title` 很长，例如“放歌（网易云音乐，Kotone 自己放，马上出声）”）：说明第一句截到第一个括号、
+ * 逗号、冒号之前，短的中文写成“放歌（music）”，别的（英文说明、太长）只写工具名。 */
+export function toolLabel(tool: Pick<ProgramTool, "name" | "title">): string {
+  const short = tool.title.split(/[\uff08(\uff0c,\uff1a:\uff1b;\u3002]/)[0].trim();
+  return short && short !== tool.name && HAN.test(short) && [...short].length <= 12 ? m.auto_tools_label({ title: short, name: tool.name }) : tool.name;
+}
+
+/** 一个工具为什么调不了 / 要允许的那句：原因里本来就写了工具名的照原样，没写的前面加上是哪个工具。 */
+export function toolReason(tool: ProgramTool): string {
+  return tool.reason.includes(tool.name) ? tool.reason : m.auto_tools_reason({ tool: toolLabel(tool), reason: tool.reason });
+}
+
+/** 插件关着、调不了的工具：存得下，改好之前它不运行（ADR 046 D3）。 */
+export function unusableTools(tools: ProgramTool[]): ProgramTool[] {
+  return tools.filter((t) => t.state === "off" || t.state === "blocked");
 }
 
 /** 新建时选的模板（ADR 045 D9）：说一句 / 推送一条 / 让她做 / 空白程序。名字和说明界面按 id 取文案。 */
@@ -234,6 +266,50 @@ function previewUses(source: string): { usesWindow: boolean; asks: boolean } {
   return { usesWindow: WINDOW_FUNCTIONS.some((name) => names.has(name)), asks: names.has("ask") };
 }
 
+/** 预览里的工具（真实应用由后端按权限、插件开关和工具目录算，ADR 046 D2、D3）：标题是说明的第一句。 */
+// i18n-ignore-start：预览里模拟后端给的工具说明和原因
+const PREVIEW_TOOLS: Record<string, { title: string; state: ToolState; reason: string }> = {
+  music: { title: "放歌（网易云音乐，Kotone 自己放，马上出声）", state: "ready", reason: "" },
+  "lol.match": { title: "英雄联盟这局现在的样子（马上返回）：模式、游戏时间、比分", state: "ready", reason: "" },
+  "settings.update": { title: "Deep-merge a partial settings patch, exactly like saving in the settings page: values are validated…", state: "confirm", reason: "会修改设置" },
+  "game_chat.send": { title: "把一段话发到当前游戏的聊天", state: "blocked", reason: "game_chat.send 会往游戏里打字或按键，程序里不能调：用程序自己的 chat() / key() / click()" },
+  "lol.scout": { title: "查这局 10 个人的战绩", state: "blocked", reason: "lol.scout 的结果是别人写的字，程序拿不到（只回 status），调了也白调" },
+};
+const previewMissing = (name: string) => /^(automation|saved)\./.test(name)
+  ? `程序里不能调自动化自己的工具（${name}）：会绕圈，也能绕过确认`
+  : `找不到工具 ${name}（插件没装或被删了，或者名字写错了）`;
+const NOT_A_LITERAL = "tool() 的第一个参数要直接写工具名，例如 tool(\"music\", { action = \"play\" })：不能用变量或拼出来的名字，也别拿 tool 当变量名";
+// i18n-ignore-end
+
+/** 预览里粗略地列程序调的工具（真实应用由后端 `tools_called` 用记号器算）：去掉注释，`tool(` / `tool ` 后面要直接写名字。 */
+function previewToolNames(source: string): { names: string[]; error: string | null } {
+  const code = source.replace(/--\[(=*)\[[\s\S]*?\]\1\]|--[^\n]*/g, " ");
+  const names: string[] = [];
+  const call = /(?<![.:\w])tool\s*(\()?\s*/g;
+  for (let found = call.exec(code); found; found = call.exec(code)) {
+    const literal = /^(["'])((?:[^"'\\\n]|\\.)*)\1/.exec(code.slice(call.lastIndex));
+    if (literal) {
+      if (!names.includes(literal[2])) names.push(literal[2]);
+    } else if (found[1]) {
+      return { names: [], error: NOT_A_LITERAL };
+    }
+  }
+  return { names, error: null };
+}
+
+/** 预览里每个工具现在怎么样：要允许的，`allowed` 里有它就算能调（程序没改过才传）。 */
+function previewToolStates(source: string, allowed: string[]): ToolsPreview {
+  const { names, error } = previewToolNames(source);
+  const tools: ProgramTool[] = names.map((name) => {
+    const known = PREVIEW_TOOLS[name];
+    if (!known) return { name, title: name, state: "blocked", reason: previewMissing(name) };
+    return known.state === "confirm" && allowed.includes(name)
+      ? { name, title: known.title, state: "ready", reason: "" }
+      : { name, title: known.title, state: known.state, reason: known.reason };
+  });
+  return { tools, needsConfirm: tools.some((t) => t.state === "confirm"), error };
+}
+
 const REMIND_BOTH = "say(args.text, { toast = true })";
 let previewRuns: AutomationRun[] = [
   {
@@ -253,7 +329,9 @@ let previewRuns: AutomationRun[] = [
     report: { outcome: "finished", keys: 1, durationMs: 9_800, log: ["左上角变黑了"] },
   },
 ];
-let previewAutomations: Automation[] = [
+/** 预览里存着的自动化：调的工具和要不要允许每次照源码现算（`describePreview`）。 */
+type PreviewAutomation = Omit<Automation, "tools" | "needsConfirm">;
+let previewAutomations: PreviewAutomation[] = [
   {
     id: "preview-auto-1", name: "界面示例：连按某键", description: "每隔一段时间按一次指定的键", createdBy: "user", createdAtMs: t0, updatedAtMs: t0,
     params: [
@@ -302,11 +380,38 @@ const previewTemplates: AutomationTemplate[] = [
     params: [], source: "-- 在这里写程序，例如：\n-- say(\"该买眼了\")\n" },
 ];
 // i18n-ignore-end
+
+/** 测试和演示可以在页面加载前放 `window.__kotoneAutomationSeed`（`[{name, source, createdBy?, description?}]`）：当作她或
+ * 外部 Agent 存的（默认 companion），加在示例数据后面。 */
+type PreviewSeed = { name: string; source: string; createdBy?: Automation["createdBy"]; description?: string };
+const seeds = typeof window === "undefined" ? undefined : (window as unknown as { __kotoneAutomationSeed?: PreviewSeed[] }).__kotoneAutomationSeed;
+previewAutomations = [...previewAutomations, ...(Array.isArray(seeds) ? seeds : []).map((seed, index): PreviewAutomation => ({
+  id: `preview-seed-${index + 1}`, name: seed.name, description: seed.description ?? "", createdBy: seed.createdBy ?? "companion",
+  createdAtMs: t0, updatedAtMs: t0, params: [], action: { kind: "program", source: seed.source }, ...previewUses(seed.source),
+}))];
+
+/** 预览里玩家点过“允许”的：自动化 id → 允许时的那份程序和允许的工具（真实应用记在定义上；程序一改就作废，ADR 046 D3）。 */
+const previewAllowed = new Map<string, { source: string; tools: string[] }>();
+function describePreview(a: PreviewAutomation): Automation {
+  const source = a.action.source ?? "";
+  const allowed = previewAllowed.get(a.id);
+  const { tools, needsConfirm } = previewToolStates(source, allowed && allowed.source === source.trim() ? allowed.tools : []);
+  return { ...structuredClone(a), tools, needsConfirm };
+}
+/** 照这份程序记下要允许的工具（和以前允许过的合在一起）。 */
+function previewAllow(a: PreviewAutomation) {
+  const source = (a.action.source ?? "").trim();
+  const before = previewAllowed.get(a.id);
+  const kept = before && before.source === source ? before.tools : [];
+  const now = previewToolStates(source, kept).tools.filter((t) => t.state === "confirm").map((t) => t.name);
+  previewAllowed.set(a.id, { source, tools: [...kept, ...now] });
+}
+
 const previewListeners = new Set<() => void>();
 const notify = () => previewListeners.forEach((listener) => listener());
 const PREVIEW_ONLY = m.auto_preview_only();
 /** 列表里不带源码（和后端 `automation_saved_list` 一样），要源码用 getAutomation。 */
-const listed = (a: Automation): Automation => ({ ...structuredClone(a), action: { kind: "program" } });
+const listed = (a: PreviewAutomation): Automation => ({ ...describePreview(a), action: { kind: "program" } });
 
 // ---------- 调用 ----------
 
@@ -354,11 +459,13 @@ export async function getAutomation(id: string): Promise<Automation> {
   if (isTauri) return invoke("automation_get", { id });
   const found = previewAutomations.find((a) => a.id === id);
   if (!found) throw new Error(`找不到自动化 ${id}`); // i18n-ignore：预览里模拟后端的错误
-  return structuredClone(found);
+  return describePreview(found);
 }
 
-export async function saveAutomation(draft: AutomationDraft): Promise<Automation> {
-  if (isTauri) return invoke("automation_save", { draft });
+/** 保存。`confirm` = 玩家点了“允许并保存”（ADR 046 D9）：存好以后照刚存的这份程序允许要确认的工具。
+ * 改了程序的，存的时候就要再允许一次（存的时候以前的允许已经作废了）。 */
+export async function saveAutomation(draft: AutomationDraft, confirm = false): Promise<Automation> {
+  if (isTauri) return invoke("automation_save", { draft, confirm });
   // 草稿可能带着界面状态的代理：存成普通 JSON，之后 structuredClone 才不会出错
   draft = JSON.parse(JSON.stringify(draft)) as AutomationDraft;
   // i18n-ignore-start：预览里模拟后端的错误
@@ -368,7 +475,9 @@ export async function saveAutomation(draft: AutomationDraft): Promise<Automation
   const now = Date.now();
   const existing = draft.id ? previewAutomations.find((a) => a.id === draft.id) : undefined;
   const source = draft.action.source.trim();
-  const saved: Automation = {
+  const { error } = previewToolNames(source);
+  if (error) throw new Error(error);
+  const saved: PreviewAutomation = {
     id: existing?.id ?? `preview-auto-${now}`, name: draft.name.trim(), description: draft.description.trim(),
     params: draft.params.map((p) => ({ ...p, label: p.label.trim() || p.name })), action: { kind: "program", source },
     createdBy: existing?.createdBy ?? "user", createdAtMs: existing?.createdAtMs ?? now, updatedAtMs: now,
@@ -377,14 +486,38 @@ export async function saveAutomation(draft: AutomationDraft): Promise<Automation
     ...previewUses(source),
   };
   previewAutomations = existing ? previewAutomations.map((a) => (a.id === saved.id ? saved : a)) : [...previewAutomations, saved];
+  if (confirm) previewAllow(saved);
   notify();
-  return structuredClone(saved);
+  return describePreview(saved);
+}
+
+/** 列表上点“允许”（ADR 046 D3）：`source` 是界面上看到的那份程序，和现在存的不一样（这期间被她、外部 Agent 改了）就不认。
+ * 返回允许后的定义（带源码）。 */
+export async function confirmAutomation(id: string, source: string): Promise<Automation> {
+  if (isTauri) return invoke("automation_confirm", { id, source });
+  const found = previewAutomations.find((a) => a.id === id);
+  // i18n-ignore-start：预览里模拟后端的错误
+  if (!found) throw new Error(`找不到自动化 ${id}`);
+  if ((found.action.source ?? "").trim() !== source.trim()) throw new Error("程序刚被改过，请重新看一遍");
+  // i18n-ignore-end
+  previewAllow(found);
+  notify();
+  return describePreview(found);
+}
+
+/** 编辑器里程序下面那一行“会调用：…”：照编辑器里现在这份程序（还没存）算；`id` 是正在改的那个（新建的不传），
+ * 程序没改过时它允许过的照样算数。 */
+export async function programTools(source: string, id?: string | null): Promise<ToolsPreview> {
+  if (isTauri) return invoke("automation_tools", { source, id: id ?? null });
+  const allowed = id ? previewAllowed.get(id) : undefined;
+  return previewToolStates(source, allowed && allowed.source === source.trim() ? allowed.tools : []);
 }
 
 export async function deleteAutomation(id: string): Promise<boolean> {
   if (isTauri) return invoke("automation_delete", { id });
   const before = previewAutomations.length;
   previewAutomations = previewAutomations.filter((a) => a.id !== id);
+  previewAllowed.delete(id);
   notify();
   return previewAutomations.length !== before;
 }
@@ -397,6 +530,10 @@ export async function runAutomation(id: string, args: Record<string, unknown>, s
   const automation = previewAutomations.find((a) => a.id === id);
   // i18n-ignore-start：预览里模拟后端的错误和示例窗口
   if (!automation) throw new Error(`找不到自动化 ${id}`);
+  // 等你确认的、调不了的不运行（ADR 046 D3），和后端一样说清是哪个工具
+  const problems = describePreview(automation).tools.filter((t) => t.state !== "ready")
+    .map((t) => t.state === "confirm" ? `要先在「自动化」页点“允许”，才能调用 ${t.name}（${t.reason}）` : t.reason.includes(t.name) ? t.reason : `${t.name}：${t.reason}`);
+  if (problems.length) throw new Error(problems.join("；"));
   const now = Date.now();
   const missing = automation.params.find((p) => (p.default === undefined || p.default === null) && (args[p.name] === undefined || args[p.name] === ""));
   if (missing) throw new Error(`缺少参数 ${missing.label || missing.name}`);
