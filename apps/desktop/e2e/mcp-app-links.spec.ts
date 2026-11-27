@@ -7,7 +7,7 @@
 import { expect, test, type Frame, type Page } from "@playwright/test";
 import { openPlugin } from "./nav";
 
-const MATCH = "ui://kotone/lol/match";
+const HOME = "ui://kotone/lol/home";
 const LINK = "https://op.gg/zh-cn/lol/champions/yasuo/build";
 
 /** 浏览器预览的 openExternal 是 window.open：记下来，不真的开。 */
@@ -24,7 +24,7 @@ async function open(page: Page) {
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   const pluginPage = await openPlugin(page, "lol");
-  await expect(pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${MATCH}"]`)).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  await expect(pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${HOME}"]`)).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   return appFrame(page);
 }
 
@@ -32,8 +32,8 @@ const opened = (page: Page) => page.evaluate(() => (window as unknown as { __kot
 
 /** App 所在的那一层 iframe（沙盒代理页里面那一层）。 */
 async function appFrame(page: Page): Promise<Frame> {
-  await expect.poll(() => page.frames().filter((f) => /\/app\/lol\/match$/.test(f.url())).length, { timeout: 15_000 }).toBeGreaterThan(0);
-  return page.frames().find((f) => /\/app\/lol\/match$/.test(f.url()))!;
+  await expect.poll(() => page.frames().filter((f) => /\/app\/lol\/home$/.test(f.url())).length, { timeout: 15_000 }).toBeGreaterThan(0);
+  return page.frames().find((f) => /\/app\/lol\/home$/.test(f.url()))!;
 }
 
 /** 在 App 那一层发一条 JSON-RPC 请求给宿主（经沙盒代理页转），等回来的那一条。 */

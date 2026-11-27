@@ -167,11 +167,15 @@ fn sync_now(state: &VoiceChat, host: &dyn Host) {
 pub fn status(state: &VoiceChat, host: &dyn Host) -> Value {
     let cable = platform::detect();
     let config = config(host);
-    let (running, error, installing) = {
+    let (running, active_mic, error, installing) = {
         let inner = state.inner.lock().unwrap();
         let device_error = inner.router.as_ref().and_then(|(_, r)| r.error());
         (
             inner.router.is_some(),
+            inner
+                .router
+                .as_ref()
+                .and_then(|(_, r)| r.active_mic.clone()),
             device_error.or_else(|| inner.error.clone()),
             inner.installing,
         )
@@ -190,6 +194,7 @@ pub fn status(state: &VoiceChat, host: &dyn Host) -> Value {
         "micDeviceId": config.mic_device_id,
         "micGain": config.mic_gain,
         "running": running,
+        "activeMic": active_mic,
         "error": error,
         "windowsDefaultMic": default_mic,
         "windowsCommunicationsMic": communications_mic,

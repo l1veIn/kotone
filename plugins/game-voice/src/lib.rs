@@ -39,7 +39,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec::new(
             TOOL_STATUS,
-            "Game voice chat (ADR 020: 琴音 speaks to teammates through a virtual mic). Returns driverInstalled (VB-CABLE, a VB-Audio donationware virtual audio cable), installing, devices {cableInput, cableOutput}, enabled (the game voice plugin is on = the router runs) / includeMic / micDeviceId / micGain (settings plugins.game-voice.settings.*), running (the mic + speech router is open), error, windowsDefaultMic / windowsCommunicationsMic, windowsDefaultIsCable, canRestoreDefaultMic, ttsCanSpeak (the Windows system voice cannot be sent into the game) and attribution. Setup order: voice_chat.install if not installed → in the game / voice app pick 'CABLE Output' as the microphone, or voice_chat.default_mic for games that only use the Windows default → voice_chat.test.",
+            "Game voice chat (ADR 020: 琴音 speaks to teammates through a virtual mic). Returns driverInstalled (VB-CABLE, a VB-Audio donationware virtual audio cable), installing, devices {cableInput, cableOutput}, enabled (the game voice plugin is on = the router runs) / includeMic / micDeviceId / micGain (settings plugins.game-voice.settings.*), running (the mic + speech router is open), activeMic (the actual routed input device, or null), error, windowsDefaultMic / windowsCommunicationsMic, windowsDefaultIsCable, canRestoreDefaultMic, ttsCanSpeak (the Windows system voice cannot be sent into the game) and attribution. Setup order: voice_chat.install if not installed → in the game / voice app pick 'CABLE Output' as the microphone, or voice_chat.default_mic for games that only use the Windows default → voice_chat.test.",
             empty(),
         )
         .page(PAGE)

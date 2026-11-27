@@ -214,14 +214,17 @@ mod tests {
         s
     }
 
-    /// 英雄联盟的七页（这局、战绩、单局详情、英雄、强度榜，和只在推送里出现的选英雄、文字识别模型）都是 App（没打包时是
-    /// 占位页），设置页不是；页面要的数据开关关着就没有那一页（“读客户端数据”管前三页，“用网上的统计”管后四页）；
-    /// 关掉插件全没有。
+    /// 主页只依赖插件总开关，各数据页还要检查相应的数据源。
     #[test]
     fn app_pages_follow_the_switches() {
+        const HOME: &str = "ui://kotone/lol/home";
         let s = Settings::default();
         let uris = listed_uris(&s);
-        for uri in LOL_CLIENT_APPS.iter().chain(&LOL_STATS_APPS) {
+        for uri in [&HOME]
+            .into_iter()
+            .chain(&LOL_CLIENT_APPS)
+            .chain(&LOL_STATS_APPS)
+        {
             let r = read(&s, uri).unwrap_or_else(|e| panic!("{uri}：{e}"));
             assert_eq!(r.mime_type, kotone_plugin_api::APP_MIME, "{uri}");
             let page = uri.rsplit('/').next().unwrap();
@@ -271,8 +274,18 @@ mod tests {
                 assert!(read(&off, uri).is_ok(), "{source} 关着不该影响 {uri}");
             }
         }
+        let mut no_sources = with_source_off("client");
+        no_sources
+            .plugins
+            .get_mut("lol")
+            .unwrap()
+            .sources
+            .insert("stats".into(), false);
+        assert!(listed_uris(&no_sources).iter().any(|uri| uri == HOME));
+        assert!(read(&no_sources, HOME).is_ok());
         let mut disabled = Settings::default();
         disabled.plugins.entry("lol".into()).or_default().enabled = Some(false);
+        assert!(read(&disabled, HOME).is_err());
         assert!(read(&disabled, "ui://kotone/lol/tier").is_err());
         assert!(read(&disabled, "ui://kotone/lol/player").is_err());
     }
@@ -354,7 +367,7 @@ mod tests {
         );
         for (uri, source) in &mock {
             assert_eq!(
-                std::slice::from_ref(source),
+                source.as_slice(),
                 rust_apps[uri].as_slice(),
                 "{uri}：pluginsMock.ts 记的数据开关和清单的 needs 对不上"
             );
@@ -483,11 +496,11 @@ mod tests {
         out
     }
 
-    /// `pluginsMock.ts` 的 `const APP_PAGES: Record<string, string> = { [PAGE_X]: "client", … }`：地址 → 数据开关。
+    /// 模拟资源的地址和所需的数据开关。没有额外开关的页面记作 `null`。
     fn ts_mock_app_pages(
         src: &str,
         constant: impl Fn(&str) -> Option<String>,
-    ) -> std::collections::BTreeMap<String, String> {
+    ) -> std::collections::BTreeMap<String, Option<String>> {
         let src = ts_strip_comment_lines(src);
         let at = src
             .find("const APP_PAGES")
@@ -507,8 +520,13 @@ mod tests {
             }
             .unwrap_or_else(|| panic!("看不懂 APP_PAGES 的这一项：{item}"));
             let uri = ts_key_before(&item[..=colon], &constant);
-            let source = ts_string_at(item[colon + 1..].trim_start())
-                .unwrap_or_else(|| panic!("APP_PAGES 的这一项不是字符串：{item}"));
+            let value = item[colon + 1..].trim();
+            let source = match value {
+                "null" => None,
+                _ => Some(
+                    ts_string_at(value).unwrap_or_else(|| panic!("看不懂 APP_PAGES 的值：{item}")),
+                ),
+            };
             out.insert(uri, source);
         }
         out

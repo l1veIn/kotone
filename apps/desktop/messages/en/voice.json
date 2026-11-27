@@ -22,7 +22,6 @@
   "voice_tab_processing": "Text processing",
   "voice_tab_history": "History",
   "voice_shell_title": "Voice input",
-  "voice_shell_subtitle": "Speak, and your exact words are typed into the game's chat box. Doesn't go through {name}.",
   "voice_shell_configure": "Let Kotone set it up",
   "voice_shell_tabs_label": "Voice input tabs",
   "voice_hotkey_placeholder": "e.g. {example}",

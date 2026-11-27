@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openChat, openSettingsTab } from "./nav";
+import { openChat, openPlugin, openSettingsTab } from "./nav";
 
 // `ui.open`（她和外部 Agent 在 Kotone 窗口里打开一个页面，ADR 038 D5）不打断玩家正在看的东西
 // （共享资源评估第二节第 6 条，2026-11-25；ADR 039 实施记录“ui.open 不打断玩家”）：
@@ -26,6 +26,27 @@ async function open(page: Page) {
 }
 
 const toasts = (page: Page, text: string) => page.locator("[data-sonner-toast]").filter({ hasText: text });
+
+test("the opening card opens 这局 in the plugin from another host page or the summoner home", async ({ page }) => {
+  await open(page);
+  await openSettingsTab(page, "sound");
+  const plugin = page.getByTestId("plugin-page-lol");
+  const app = plugin.frameLocator('[data-testid="mcp-app-iframe"]').frameLocator("iframe");
+  const openMatch = async () => {
+    const event = { uri: "ui://kotone/lol/match", plugin: "lol", byPlayer: true, standalone: true };
+    expect(await uiOpen(page, event)).toBe("shown");
+    await expect(app.getByTestId("lol-app-tab-match")).toHaveAttribute("aria-current", "page");
+    await expect(app.getByTestId("lol-match-player")).toHaveCount(10);
+  };
+  await openMatch();
+  await openPlugin(page, "lol");
+  await expect(app.getByTestId("lol-app-tab-home")).toHaveAttribute("aria-current", "page");
+  await openMatch();
+  // 同一个窗口已借卡片打开过，玩家后来在 App 内回了主页。再点开局卡也应回「这局」。
+  await app.getByTestId("lol-app-tab-home").click();
+  await expect(app.getByTestId("lol-app-home")).toBeVisible();
+  await openMatch();
+});
 
 test("on another page ui.open does not switch pages: the page waits in the right sidebar and a notice offers to open it", async ({ page }) => {
   await open(page);

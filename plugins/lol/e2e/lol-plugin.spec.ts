@@ -32,9 +32,9 @@ test("the League of Legends plugin opens from 插件 with the client-data switch
   await open(page);
   await expect(page.getByTestId("app-sidebar")).not.toContainText("英雄联盟");
   await openPlugin(page, "lol");
-  // 开着时整页是 App（从“这局”开始）；开关在顶栏的“设置”里
+  // 开着时整页是 App（从“主页”开始）；开关在顶栏的“设置”里
   await expect(page.getByTestId("plugin-app-name")).toHaveText("英雄联盟");
-  await expect(page.getByTestId("plugin-page-lol")).toHaveAttribute("data-start", "ui://kotone/lol/match");
+  await expect(page.getByTestId("plugin-page-lol")).toHaveAttribute("data-start", "ui://kotone/lol/home");
   await page.getByTestId("plugin-settings-button").click();
   const pluginPage = page.getByTestId("plugin-settings");
   const enabled = pluginPage.getByTestId("plugin-lol-enabled");
@@ -93,7 +93,7 @@ test("插件 lists the plugin as a card; turning the whole plugin off greys out 
   await pluginPage.getByTestId("plugin-lol-enabled").click();
   expect((await settings(page)).plugins?.lol?.enabled).toBe(true);
   // 打开了：整页换成 App
-  await expect(pluginPage).toHaveAttribute("data-start", "ui://kotone/lol/match");
+  await expect(pluginPage).toHaveAttribute("data-start", "ui://kotone/lol/home");
   await expect(pluginPage.getByTestId("mcp-app-frame")).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
 });
 

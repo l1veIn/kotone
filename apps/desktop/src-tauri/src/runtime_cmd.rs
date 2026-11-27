@@ -40,3 +40,31 @@ pub(crate) async fn cancel_session(state: tauri::State<'_, SharedState>) -> Resu
     state.orchestrator.cancel().await;
     Ok(())
 }
+
+#[tauri::command]
+pub(crate) async fn voice_input_trial_begin(app: AppHandle) -> Result<String, String> {
+    if app.state::<RuntimeManager>().phase() != RuntimePhase::Running {
+        return Err("请先启动语音识别".into());
+    }
+    app.state::<SharedState>()
+        .orchestrator
+        .begin_voice_trial()
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn voice_input_trial_finish(
+    state: tauri::State<'_, SharedState>,
+    session_id: String,
+) -> Result<String, String> {
+    state.orchestrator.finish_voice_trial(&session_id).await
+}
+
+#[tauri::command]
+pub(crate) async fn voice_input_trial_cancel(
+    state: tauri::State<'_, SharedState>,
+    session_id: String,
+) -> Result<(), String> {
+    state.orchestrator.cancel_voice_trial(&session_id).await;
+    Ok(())
+}

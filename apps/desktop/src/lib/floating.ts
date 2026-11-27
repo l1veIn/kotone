@@ -102,7 +102,7 @@ export async function floatingReposition(): Promise<void> {
   if (isTauri) await invoke("floating_reposition");
 }
 
-/** 打开 Kotone 的聊天页、定位到这条推送（玩家自己的动作，主窗口拿到前面）。 */
-export async function floatingOpen(conversationId: string, key: string): Promise<void> {
-  if (isTauri) await invoke("auto_card_open", { conversationId, key });
+/** 玩家展开开局战绩时进插件的「这局」，其他推送定位到聊天里的原消息。 */
+export async function floatingOpen(conversationId: string, key: string, openMatch = false): Promise<void> {
+  if (isTauri) await invoke("auto_card_open", { conversationId, key, ...(openMatch ? { openMatch } : {}) });
 }

@@ -298,7 +298,7 @@ test("bubble: one push line; the ring runs, hovering stops it and tells the back
   await expect(page.getByTestId("floating-line")).toHaveCount(0);
 });
 
-test("mini chat: a popped card shows the conversation's latest turns with the chat page's components; height follows it; an in-place update keeps the place; the card header opens Kotone", async ({ page }) => {
+test("mini chat: a popped card shows recent turns, keeps its place on update and opens the full match", async ({ page }) => {
   await open(page);
   await page.evaluate(() => window.floatingTest.view({
     revision: 10, maxHeight: 360, ring: { totalMs: 10_000, leftMs: 10_000, running: true, atMs: Date.now() },
@@ -368,13 +368,12 @@ test("mini chat: a popped card shows the conversation's latest turns with the ch
   await card.scrollIntoViewIfNeeded();
   await screenshot(page.getByTestId("floating"), { path: shot("floating-mini-card"), omitBackground: true });
 
-  // 卡片上面那一行：打开 Kotone、定位到这张（不在小窗里开右侧栏）
+  // 开局战绩的卡头和小窗展开按钮都直接打开完整的「这局」。
   await card.getByTestId("plugin-card-open").click();
-  await expect.poll(() => calls(page, "auto_card_open")).toEqual([{ conversationId: "c1", key: OPENING }]);
-  // 小窗上面那一行的“打开 Kotone”：定位到弹出的那张；×
+  const openMatch = { conversationId: "c1", key: OPENING, openMatch: true };
+  await expect.poll(() => calls(page, "auto_card_open")).toEqual([openMatch]);
   await page.getByTestId("floating-open").click();
-  await expect.poll(() => calls(page, "auto_card_open")).toHaveLength(2);
-  expect((await calls(page, "auto_card_open"))[1]).toEqual({ conversationId: "c1", key: OPENING });
+  await expect.poll(() => calls(page, "auto_card_open")).toEqual([openMatch, openMatch]);
   await page.getByTestId("floating-close").click();
   await expect.poll(() => calls(page, "floating_close")).toHaveLength(1);
   // 小窗 360 + 头像 56 - 重叠的 18 + 两边 8。

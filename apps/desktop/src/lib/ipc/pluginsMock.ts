@@ -16,12 +16,12 @@ import { remotePlugins } from "./mcpServersMock";
 import { gameVoiceCall } from "./gameVoiceMock";
 import { interpreterCall } from "./interpreterMock";
 import { musicCall, pluginTurnedOff as musicTurnedOff, subscribe as subscribeMusic } from "./musicMock";
-import { findSamplePlayer, sampleGame, sampleMatch, samplePlayer, type SamplePhase } from "./lolMock";
+import { findSamplePlayer, sampleGame, sampleHistory, sampleMatch, samplePlayer, type SamplePhase } from "./lolMock";
 import {
   findSampleChampion, sampleChampionList, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift,
 } from "./lolStatsMock";
 import {
-  PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_ENEMY_BUILD, PAGE_GAME, PAGE_MATCH,
+  PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_ENEMY_BUILD, PAGE_GAME, PAGE_LOL_HOME, PAGE_MATCH,
   PAGE_PLAYER, PAGE_TIER, PAGE_TODAY,
 } from "$plugins/lol/ui/types";
 
@@ -67,6 +67,7 @@ const lol: PluginManifest = {
     risk: lolZh.plugin_lol_source_chat_risk,
   }],
   pages: [
+    { uri: PAGE_LOL_HOME, title: lolZh.plugin_lol_page_home, needs: [] },
     { uri: PAGE_MATCH, title: lolZh.plugin_lol_page_match, needs: ["client"] },
     { uri: PAGE_PLAYER, title: lolZh.plugin_lol_page_player, needs: ["client"] },
     { uri: PAGE_GAME, title: lolZh.plugin_lol_page_game, needs: ["client"] },
@@ -254,6 +255,7 @@ const TOOLS: Record<string, MockTool[]> = {
     { name: "lol.spell", needs: ["client"], visibility: BOTH, page: null },
     { name: "lol.scout", needs: ["client"], visibility: BOTH, page: PAGE_MATCH },
     { name: "lol.player", needs: ["client"], visibility: BOTH, page: PAGE_PLAYER },
+    { name: "lol.history", needs: ["client"], visibility: ["app"], page: null },
     { name: "lol.game", needs: ["client"], visibility: ["app"], page: PAGE_GAME },
     { name: "lol.champion", needs: ["stats"], visibility: BOTH, page: PAGE_CHAMPION },
     { name: "lol.tier", needs: ["stats"], visibility: BOTH, page: PAGE_TIER },
@@ -361,7 +363,7 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   }
   if (plugin === "interpreter") {
     if (!(await enabled(interpreter))) return { content: { status: "disabled", text: interpreter.name } };
-    return interpreterCall(tool);
+    return interpreterCall(tool, args);
   }
   if (plugin !== "lol") return { content: { status: "error", text: tool } };
   for (const needs of spec.needs) {
@@ -436,7 +438,16 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
       const id = typeof args.puuid === "string" ? args.puuid : query ? findSamplePlayer(query) : undefined;
       if (id === null) return { content: { status: "not_found", text: query } };
       const data = samplePlayer(id);
+      if (args.includeProfileBackground === true && !id && !query) {
+        data.profileBackground = "/lol-game-data/assets/ASSETS/Characters/Irelia/Skins/Base/Images/irelia_splash_uncentered_0.jpg";
+      }
       return { content: { status: "ok", text: data.riotId }, structuredContent: data, ui: { uri: PAGE_PLAYER } };
+    }
+    case "lol.history": {
+      const { puuid, offset, pageSize } = args;
+      if (typeof puuid !== "string" || typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 ||
+        (pageSize !== 10 && pageSize !== 20)) return { content: { status: "error", text: "Invalid history page" } };
+      return { content: { status: "ok" }, structuredContent: sampleHistory(puuid, offset, pageSize) };
     }
     case "lol.game": {
       const gameId = Number(args.gameId);
@@ -453,7 +464,8 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
 /** 做成 App 的页面（和 plugins/lol/src/app.rs 的 APP_PAGES 一致）和它们要的数据开关（plugin.toml 的 pages.needs）。
  * 三处（这里、plugins/lol/ui/index.ts 的 `app: true`、Rust）对不上时桌面端的 Rust 测试
  * `plugin_apps::tests::app_pages_agree_with_the_frontend` 报错。 */
-const APP_PAGES: Record<string, string> = {
+const APP_PAGES: Record<string, string | null> = {
+  [PAGE_LOL_HOME]: null,
   [PAGE_MATCH]: "client", [PAGE_PLAYER]: "client", [PAGE_GAME]: "client", [PAGE_CHAMPION]: "stats", [PAGE_TIER]: "stats",
   [PAGE_CHAMP_SELECT]: "stats", [PAGE_AUGMENT_OCR]: "stats", [PAGE_TODAY]: "client",
   [PAGE_AUGMENT_PICK]: "stats", [PAGE_ENEMY_BUILD]: "client",
@@ -471,7 +483,8 @@ async function appBase(): Promise<string> {
 /** `plugin_app`：和真的一样，插件或页面要的数据开关关着、页面不是 App 时报错。 */
 export async function pluginApp(uri: string): Promise<{ plugin: string; uri: string; sandboxUrl: string; ui: Record<string, unknown> }> {
   if (!(uri in APP_PAGES)) throw new Error(`${uri} is not an app`);
-  if (!(await enabled(lol)) || (await sourceOff(APP_PAGES[uri]))) throw new Error(`${uri} is off`);
+  const source = APP_PAGES[uri];
+  if (!(await enabled(lol)) || (source && await sourceOff(source))) throw new Error(`${uri} is off`);
   const page = uri.slice(uri.lastIndexOf("/") + 1);
   return {
     plugin: "lol",

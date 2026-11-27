@@ -46,6 +46,32 @@ pub(super) fn subagents_of(app: &AppHandle, main: &str) -> Vec<Subagent> {
     registry(&mut inner, &store, main).clone()
 }
 
+/// 插件页面上的开始/停止通过普通聊天发送：查询同一主对话，按任务 owner 区分语音来源。
+pub fn background_task_listeners(app: &AppHandle, name: &str) -> Option<Vec<String>> {
+    let rt = runtime(app).ok()?;
+    let store = store(app).ok()?;
+    let owner = {
+        let mut inner = rt.inner.lock().unwrap();
+        let main = inner
+            .running
+            .as_ref()
+            .map(|turn| turn.conversation_id.clone())
+            .or_else(|| store.current())?;
+        registry(&mut inner, &store, &main)
+            .iter()
+            .find(|task| task.name == name && task.status.is_active())?
+            .conversation_id
+            .clone()
+    };
+    Some(
+        crate::voice_listen::active(app)
+            .into_iter()
+            .filter(|(listener, _)| listener == &owner)
+            .map(|(_, process)| process)
+            .collect(),
+    )
+}
+
 pub(super) fn emit_subagent(app: &AppHandle, main: &str, info: &Subagent) {
     // 和其余 agent 事件一样用 `kind` 区分（界面也认 `type`）。
     emit(app, main, json!({"kind": "subagent", "info": info}));

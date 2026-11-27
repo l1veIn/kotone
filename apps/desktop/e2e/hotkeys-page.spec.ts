@@ -225,9 +225,11 @@ test("other pages show the current key and 去改 opens its row in 设置 → �
   await goTo("kotone.speech-toggle");
   // 语音输入：说话、其他热键
   await openVoiceInput(page);
+  await page.getByTestId("voice-input-options").click();
   await expect(page.getByTestId("hotkey-link-key-voice-input.talk")).toHaveText("CapsLock");
   await goTo("voice-input.talk");
   await openVoiceInput(page);
+  await page.getByTestId("voice-input-options").click();
   await goTo("voice-input.resend-last");
 });
 

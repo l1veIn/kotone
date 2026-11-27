@@ -36,6 +36,7 @@
   import HerLine from "./HerLine.svelte";
   import MiniChat from "./MiniChat.svelte";
   import { floatingShape, freshTurns, turnPushId, type FloatingShape } from "./shape";
+  import { PAGE_MATCH } from "$plugins/lol/ui/types";
 
   /** 小窗上面那一行的高度、边框（px）：列表最高 = maxHeight 减掉它们。 */
   const CHROME = 32 + 2;
@@ -201,11 +202,15 @@
     return !moved;
   }
 
-  function open(conversationId: string | null | undefined, key: string) {
-    if (conversationId) void floatingOpen(conversationId, key).catch(() => {});
+  function open(conversationId: string | null | undefined, key: string, uri?: string) {
+    if (conversationId) void floatingOpen(conversationId, key, uri === PAGE_MATCH).catch(() => {});
   }
-  const openHere = (key: string) => open(chat.conversation?.id ?? view?.mini?.conversationId, key || view?.mini?.key || "");
-  const openPush = (push: PushRecord) => open(chat.conversation?.id ?? view?.mini?.conversationId, push.key);
+  function openHere(uri?: string) {
+    const mini = view?.mini;
+    const focused = focus ? turns.find((turn) => turnPushId(turn) === focus)?.push : undefined;
+    open(mini?.conversationId ?? chat.conversation?.id, mini?.key ?? "", uri ?? focused?.card?.ui.uri);
+  }
+  const openPush = (push: PushRecord) => open(chat.conversation?.id ?? view?.mini?.conversationId, push.key, push.card?.ui.uri);
 
   function openLine(event: MouseEvent, l: FloatingLine) {
     if (clicked(event)) open(l.conversationId, l.key);

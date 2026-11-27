@@ -5,7 +5,6 @@
    * 历史只有语音输入的记录，和角色的对话列表分开。
    */
   import type { Snippet } from "svelte";
-  import { companionName } from "$lib/stores/companion";
   import { Button } from "$lib/components/ui/button";
   import { Sparkles } from "@lucide/svelte";
   import type { VoiceInputPage } from "$lib/stores/navigation";
@@ -28,16 +27,15 @@
   <div class="ui-scope mx-auto w-full max-w-3xl px-6 pt-7 text-foreground">
     <header class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
       <div class="min-w-0">
-        <h1 class="m-0 text-xl font-semibold tracking-tight">{m.voice_shell_title()}</h1>
-        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">{m.voice_shell_subtitle({ name: $companionName })}</p>
+        <h1 class="m-0 text-2xl font-semibold tracking-tight">{m.voice_shell_title()}</h1>
       </div>
       <Button size="sm" variant="outline" data-testid="voice-configure" onclick={onConfigure}><Sparkles class="size-3.5 text-primary" />{m.voice_shell_configure()}</Button>
     </header>
-    <nav class="mt-4 flex w-fit gap-0.5 rounded-xl bg-muted/70 p-1" aria-label={m.voice_shell_tabs_label()}>
+    <nav class="mt-4 flex flex-wrap gap-x-5 border-b border-hairline" aria-label={m.voice_shell_tabs_label()}>
       {#each tabs as tab (tab.id)}
         {@const active = page === tab.id}
         <button type="button" data-testid={`voice-tab-${tab.id}`} aria-current={active ? "page" : undefined}
-          class="h-7 rounded-lg px-3 text-xs font-medium transition-colors {active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="min-h-9 border-b-2 pb-1 text-[13px] font-medium transition-colors {active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
           onclick={() => onTab(tab.id)}>{tab.label}</button>
       {/each}
     </nav>

@@ -4,6 +4,7 @@ import { openVoiceInput } from "./nav";
 test("overlay can be disabled completely", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await openVoiceInput(page);
+  await page.getByTestId("voice-input-options").click();
 
   const neverButton = page.getByRole("button", { name: /不显示.*热键和语音输入照常/ });
   await expect(neverButton).toBeVisible();

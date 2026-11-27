@@ -1,15 +1,23 @@
 <script lang="ts" module>
-  /** App 里的页面；顶栏上的分页是这局、战绩、英雄、强度榜（单局详情从战绩、这局点进去）。插件的设置是宿主的页面（插件页顶栏的“设置”）。
-   * 选英雄、文字识别模型只在推送的卡片里出现（ADR 043 D7），没有分页。 */
-  export type PageId = "match" | "player" | "game" | "champion" | "tier" | "champ-select" | "augment-ocr" | "today" | "augment-pick" | "enemy-build";
-  export const TABS: PageId[] = ["match", "player", "champion", "tier"];
+  import { m } from "../i18n.svelte";
+
+  export const TABS = ["home", "match", "player", "champion", "tier"] as const;
+  export type TabId = (typeof TABS)[number];
+  export type PageId = TabId | "game" | "champ-select" | "augment-ocr" | "today" | "augment-pick" | "enemy-build";
+
+  export const tabLabel: Record<TabId, () => string> = {
+    home: () => m.plugin_lol_page_home(),
+    match: () => m.plugin_lol_page_match(),
+    player: () => m.plugin_lol_page_player(),
+    champion: () => m.plugin_lol_page_champion(),
+    tier: () => m.plugin_lol_page_tier(),
+  };
 </script>
 
 <script lang="ts">
   // 全屏每页都有的顶栏（44 px，底下一条细线）：分页是字，当前页墨色加粗 + 2 px 墨线下划线；右边是阶段牌和刷新。
   // 不放 logo 和“英雄联盟”：宿主已经写了是谁（设计第三节）。
   import type { Snippet } from "svelte";
-  import { m } from "../i18n.svelte";
   import Icon from "./Icon.svelte";
 
   let {
@@ -27,21 +35,13 @@
     end?: Snippet;
   } = $props();
 
-  const label = (page: PageId) =>
-    page === "match"
-      ? m.plugin_lol_page_match()
-      : page === "player"
-        ? m.plugin_lol_page_player()
-        : page === "champion"
-          ? m.plugin_lol_page_champion()
-          : m.plugin_lol_page_tier();
 </script>
 
 <header class="top">
   <nav class="tabs" aria-label={m.plugin_lol_name()}>
     {#each TABS as page (page)}
       <button type="button" class="tab" aria-current={current === page ? "page" : undefined} data-testid="lol-app-tab-{page}" onclick={() => onTab(page)}>
-        {label(page)}
+        {tabLabel[page]()}
       </button>
     {/each}
   </nav>

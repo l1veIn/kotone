@@ -17,6 +17,7 @@ use crate::client::scout::{self, Summary};
 use crate::client::text::ScoutPlayer;
 use crate::client::GameData;
 
+pub const PAGE_HOME: &str = "ui://kotone/lol/home";
 pub const PAGE_MATCH: &str = "ui://kotone/lol/match";
 pub const PAGE_PLAYER: &str = "ui://kotone/lol/player";
 pub const PAGE_GAME: &str = "ui://kotone/lol/game";

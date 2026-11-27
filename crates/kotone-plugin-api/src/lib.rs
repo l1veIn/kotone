@@ -759,6 +759,11 @@ pub trait Host: Send + Sync {
     fn listening(&self) -> Vec<String> {
         Vec::new()
     }
+    /// 当前可接收玩家消息的主对话中，这个后台任务正在监听的进程。任务未运行时返回 None；
+    /// 运行中但尚未打开音源时返回空列表。
+    fn background_task_listeners(&self, _name: &str) -> Option<Vec<String>> {
+        None
+    }
     /// 她这会儿在出声没有（边生成边念的回答、应答、提醒）：放声音的插件用它压低自己（ADR 034 D7）。
     fn she_is_audible(&self) -> bool {
         false

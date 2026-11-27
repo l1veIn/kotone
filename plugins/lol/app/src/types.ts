@@ -169,6 +169,7 @@ export interface PlayerData {
   error: string | null;
   profileIconId?: number | null;
   profileIcon?: string;
+  profileBackground?: string | null;
   summonerLevel?: number | null;
   ranked?: Ranks;
   summary: Summary | null;
@@ -179,6 +180,24 @@ export interface PlayerData {
 export function isPlayerData(value: unknown): value is PlayerData {
   const v = value as Partial<PlayerData> | null;
   return !!v && typeof v.puuid === "string" && Array.isArray(v.games);
+}
+
+export interface HistoryPage {
+  puuid: string;
+  offset: number;
+  pageSize: 10 | 20;
+  games: PlayerGame[];
+  hasMore: boolean;
+  nextOffset: number | null;
+}
+
+export function isHistoryPage(value: unknown): value is HistoryPage {
+  const v = value as Partial<HistoryPage> | null;
+  return !!v && typeof v.puuid === "string" && typeof v.offset === "number" && Number.isSafeInteger(v.offset)
+    && (v.pageSize === 10 || v.pageSize === 20) && Array.isArray(v.games)
+    && typeof v.hasMore === "boolean" && (v.hasMore
+      ? typeof v.nextOffset === "number" && Number.isSafeInteger(v.nextOffset) && v.nextOffset > v.offset
+      : v.nextOffset === null);
 }
 
 export interface GamePlayer {

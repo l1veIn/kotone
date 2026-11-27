@@ -22,7 +22,6 @@
   "voice_tab_processing": "文字处理",
   "voice_tab_history": "历史",
   "voice_shell_title": "语音输入",
-  "voice_shell_subtitle": "说话，原话打进游戏聊天框。不经过{name}。",
   "voice_shell_configure": "让 Kotone 帮我配置",
   "voice_shell_tabs_label": "语音输入分页",
   "voice_hotkey_placeholder": "如 {example}",

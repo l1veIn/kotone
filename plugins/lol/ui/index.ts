@@ -11,7 +11,7 @@ import LolPage from "./LolPage.svelte";
 import LolSettings from "./LolSettings.svelte";
 import GameSection from "./GameSection.svelte";
 import {
-  PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_ENEMY_BUILD, PAGE_GAME, PAGE_MATCH, PAGE_PLAYER,
+  PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_CHAMPION, PAGE_ENEMY_BUILD, PAGE_GAME, PAGE_LOL_HOME, PAGE_MATCH, PAGE_PLAYER,
   PAGE_TIER, PAGE_TODAY,
 } from "./types";
 
@@ -24,6 +24,7 @@ const ui: PluginUi = {
   adapterOn: (settings, plugin) => sourceEnabled(settings, plugin.manifest, "client"),
   eventsOffNote: () => m.plugin_lol_events_off(),
   views: {
+    [PAGE_LOL_HOME]: { app: true, title: () => m.plugin_lol_page_home() },
     [PAGE_MATCH]: { app: true, title: () => m.plugin_lol_page_match() },
     [PAGE_PLAYER]: { app: true, title: () => m.plugin_lol_page_player() },
     [PAGE_GAME]: { app: true, title: () => m.plugin_lol_page_game() },

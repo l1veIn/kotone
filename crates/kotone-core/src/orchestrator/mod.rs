@@ -100,6 +100,7 @@ struct Inner {
     session_policy: Option<InteractionPolicy>,
     gen: u64,
     active: Option<ActiveSession>,
+    trial: Option<capture::trial::VoiceTrial>,
     pending_text: Option<PendingText>,
     /// 语音输入正在准备或执行的发送。取消/超时后仍保留，直到阻塞调用真正退出；
     /// 开始新会话、改热键前都要看它（`send_is_running`）。
@@ -198,6 +199,7 @@ impl Orchestrator {
                 session_policy: None,
                 gen: 0,
                 active: None,
+                trial: None,
                 pending_text: None,
                 send_operation: None,
                 processing_cancel: None,

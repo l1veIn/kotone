@@ -5,17 +5,17 @@ DevTools port (Playwright connectOverCDP) — no OS input, nothing typed, no sou
 of one recorded game from lol_tools_real.py: LCU with a random token + in-game API, phase InProgress) is the client, so
 the pages that need “读客户端数据” have real-shaped data; KOTONE_LOL_LCU / KOTONE_LOL_LIVE point the app at it.
 
-1. 插件 → 英雄联盟: the whole page is the App, starting at “这局” (client data on). The frame is an iframe (McpAppFrame)
-   pointing at the loopback proxy's sandbox page (http://127.0.0.1:<port>/<key>/sandbox/lol/match); the handshake
+1. 插件 → 英雄联盟: the whole page is the App, starting at the summoner home. The frame is an iframe (McpAppFrame)
+   pointing at the loopback proxy's sandbox page (http://127.0.0.1:<port>/<key>/sandbox/lol/home); the handshake
    finishes (data-phase=ready), which only happens if neither the main window's CSP (frame-src, in both
    tauri.conf.json and index.html), the App's CSP (HTTP header from the proxy) nor mixed content blocked anything; the
-   inner frame is the App (/<key>/app/lol/match) and shows this game from the fake client;
+   inner frame is the App (/<key>/app/lol/home) and shows the summoner from the fake client;
    - the App's frames have no Tauri IPC (commands are refused in both the sandbox page and the App);
    - the proxy refuses requests without the key (a plain GET to the origin is 404).
 2. Each page opened on its own, the way chat cards, the “这局总结” auto card and `ui.open` open them (2026-11-25 review:
    战绩 / 单局详情 / 英雄 were marked as Apps in the frontend but not in Rust, so they showed “页面没有” in the real
    Kotone while the browser preview passed): `kotone.exe tools call ui.open` with parameters → the right sidebar shows
-   the App for 战绩 (the recorded player's puuid), 单局详情 (the recorded gameId), 英雄 (亚索, rift) and 强度榜 (rift, 中);
+   the App for 这局 (the ten players), 战绩 (the recorded player's puuid), 单局详情 (the recorded gameId), 英雄 (亚索, rift) and 强度榜 (rift, 中);
    for each: no “页面没有” (mcp-app-failed), handshake ready, the inner frame is /app/lol/<page>, and the page shows
    its data (战绩 / 单局详情 from the fake client must; 英雄 / 强度榜 need one public request to Tencent 101 — a network
    failure shows the App's status line instead and is reported, not failed).
@@ -166,9 +166,10 @@ await page.getByTestId("plugins-card-lol-open").click();
 const frame = page.getByTestId("plugin-page-lol").getByTestId("mcp-app-frame");
 await frame.waitFor({ timeout: 15000 });
 %s
-const PAGE = "match", WANT = "lol-match-player";
+const PAGE = "home", WANT = "lol-home-name";
 %s
-const sandboxFrame = page.frames().find((f) => /\\/sandbox\\/lol\\/match$/.test(f.url()));
+out.summoner = out.count ? await inner.getByTestId(WANT).textContent() : "";
+const sandboxFrame = page.frames().find((f) => /\\/sandbox\\/lol\\/home$/.test(f.url()));
 // Tauri 在 WebView2 里把它的初始化脚本也放进了 iframe（__TAURI_INTERNALS__ 在），要看的是命令调不调得通：
 // 回环代理的源不在任何 capability 里（没有 remote.urls），Tauri 应该拒绝
 // 回不来也可能是“跑了但回不到 iframe”：另外调一个会留痕的（log_frontend_error 往 kotone.log 写一行），看日志里有没有
@@ -242,6 +243,7 @@ out.left = await page.getByTestId("ui-open-waiting").count();
 # 单独打开的页面（照聊天卡片、“这局总结”自动卡片、ui.open 的路）：(页面, 参数, 有数据时出现的 testid, 要不要网)
 def sidebar_pages(rec):
     return [
+        ("match", {}, "lol-match-player", False),
         ("player", {"puuid": rec.me["puuid"]}, "lol-player-game", False),
         ("game", {"gameId": (rec.game_detail or {}).get("gameId") or rec.session["gameData"]["gameId"]},
          "lol-game-player", False),
@@ -294,22 +296,24 @@ def main():
         # 后台先连上假客户端、把 10 个人的战绩查好（“这局”要有人）
         time.sleep(8)
 
-        # 1. 插件页：整页是 App，从“这局”开始
+        # 1. 插件页：整页是 App，从召唤师主页开始
         r = ui(SHOW_PLUGIN_PAGE % (FRAME_STATE, APP_CONTENT,
                                    json.dumps(os.path.join(SHOTS, "real-plugin-page-window.png")),
-                                   json.dumps(os.path.join(SHOTS, "real-match-app.png"))))
+                                   json.dumps(os.path.join(SHOTS, "real-home-app.png"))))
         print("  frame:", json.dumps({k: r.get(k) for k in ("phase", "uri", "display", "plugin", "failed")},
                                      ensure_ascii=False))
         print("  app text:", (r.get("appText") or "").replace("\n", " ")[:300])
         print("  icons:", json.dumps(r.get("icons"), ensure_ascii=False))
-        check("插件 → 英雄联盟 starts the App at 这局 (client data on)", r.get("uri") == "ui://kotone/lol/match",
+        check("插件 → 英雄联盟 starts the App at the summoner home", r.get("uri") == "ui://kotone/lol/home",
               str(r.get("uri")))
-        frame_checks("plugin page", r, "match")
+        frame_checks("plugin page", r, "home")
         check("sandbox attribute is allow-scripts allow-same-origin allow-forms",
               r.get("sandbox") == "allow-scripts allow-same-origin allow-forms")
         check("fullscreen, bound to the lol plugin", r.get("display") == "fullscreen" and r.get("plugin") == "lol")
-        check("这局 shows the players of the recorded game (from the fake client)", r.get("count", 0) >= 10,
-              f"{r.get('count')} players; status {r.get('status')}")
+        summoner = lt.REC.me.get("gameName") or lt.REC.me.get("displayName") or ""
+        check("the home shows the summoner from the fake client",
+              r.get("count", 0) == 1 and bool(r.get("summoner")) and summoner in r["summoner"],
+              f"profile count {r.get('count')}; status {r.get('status')}")
         print("  IPC from the App:", json.dumps(r.get("appIpc"), ensure_ascii=False))
         print("  IPC from the sandbox page:", json.dumps(r.get("sandboxIpc"), ensure_ascii=False))
         allowed = [f"{where}:{cmd}" for where in ("appIpc", "sandboxIpc") for cmd, v in (r.get(where) or {}).items()
@@ -326,7 +330,7 @@ def main():
               f"answered: {allowed}, ran (in kotone.log): {ran}, main window probe logged: {'IPC-PROBE-FROM-MAIN' in log}")
         origin = "/".join((r.get("src") or "http://127.0.0.1:1/").split("/")[:3])
         try:
-            urllib.request.urlopen(origin + "/sandbox/lol/match", timeout=5)
+            urllib.request.urlopen(origin + "/sandbox/lol/home", timeout=5)
             status = 200
         except urllib.error.HTTPError as e:
             status = e.code
@@ -375,7 +379,9 @@ def main():
             print(f"  [{page}] app text:", (r.get("appText") or "").replace("\n", " ")[:240])
             print(f"  [{page}] icons:", json.dumps(r.get("icons"), ensure_ascii=False))
             frame_checks(f"right sidebar {page}", r, page)
-            if r.get("count", 0) > 0 or not online:
+            if page == "match":
+                check("这局 shows all players of the recorded game", r.get("count") == 10, str(r.get("count")))
+            elif r.get("count", 0) > 0 or not online:
                 check(f"{page} shows its data ({want} × {r.get('count')})", r.get("count", 0) > 0,
                       f"status {r.get('status')}")
             else:

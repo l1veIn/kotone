@@ -141,7 +141,7 @@ impl Lcu {
             .map_err(|e| LolError::Other(e.to_string()))
     }
 
-    /// 写：只给“操作客户端”用（接受对局、选 / 禁英雄）。
+    /// LCU 的 POST。除客户端操作外，熟练度 top 查询也使用此方法。
     pub async fn post(&self, path: &str, body: &Value) -> Result<Value, LolError> {
         let mut request = self
             .http
@@ -283,11 +283,15 @@ pub mod paths {
     pub const PERKS: &str = "/lol-game-data/assets/v1/perks.json";
     pub const PERK_STYLES: &str = "/lol-game-data/assets/v1/perkstyles.json";
 
-    /// 这个人最近 `count` 局（新的在前，LCU 一次最多给 20 局左右）。
+    /// 这个人最近 `count` 局（新的在前）。
     pub fn matches(puuid: &str, count: u32) -> String {
+        match_range(puuid, 0, count.saturating_sub(1))
+    }
+
+    /// 起止索引都包含在 LCU 返回的区间中。
+    pub fn match_range(puuid: &str, begin: u32, end: u32) -> String {
         format!(
-            "/lol-match-history/v1/products/lol/{puuid}/matches?begIndex=0&endIndex={}",
-            count.saturating_sub(1)
+            "/lol-match-history/v1/products/lol/{puuid}/matches?begIndex={begin}&endIndex={end}"
         )
     }
 

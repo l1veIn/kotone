@@ -13,7 +13,7 @@
   import { FLOATING_PLUGIN_APP, viewOf } from "../pluginUi";
   import { openPluginPage } from "../stores/pluginPages";
 
-  let { display, onOpen }: { display: ToolDisplay; onOpen?: () => void } = $props();
+  let { display, onOpen }: { display: ToolDisplay; onOpen?: (uri: string) => void } = $props();
   const inFloating = getContext<boolean | undefined>(FLOATING_PLUGIN_APP);
   const uri = $derived(display.ui.uri);
   const floatingMatch = $derived(inFloating && uri === PAGE_MATCH);
@@ -21,7 +21,7 @@
   const params = $derived((display.ui.params ?? {}) as Record<string, unknown>);
 
   function open() {
-    if (onOpen) onOpen();
+    if (onOpen) onOpen(uri);
     else openPluginPage(uri, params, display.structuredContent ?? null);
   }
 </script>
@@ -37,7 +37,7 @@
     </button>
     <div data-testid="plugin-card-body">
       <PluginView {uri} {params} data={display.structuredContent ?? null} compact onFullscreen={open}
-        onOpen={(next, nextParams) => (onOpen ? onOpen() : openPluginPage(next, nextParams ?? {}, null))} />
+        onOpen={(next, nextParams) => (onOpen ? onOpen(next) : openPluginPage(next, nextParams ?? {}, null))} />
     </div>
   </div>
 {:else if found?.view.card}

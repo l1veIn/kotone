@@ -1,6 +1,6 @@
 // 同传插件（ADR 021、038）：左侧栏「插件」里有它的卡片（默认开），点开它的页面：设好听哪个程序、译成什么、怎么显示
 // （写进 config.json `plugins.interpreter.settings`），点“开始”就替你对她说那句话、她的耳朵开始听；“停止”就不听了。
-// 关掉插件时页面只剩开关和一句说明。浏览器预览里她的耳朵是模拟的（ipc/interpreterMock.ts）。
+// 浏览器预览模拟后台任务和译文（ipc/interpreterMock.ts），桌面版读取后台任务与同传插件的实况。
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
@@ -37,8 +37,10 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await expect(pluginPage.getByTestId("interpreter-app")).toHaveAttribute("placeholder", "现在的游戏");
   await expect(pluginPage.getByTestId("interpreter-target")).toContainText("中文");
   // 2026-11-26 起默认气泡（悬浮窗里一行，ADR 043 D11）
-  await expect(pluginPage.getByTestId("interpreter-display")).toContainText("气泡");
-  await expect(pluginPage.getByTestId("interpreter-note")).toContainText("停止同传");
+  await expect(pluginPage).toContainText("气泡");
+  await expect(pluginPage.getByTestId("interpreter-setup")).toBeVisible();
+  await expect(pluginPage.getByTestId("interpreter-recent")).toContainText("原话和译文会出现在这里");
+  await page.evaluate("import('/src/lib/ipc.ts').then((ipc) => ipc.setActiveModel('deepseek-asr', 'deepseek-asr'))");
 
   // 听 Discord、译成日语、用弹幕：写进插件自己的设置
   await pluginPage.getByTestId("interpreter-app").fill("Discord.exe");
@@ -46,9 +48,12 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await pluginPage.getByTestId("interpreter-target").click();
   await page.getByRole("option", { name: "日语" }).click();
   await expect(pluginPage.getByTestId("interpreter-target")).toContainText("日语");
-  await pluginPage.getByTestId("interpreter-display").click();
+  await pluginPage.getByTestId("interpreter-options").click();
+  const options = page.getByTestId("interpreter-settings");
+  await options.getByTestId("interpreter-display").click();
   await page.getByRole("option", { name: "弹幕" }).click();
-  await expect(pluginPage.getByTestId("interpreter-display")).toContainText("弹幕");
+  await expect(options.getByTestId("interpreter-display")).toContainText("弹幕");
+  await page.getByTestId("plugin-settings-button").click();
   await expect.poll(async () => (await settings(page)).plugins?.interpreter?.settings).toEqual({
     app: "Discord.exe",
     target: "日语",
@@ -59,6 +64,9 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await pluginPage.getByTestId("interpreter-start").click();
   await expect(page.getByText("帮我盯着队友说的话，当同传：听 Discord.exe，每句外语翻成日语，用弹幕显示。")).toBeVisible();
   await expect(listening).toHaveText("正在听：Discord.exe");
+  await page.evaluate("import('/src/lib/plugins.ts').then(p => p.pluginCall('interpreter', 'interpreter.show', { text: '左から来る。', heard: 'They’re coming from the left.', app: 'Discord.exe' }))");
+  await expect(pluginPage.getByTestId("interpreter-original")).toHaveText("They’re coming from the left.");
+  await expect(pluginPage.getByTestId("interpreter-translation")).toHaveText("左から来る。");
   await screenshot(page, { path: shot(testInfo, "interpreter-page") });
 
   // 停止：对她说“停止同传”，不听了
@@ -67,8 +75,10 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await expect(listening).toHaveText("没在听");
 
   // 关掉插件：只剩开关和一句说明；设置还在
-  await pluginPage.getByTestId("plugin-interpreter-enabled").click();
-  await expect(pluginPage.getByTestId("plugin-interpreter-enabled")).toHaveAttribute("aria-checked", "false");
+  await pluginPage.getByTestId("interpreter-options").click();
+  await options.getByTestId("plugin-interpreter-enabled").click();
+  await expect(options.getByTestId("plugin-interpreter-enabled")).toHaveAttribute("aria-checked", "false");
+  await page.getByTestId("plugin-settings-button").click();
   await expect(pluginPage.getByTestId("plugin-interpreter-off")).toBeVisible();
   await expect(pluginPage.getByTestId("interpreter-settings")).toHaveCount(0);
   await expect(pluginPage.getByTestId("interpreter-start")).toHaveCount(0);
@@ -86,6 +96,7 @@ test("empty program means the current game, and her ui.open lands on the interpr
   await page.evaluate("import('/src/lib/stores/navigation.ts').then((n) => n.openLocation('设置 → 插件 → 同传'))");
   const pluginPage = page.getByTestId("plugin-page-interpreter");
   await expect(pluginPage).toBeVisible();
+  await page.evaluate("import('/src/lib/ipc.ts').then((ipc) => ipc.setActiveModel('deepseek-asr', 'deepseek-asr'))");
   await pluginPage.getByTestId("interpreter-start").click();
   await expect(page.getByText("帮我盯着队友说的话，当同传：听 现在的游戏，每句外语翻成中文，用气泡显示。")).toBeVisible();
   await expect(pluginPage.getByTestId("interpreter-listening")).toHaveText("正在听：TslGame.exe");
@@ -95,7 +106,7 @@ test("empty program means the current game, and her ui.open lands on the interpr
   await expect(pluginPage).toBeVisible();
   await page.locator("[data-sonner-toast]").filter({ hasText: "同传" }).getByRole("button", { name: "打开" }).click();
   const view = page.getByTestId("plugin-view-interpreter");
-  await expect(view.getByTestId("plugin-interpreter-enabled")).toBeVisible();
+  await expect(view.getByTestId("interpreter-stop")).toBeVisible();
   await expect(view.getByTestId("interpreter-listening")).toHaveText("正在听：TslGame.exe");
 });
 
@@ -105,21 +116,24 @@ test("the page says which recognition interpreting uses: SenseVoice to download,
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   await page.evaluate("import('/src/lib/stores/navigation.ts').then((n) => n.openLocation('设置 → 插件 → 同传'))");
   const pluginPage = page.getByTestId("plugin-page-interpreter");
-  const recognizer = pluginPage.getByTestId("interpreter-recognizer");
+  await expect(pluginPage.getByTestId("interpreter-setup")).toBeVisible();
+  await pluginPage.getByTestId("interpreter-options").click();
+  const options = page.getByTestId("interpreter-settings");
+  const recognizer = options.getByTestId("interpreter-recognizer");
 
   // 预览里选的是本地 X-ASR（只认中英文）、SenseVoice 没下载：还不能用，说清楚下一步
   await expect(recognizer).toHaveText("还不能用");
-  await expect(pluginPage).toContainText("下载 SenseVoice 多语言");
+  await expect(options).toContainText("下载 SenseVoice 多语言");
 
   // 换成 DeepSeek 在线识别：同传也用它，不用下载；写明队友的声音会发出去、每句计费
   await page.evaluate("import('/src/lib/ipc.ts').then((ipc) => ipc.setActiveModel('deepseek-asr', 'deepseek-asr'))");
   await expect(recognizer).toHaveAttribute("data-online", "true");
   await expect(recognizer).toContainText("DeepSeek");
   await expect(recognizer).toContainText("在线");
-  await expect(pluginPage).toContainText("队友说的每一句都会发给它识别，每句计费");
+  await expect(options).toContainText("队友说的每一句都会发给它识别，每句计费");
   await screenshot(page, { path: shot(testInfo, "interpreter-recognizer-online") });
 
   // “去 设置 → 模型 换”：换模型只有一个地方
-  await pluginPage.getByTestId("interpreter-open-models").click();
+  await options.getByTestId("interpreter-open-models").click();
   await expect(page.getByTestId("plugin-page-interpreter")).toHaveCount(0);
 });

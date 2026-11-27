@@ -1,4 +1,4 @@
-// 英雄联盟插件的页面都是插件的 MCP App（ADR 039 D5；docs/design/lol-app.md）：插件页整页是 App（自己的导航：这局 · 战绩 ·
+// 英雄联盟插件的页面都是插件的 MCP App（ADR 039 D5；docs/design/lol-app.md）：插件页整页是 App（自己的导航：主页 · 这局 · 战绩 ·
 // 英雄 · 强度榜），聊天里的卡片是同一个 App 的 inline，右侧栏是 fullscreen。插件的设置是宿主的页面（插件页顶栏的“设置”）。
 // 这里看 App 在 Kotone 里的样子和用法：这局的加载、结算、不在对局里；点人看战绩、点一局看单局详情、能返回；搜人；她 ui.open
 // 带参数打开；设置按钮。数据是浏览器预览的示例（apps/desktop/src/lib/ipc/lolMock.ts、lolStatsMock.ts）；App 是
@@ -42,14 +42,17 @@ async function pluginApp(page: Page): Promise<FrameLocator> {
   return app(page.getByTestId("plugin-page-lol"));
 }
 
-test("the plugin page is the App itself: its own tabs, 这局 while loading, a player, a game and back", async ({ page }, testInfo) => {
+test("the plugin opens on the summoner home and leads into the loading match, a player and a game", async ({ page }, testInfo) => {
   await open(page);
   const lol = await pluginApp(page);
   // 宿主不再给一排分页：导航在 App 里
   await expect(page.getByTestId("plugin-lol-tab-match")).toHaveCount(0);
-  await expect(lol.getByTestId("lol-app-tab-match")).toHaveAttribute("aria-current", "page");
-  for (const tab of ["player", "champion", "tier"]) await expect(lol.getByTestId(`lol-app-tab-${tab}`)).toBeVisible();
+  await expect(lol.getByTestId("lol-app-tab-home")).toHaveAttribute("aria-current", "page");
+  for (const tab of ["match", "player", "champion", "tier"]) await expect(lol.getByTestId(`lol-app-tab-${tab}`)).toBeVisible();
   await expect(lol.getByTestId("lol-app-tab-settings")).toHaveCount(0);
+  await expect(lol.getByTestId("lol-home-phase")).toContainText("加载");
+  await lol.getByTestId("lol-home-match").click();
+  await expect(lol.getByTestId("lol-app-tab-match")).toHaveAttribute("aria-current", "page");
 
   // 这局（加载）：阶段牌；宽的插件页照 LeagueAkari 排（两队上下、每人一列，ADR 043 D9）；10 个人（隐藏了身份的两个
   // 照样在，只有英雄）；只给事实，没有“突破口”（D2）；隐藏战绩、开黑字母；页脚只有出处和拳头的声明，没有风险提示（D8）
@@ -106,9 +109,100 @@ test("the plugin page is the App itself: its own tabs, 这局 while loading, a p
   await expect(lol.getByTestId("lol-player-name")).toHaveText("对手丑#1007");
 });
 
+test("outside a game the home shows my profile and the ten latest games", async ({ page }) => {
+  await open(page, "none");
+  const lol = await pluginApp(page);
+  const home = lol.getByTestId("lol-app-home");
+  await expect(home.getByTestId("lol-home-name")).toContainText(/玩家甲\s*#1001/);
+  await expect(home.getByTestId("lol-home-background")).toBeVisible();
+  await expect(home.getByTestId("lol-home-background")).toHaveAttribute("src", /irelia_splash_uncentered_0\.jpg$/);
+  await expect(home).toContainText("黄金 II");
+  await expect(home.getByTestId("lol-home-match")).toHaveCount(0);
+  await expect(home.getByRole("heading", { name: "近期战绩" })).toBeVisible();
+  await expect(home.getByTestId("lol-home-game")).toHaveCount(10);
+  await expect(home.getByTestId("lol-home-page-size")).toHaveValue("10");
+  await expect(home.getByTestId("lol-home-prev")).toBeDisabled();
+  const recent = home.getByTestId("lol-home-game").first();
+  await expect(recent).toHaveAttribute("data-game-id", "9000000");
+  await expect(recent).toContainText("艾瑞莉娅");
+  await recent.click();
+  await expect(lol.getByTestId("lol-game-player")).toHaveCount(10);
+  await expect(lol.getByTestId("lol-game-back")).toContainText("主页");
+  await lol.getByTestId("lol-game-back").click();
+  await expect(lol.getByTestId("lol-app-tab-home")).toHaveAttribute("aria-current", "page");
+  await home.getByTestId("lol-home-history").click();
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("玩家甲#1001");
+  await expect(lol.getByTestId("lol-player-game")).toHaveCount(20);
+});
+
+test("older history pages keep their size and position after a game detail visit", async ({ page }) => {
+  await open(page, "none");
+  const lol = await pluginApp(page);
+  const rows = lol.getByTestId("lol-home-game");
+  const size = lol.getByTestId("lol-home-page-size");
+  const next = lol.getByTestId("lol-home-next");
+  const prev = lol.getByTestId("lol-home-prev");
+  await expect(rows).toHaveCount(10);
+  await next.click();
+  await expect(rows.first()).toHaveAttribute("data-game-id", "9000010");
+  await size.selectOption("20");
+  await expect(rows).toHaveCount(20);
+  await expect(rows.first()).toHaveAttribute("data-game-id", "9000000");
+  await next.click();
+  await expect(rows.first()).toHaveAttribute("data-game-id", "9000020");
+  await expect(rows.last()).toHaveAttribute("data-game-id", "9000039");
+  await rows.nth(3).click();
+  await expect(lol.getByTestId("lol-game-player")).toHaveCount(10);
+  await expect(lol.getByTestId("lol-game-title")).toContainText("17:00");
+  await lol.getByTestId("lol-game-back").click();
+  await expect(size).toHaveValue("20");
+  await expect(lol.getByTestId("lol-home-page")).toContainText("2");
+  await expect(rows.first()).toHaveAttribute("data-game-id", "9000020");
+  await expect(rows.last()).toHaveAttribute("data-game-id", "9000039");
+  await next.click();
+  await expect(rows).toHaveCount(7);
+  await expect(rows.last()).toHaveAttribute("data-game-id", "9000046");
+  await expect(next).toBeDisabled();
+  await prev.click();
+  await expect(rows.first()).toHaveAttribute("data-game-id", "9000020");
+  await expect(rows).toHaveCount(20);
+});
+
+test("missing splash artwork leaves the profile and recent game usable", async ({ page }) => {
+  const attempts = new Set<string>();
+  await page.route("**/irelia_splash_uncentered_0.jpg", async (route) => {
+    attempts.add(route.request().url());
+    await route.fulfill({ status: 404, body: "" });
+  });
+  await open(page, "none");
+  const lol = await pluginApp(page);
+  await expect.poll(() => attempts.size).toBe(2);
+  await expect(lol.getByTestId("lol-home-background")).toHaveCount(0);
+  await expect(lol.getByTestId("lol-home-name")).toBeVisible();
+  await lol.getByTestId("lol-home-game").first().click();
+  await expect(lol.getByTestId("lol-game-player")).toHaveCount(10);
+});
+
+test("with client data switched off the plugin still opens on home and online stats work", async ({ page }) => {
+  await open(page);
+  await openPlugin(page, "lol");
+  await page.getByTestId("plugin-settings-button").click();
+  const client = page.getByTestId("plugin-lol-source-client");
+  await client.click();
+  await expect(client).toHaveAttribute("aria-checked", "false");
+  const lol = await pluginApp(page);
+  await expect(lol.getByTestId("lol-app-tab-home")).toHaveAttribute("aria-current", "page");
+  await expect(lol.getByTestId("lol-app-home")).toContainText("数据开关");
+  await expect(lol.getByTestId("lol-home-background")).toHaveCount(0);
+  await expect(lol.getByTestId("lol-home-match")).toHaveCount(0);
+  await lol.getByTestId("lol-app-tab-tier").click();
+  await expect(lol.getByTestId("lol-app-tier-row")).toHaveCount(12);
+});
+
 test("after the game 这局 shows the result and opens this game with the 刚结束 tag; outside a game it says so", async ({ page }, testInfo) => {
   await open(page, "post_match");
   const lol = await pluginApp(page);
+  await lol.getByTestId("lol-app-tab-match").click();
   await expect(lol.getByTestId("lol-app-match")).toHaveAttribute("data-phase", "post_match");
   await expect(lol.getByTestId("lol-match-phase")).toContainText("结算");
   const result = lol.getByTestId("lol-match-result");
@@ -154,7 +248,7 @@ test("the 设置 button next to the plugin's name opens the host's settings for 
   await page.getByTestId("plugin-app-name").click();
   await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-view", "app");
   await expect(page.getByTestId("plugin-settings")).toHaveCount(0);
-  await expect(app(page.getByTestId("plugin-page-lol")).getByTestId("lol-app-match")).toBeVisible();
+  await expect(app(page.getByTestId("plugin-page-lol")).getByTestId("lol-app-home")).toBeVisible();
 });
 
 test("asking for this match's history leaves the App as a card in the chat; opening it shows the full App in the right sidebar", async ({ page }, testInfo) => {
@@ -189,6 +283,7 @@ test("asking for this match's history leaves the App as a card in the chat; open
   await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/match");
   await expect(stack.getByTestId("mcp-app-frame")).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   const full = app(stack);
+  await expect(full.getByTestId("lol-app-tab-match")).toHaveAttribute("aria-current", "page");
   await expect(full.getByTestId("lol-match-player")).toHaveCount(10);
   // App 里点人：在 App 里换页（右侧栏的一叠不变）
   await full.locator('[data-testid="lol-match-player"][data-puuid="sample-puuid-5"]').click();

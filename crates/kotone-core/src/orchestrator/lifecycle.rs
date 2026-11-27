@@ -132,6 +132,9 @@ impl Orchestrator {
         self.abort_release_grace();
         let mut inner = self.inner.lock().unwrap();
         inner.assistant_voice_owner = false;
+        if let Some(trial) = &inner.trial {
+            trial.cancel();
+        }
         if inner.state == OrchestratorState::Idle {
             // 逐句模式两段之间的 Idle 窗口也必须撤销尚未入场的续录。
             inner.gen += 1;

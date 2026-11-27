@@ -4,7 +4,6 @@
    * 这里只显示现在用的是哪个（本地模型的名字 / 在线服务的名字）和它准备好没有；
    * 换模型、下载、启动 / 停止、启动热键、自动启动都在「设置 → 模型 → 语音识别」，卡片上只有去那里的链接。
    */
-  import { onMount } from "svelte";
   import { listModels, type ModelInfo } from "$lib/ipc";
   import { LOCAL_ASR_LABELS } from "$lib/ipc/contracts";
   import { asrStore, runtimeStore } from "$lib/stores/runtime";
@@ -23,21 +22,19 @@
   const activeName = $derived((active?.displayName ?? rt?.modelId ?? "").replace(/（.*$/, ""));
   const localMissing = $derived(local && active !== null && !active.downloaded);
 
-  async function refreshModels() {
-    try { models = await listModels(); } catch { /* 卡片只少了模型名 */ }
-  }
-  onMount(() => { void refreshModels(); });
-  $effect(() => { rt?.modelId; void refreshModels(); });
+  $effect(() => {
+    void rt?.modelId;
+    let current = true;
+    void listModels().then((items) => { if (current) models = items; }).catch(() => {});
+    return () => { current = false; };
+  });
 </script>
 
 <section id="voice-asr" class="scroll-mt-16 min-w-0" data-testid="asr-card" data-asr-state={asrState}>
-  <div class="mb-2.5 px-1">
-    <h2 class="m-0 text-sm font-semibold text-foreground">{m.plugin_voice_input_asr_title()}</h2>
-    <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{m.plugin_voice_input_asr_desc()}</p>
-  </div>
-  <div class="flex flex-wrap items-center gap-3 rounded-2xl border border-hairline bg-card/70 px-4 py-3.5">
+  <h2 class="m-0 mb-1 text-xs font-normal text-muted-foreground">{m.plugin_voice_input_asr_title()}</h2>
+  <div class="grid gap-1 justify-items-start">
     <div class="min-w-0 flex-1">
-      <p class="m-0 truncate text-[13px] font-medium text-foreground" data-testid="asr-model-name">{activeName || "…"} · {local ? m.plugin_voice_input_asr_local() : m.plugin_voice_input_asr_online()}</p>
+      <p class="m-0 break-words text-[13px] font-medium text-foreground" data-testid="asr-model-name">{activeName || "…"} · {local ? m.plugin_voice_input_asr_local() : m.plugin_voice_input_asr_online()}</p>
       {#if asrState === "online-ready"}
         <p class="mt-0.5 mb-0 text-xs text-success" data-testid="asr-status">{m.plugin_voice_input_asr_online_ready()}</p>
       {:else if asrState === "online-preparing"}

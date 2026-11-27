@@ -7,8 +7,8 @@ it):
   tool service on, the League of Legends plugin with its defaults (it only reads the local client, which is not running
   tonight), speech volume 0, hotkeys and the wake word off, no AI connection;
 - initialize (capabilities: `resources` and the MCP Apps extension `io.modelcontextprotocol/ui`) →
-  notifications/initialized → resources/list (the pages that are MCP Apps, `plugins/lol/src/app.rs` APP_PAGES: all
-  five content pages — ui://kotone/lol/match, player, game, champion, tier — text/html;profile=mcp-app, CSP declares
+  notifications/initialized → resources/list (the main content pages in `plugins/lol/src/app.rs` APP_PAGES:
+  home, match, player, game, champion, tier — text/html;profile=mcp-app, CSP declares
   CommunityDragon; every one can be opened on its own (chat cards, the “这局总结” auto card, ui.open, an external host)
   and then navigates inside the same bundle; the settings page is the host's page and is not listed) → resources/read
   of each App (a whole HTML document with `<meta name="kotone:page" content="<page>">`; the real bundle when
@@ -52,13 +52,14 @@ ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
 ENV.pop("KOTONE_EXE", None)
 APP_MIME = "text/html;profile=mcp-app"
 TIER = "ui://kotone/lol/tier"
+SUMMONER_HOME = "ui://kotone/lol/home"
 MATCH = "ui://kotone/lol/match"
 PLAYER = "ui://kotone/lol/player"
 GAME = "ui://kotone/lol/game"
 CHAMPION = "ui://kotone/lol/champion"
-# 做成 MCP App 的页面（plugins/lol/src/app.rs 的 APP_PAGES）→ 页面标记。五页都能单独打开（聊天卡片、自动卡片、
+# MCP App 的主页面（plugins/lol/src/app.rs 的 APP_PAGES）→ 页面标记。这些页面都能单独打开（聊天卡片、自动卡片、
 # ui.open、外部宿主），打开以后在同一个打包里自己导航
-APPS = {MATCH: "match", PLAYER: "player", GAME: "game", CHAMPION: "champion", TIER: "tier"}
+APPS = {SUMMONER_HOME: "home", MATCH: "match", PLAYER: "player", GAME: "game", CHAMPION: "champion", TIER: "tier"}
 # 每一页的工具（_meta.ui.resourceUri 连着它）
 PAGE_TOOLS = {"kotone_lol_scout": MATCH, "kotone_lol_player": PLAYER, "kotone_lol_game": GAME,
               "kotone_lol_champion": CHAMPION, "kotone_lol_tier": TIER}

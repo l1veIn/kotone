@@ -139,6 +139,8 @@ impl Plugin for InterpreterPlugin {
             let value = match tool {
                 TOOL_STATUS => json!({
                     "listening": host.listening(),
+                    "sessionListeners": host.background_task_listeners("tongchuan"),
+                    "recent": desk().lock().unwrap().recent(),
                     "app": prefs.app,
                     "target": prefs.target,
                     "display": if prefs.bubble { "bubble" } else { "danmaku" },

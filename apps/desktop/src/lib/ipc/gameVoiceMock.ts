@@ -25,13 +25,15 @@ const NOT_INSTALLED = "还没有安装 VB-CABLE";
 async function status(enabled: boolean): Promise<Record<string, unknown>> {
   const settings = (await getSettings()).plugins?.["game-voice"]?.settings ?? {};
   const mic = preview.defaultIsCable ? CABLE_OUTPUT : USB_MIC;
+  const micDeviceId = typeof settings.micDeviceId === "string" ? settings.micDeviceId : "default";
   return {
     driverInstalled: preview.installed,
     installing: false,
     devices: preview.installed ? { cableInput: CABLE_INPUT, cableOutput: CABLE_OUTPUT } : { cableInput: null, cableOutput: null },
     enabled,
     includeMic: settings.includeMic !== false,
-    micDeviceId: typeof settings.micDeviceId === "string" ? settings.micDeviceId : "default",
+    micDeviceId,
+    activeMic: enabled && preview.installed && settings.includeMic !== false ? (micDeviceId === "default" ? USB_MIC : micDeviceId) : null,
     micGain: typeof settings.micGain === "number" ? settings.micGain : 100,
     running: enabled && preview.installed,
     error: enabled && !preview.installed ? NOT_INSTALLED : null,

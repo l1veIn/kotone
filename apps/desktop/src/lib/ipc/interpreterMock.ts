@@ -5,9 +5,11 @@
  */
 import type { PluginToolResult } from "../plugins";
 import { getSettings } from "./browserMock";
+import type { InterpreterStatus } from "$plugins/interpreter/ui/interpreter";
 
 /** 她的耳朵现在在听的程序（预览开始时没在听）。 */
 let listening: string[] = [];
+let recent: InterpreterStatus["recent"] = null;
 
 // i18n-ignore-start：和后端 plugins/interpreter/src/lib.rs 一样的值与替你说的话（不是界面文字）
 const TARGETS = ["中文", "英语", "日语", "韩语"];
@@ -31,12 +33,13 @@ async function prefs(): Promise<{ app: string; target: string; bubble: boolean }
 }
 
 /** 插件开着时的工具（插件开关由 pluginsMock 先看）。 */
-export async function interpreterCall(tool: string): Promise<PluginToolResult> {
+export async function interpreterCall(tool: string, args: Record<string, unknown>): Promise<PluginToolResult> {
   const p = await prefs();
   switch (tool) {
     case "interpreter.status":
       return {
-        content: { listening: [...listening], app: p.app, target: p.target, display: p.bubble ? "bubble" : "danmaku", targets: [...TARGETS] },
+        content: { listening: [...listening], sessionListeners: listening.length ? [...listening] : null, recent,
+          app: p.app, target: p.target, display: p.bubble ? "bubble" : "danmaku", targets: [...TARGETS] },
       };
     case "interpreter.start":
       listening = [p.app || SAMPLE_GAME];
@@ -44,6 +47,13 @@ export async function interpreterCall(tool: string): Promise<PluginToolResult> {
     case "interpreter.stop":
       listening = [];
       return { content: { said: STOP_TEXT } };
+    case "interpreter.show": {
+      const text = typeof args.text === "string" ? args.text.trim() : "";
+      if (!text) throw new Error("text is required");
+      recent = { text, heard: typeof args.heard === "string" ? args.heard : null,
+        app: typeof args.app === "string" ? args.app : listening[0], atMs: Date.now() };
+      return { content: { shown: true } };
+    }
     default:
       return { content: { status: "error", text: tool } };
   }

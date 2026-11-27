@@ -17,7 +17,7 @@
   import Perks from "../components/Perks.svelte";
   import Spells from "../components/Spells.svelte";
   import StateBlock from "../components/StateBlock.svelte";
-  import TopBar, { type PageId } from "../components/TopBar.svelte";
+  import TopBar, { tabLabel, type PageId } from "../components/TopBar.svelte";
   import { duration, kdaOf, kdaTone, num, one, splitRiotId, when } from "../format";
   import { resultStatus, TOOL_GAME, type DisplayMode, type Session, type ToolResult } from "../host";
   import { m } from "../i18n.svelte";
@@ -54,6 +54,7 @@
   let gameId = 0;
 
   const full = $derived(display !== "inline");
+  const parentTab = $derived(backTo === "home" || backTo === "match" ? backTo : "player");
   const canOpen = $derived(!!session.context?.availableDisplayModes?.includes("fullscreen"));
 
   function show(result: ToolResult) {
@@ -122,10 +123,10 @@
 
 {#if full}
   <div class="app" data-testid="lol-app-game" data-just-ended={justEnded ? "true" : "false"}>
-    <TopBar current={backTo === "match" ? "match" : "player"} {onTab} onRefresh={() => void load()} {loading} />
+    <TopBar current={parentTab} {onTab} onRefresh={() => void load()} {loading} />
     <main class="page">
       {#if onBack}
-        <button type="button" class="back" data-testid="lol-game-back" onclick={onBack}><Icon name="back" />{backTo === "match" ? m.plugin_lol_page_match() : m.plugin_lol_page_player()}</button>
+        <button type="button" class="back" data-testid="lol-game-back" onclick={onBack}><Icon name="back" />{tabLabel[parentTab]()}</button>
       {/if}
       {#if error}<p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_failed({ error })}</p>{/if}
       {#if status && !game}<StateBlock state={status} />{/if}

@@ -13,6 +13,8 @@ pub const TOOL_SCOUT: &str = "lol.scout";
 pub const TOOL_PLAYER: &str = "lol.player";
 /// 只给页面用：一局的详情。
 pub const TOOL_GAME: &str = "lol.game";
+/// 只给页面用：按客户端历史偏移翻页。
+pub const TOOL_HISTORY: &str = "lol.history";
 /// 网上的统计（数据开关 `stats`）：一个英雄、强度榜。
 pub const TOOL_CHAMPION: &str = "lol.champion";
 pub const TOOL_TIER: &str = "lol.tier";
@@ -78,7 +80,8 @@ pub fn specs() -> Vec<ToolSpec> {
             "查一个英雄联盟玩家最近的战绩（最近 20 局、全部模式）：段位、胜负、KDA、连胜连败、最近 5 局用什么英雄打成什么样；隐藏战绩的会标出来。玩家说“我最近怎么样”“查一下我的战绩”就不写参数（查自己）；“对面亚索最近怎么样”写这局里的英雄名或玩家名；查不在这局的人要写完整的“名字#编号”。聊天里会出现他的战绩卡片，点开能看每一局，你只说一两句要紧的。",
             json!({"type": "object", "additionalProperties": false, "properties": {
                 "player": {"type": "string", "maxLength": 60, "description": "这局里的英雄名或玩家名，或者“名字#编号”；不写 = 自己"},
-                "puuid": {"type": "string", "maxLength": 100, "description": "页面里点进某个人时用"}
+                "puuid": {"type": "string", "maxLength": 100, "description": "页面里点进某个人时用"},
+                "includeProfileBackground": {"type": "boolean", "description": "召唤师主页读取自己的生涯原画时用"}
             }}),
         )
         .page(PAGE_PLAYER)
@@ -94,6 +97,18 @@ pub fn specs() -> Vec<ToolSpec> {
         )
                 .app_only()
         .page(PAGE_GAME)
+        .needs(&["client"])
+        .untrusted(),
+        ToolSpec::new(
+            TOOL_HISTORY,
+            "召唤师主页的近期战绩。offset 使用上一页返回的 nextOffset，首页为 0。",
+            json!({"type": "object", "additionalProperties": false, "required": ["puuid", "offset", "pageSize"], "properties": {
+                "puuid": {"type": "string", "minLength": 1, "maxLength": 100},
+                "offset": {"type": "integer", "minimum": 0, "maximum": u32::MAX},
+                "pageSize": {"type": "integer", "enum": [10, 20]}
+            }}),
+        )
+        .app_only()
         .needs(&["client"])
         .untrusted(),
         ToolSpec::new(
@@ -223,6 +238,7 @@ mod tests {
                 TOOL_SCOUT,
                 TOOL_PLAYER,
                 TOOL_GAME,
+                TOOL_HISTORY,
                 TOOL_CHAMPION,
                 TOOL_TIER,
                 TOOL_CLIENT,
@@ -265,7 +281,12 @@ mod tests {
         for s in specs.iter().filter(|s| {
             !matches!(
                 s.name.as_str(),
-                TOOL_GAME | TOOL_CHAMPIONS | TOOL_SOURCE | TOOL_AUGMENT_OCR | TOOL_IMPORT
+                TOOL_GAME
+                    | TOOL_HISTORY
+                    | TOOL_CHAMPIONS
+                    | TOOL_SOURCE
+                    | TOOL_AUGMENT_OCR
+                    | TOOL_IMPORT
             )
         }) {
             assert!(s.instant && s.for_model(), "{}", s.name);
@@ -275,6 +296,8 @@ mod tests {
         assert_eq!(shout.side_effects, ["input", "records-run"]);
         let game = specs.iter().find(|s| s.name == TOOL_GAME).unwrap();
         assert!(!game.for_model());
+        let history = specs.iter().find(|s| s.name == TOOL_HISTORY).unwrap();
+        assert!(history.for_app() && !history.for_model());
         // 换数据源只给页面（ADR 043 D8：点来源标签）
         let source = specs.iter().find(|s| s.name == TOOL_SOURCE).unwrap();
         assert!(!source.for_model() && source.for_app());

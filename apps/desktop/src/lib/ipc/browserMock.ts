@@ -930,11 +930,12 @@ export async function previewSfx(kind: "record" | "send", soundId?: string): Pro
 
 /** 热键注册状态（registered/key/error/backend + 具名辅助热键），设置页热键分区展示占用冲突 */
 export async function getHotkeyStatus(): Promise<HotkeyStatus> {
+  const registered = (await getRuntimeStatus()).phase === "running";
   return {
-      registered: true,
-      key: mock.settings.hotkey.key,
+      registered,
+      key: registered ? mock.settings.hotkey.key : null,
       error: null,
-      backend: "llhook",
+      backend: registered ? "llhook" : "none",
       named: [
         { id: "assistant", key: usesLegacyVoiceInput(mock.settings.ui) ? null : companionBindings(mock.settings.assistant)?.hotkey || null, error: null },
         ...(hasLegacyReminders(mock.settings.ui)

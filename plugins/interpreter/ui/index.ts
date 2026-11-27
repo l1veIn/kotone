@@ -7,6 +7,7 @@ import { Languages } from "@lucide/svelte";
 import type { PluginUi } from "$lib/pluginUi";
 import { m } from "$lib/paraglide/messages.js";
 import InterpreterPage from "./InterpreterPage.svelte";
+import InterpreterSettings from "./InterpreterSettings.svelte";
 import InterpreterView from "./InterpreterView.svelte";
 import LinesCard from "./LinesCard.svelte";
 import { PAGE_HOME, PAGE_LINES } from "./interpreter";
@@ -14,6 +15,7 @@ import { PAGE_HOME, PAGE_LINES } from "./interpreter";
 const ui: PluginUi = {
   icon: Languages,
   page: InterpreterPage,
+  settings: InterpreterSettings,
   views: {
     [PAGE_HOME]: { page: InterpreterView, title: () => m.plugin_interpreter_name() },
     [PAGE_LINES]: { card: LinesCard, page: LinesCard, title: () => m.plugin_interpreter_push_lines_title() },

@@ -5,6 +5,7 @@
    * 麦克风搬到「设置 → 声音」，游戏在「游戏列表」——这里只显示一行共享设置。
    */
   import { onMount } from "svelte";
+  import { ChevronDown, SlidersHorizontal } from "@lucide/svelte";
   import {
     updateSettings,
     listAudioDevices,
@@ -12,10 +13,12 @@
     getElevationStatus,
     restartAsAdmin,
     getHotkeyStatus,
+    getHotkeyTable,
     type AudioDevice,
     type ElevationStatus,
     type GameProfile,
     type HotkeyStatus,
+    type KeyUse,
     type InteractionMode,
   } from "$lib/ipc";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
@@ -31,15 +34,16 @@
     toast,
     errText,
   } from "$lib/stores/ui";
-  import { asrLocalStore } from "$lib/stores/runtime";
-  import AsrCard from "./AsrCard.svelte";
+  import { asrLocalStore, runtimeStore } from "$lib/stores/runtime";
+  import DictationHome from "./DictationHome.svelte";
   import VoiceHotkeysSection from "./VoiceHotkeysSection.svelte";
   import VoiceSetupGuide from "./VoiceSetupGuide.svelte";
   import { m } from "$lib/paraglide/messages.js";
 
-  let { guideOpen = false, onOpenGuide, onCloseGuide, onConfigure, onOpenModels, onOpenSound, onOpenGames }: {
+  let { guideOpen = false, optionsOpen = $bindable(false), onOpenGuide, onCloseGuide, onConfigure, onOpenModels, onOpenSound, onOpenGames }: {
     /** 语音输入的四步引导（V 路径）展开着。 */
     guideOpen?: boolean;
+    optionsOpen?: boolean;
     onOpenGuide: () => void;
     onCloseGuide: () => void;
     /** 让 Kotone 帮我配置（填 DeepSeek Key / 让她帮你设）。 */
@@ -49,9 +53,9 @@
     onOpenGames: () => void;
   } = $props();
 
-  let devices = $state<AudioDevice[]>([]);
+  let devices = $state<AudioDevice[] | null>(null);
   let profiles = $state<GameProfile[]>([]);
-  const micName = $derived(devices.find((d) => d.id === $settingsStore?.audioDeviceId)?.name ?? m.voice_general_mic_default());
+  const micName = $derived(devices?.find((d) => d.id === $settingsStore?.audioDeviceId)?.name ?? m.voice_general_mic_default());
   const game = $derived(profiles.find((p) => p.id === $settingsStore?.activeProfileId) ?? null);
   let elevation = $state<ElevationStatus | null>(null);
   let restarting = $state(false);
@@ -64,16 +68,29 @@
   /** 提权重启接力标记：旧进程退出前落 localStorage，新进程检测到已提权后 toast 并清除 */
   const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
 
+  onMount(() => {
+    let request = 0;
+    const refresh = () => {
+      const current = ++request;
+      void listAudioDevices().then((items) => { if (request === current) devices = items; })
+        .catch(() => { if (request === current) devices = []; });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    navigator.mediaDevices?.addEventListener("devicechange", refresh);
+    return () => {
+      ++request;
+      window.removeEventListener("focus", refresh);
+      navigator.mediaDevices?.removeEventListener("devicechange", refresh);
+    };
+  });
+
   onMount(async () => {
     try {
-      const [nextDevices, nextElevation, nextProfiles] = await Promise.all([
-        listAudioDevices(),
-        getElevationStatus(),
-        listProfiles(),
+      await Promise.all([
+        getElevationStatus().then(applyGameCompatibilityStatus),
+        listProfiles().then((items) => { profiles = items; }),
       ]);
-      devices = nextDevices;
-      profiles = nextProfiles;
-      applyGameCompatibilityStatus(nextElevation);
       if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
         localStorage.removeItem(ADMIN_RESTART_FLAG);
         if (elevation?.elevated) toast(true, m.voice_general_admin_ok());
@@ -139,13 +156,20 @@
 
   // 语音输入热键只在「设置 → 热键」改（ADR 040 D3）；这里显示现在的键、登记失败的原因
   let hotkeyStatus = $state<HotkeyStatus | null>(null);
+  let talkBinding = $state<KeyUse | null>(null);
 
-  onMount(async () => {
-    try {
-      hotkeyStatus = await getHotkeyStatus();
-    } catch (e) {
-      toast(false, m.voice_hotkey_status_read_failed({ error: errText(e) }));
-    }
+  $effect(() => {
+    void $settingsStore?.hotkey.key;
+    void $runtimeStore?.phase;
+    hotkeyStatus = null;
+    let current = true;
+    void Promise.all([getHotkeyStatus(), getHotkeyTable()]).then(([status, table]) => {
+      if (current) {
+        hotkeyStatus = status;
+        talkBinding = table.bindings.find((row) => row.id === "voice-input.talk") ?? null;
+      }
+    }).catch((error) => { if (current) toast(false, m.voice_hotkey_status_read_failed({ error: errText(error) })); });
+    return () => { current = false; };
   });
 
   const modes: { id: InteractionMode; name: string; desc: string }[] = [
@@ -196,6 +220,8 @@
   {/if}
 
   {#if $settingsStore}
+    <DictationHome {devices} {hotkeyStatus} {talkBinding} {onOpenSound} {onOpenModels} />
+
     {#if needsElevation}
       <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-brand-pink/45 bg-brand-pink/8 px-4 py-3.5">
         <div class="min-w-0 flex-1">
@@ -220,8 +246,13 @@
       </section>
     {/if}
 
-    <AsrCard {onOpenModels} />
-
+    <details bind:open={optionsOpen} class="group border-y border-hairline">
+      <summary data-testid="voice-input-options" class="flex cursor-pointer list-none items-center gap-2 py-3.5 text-[13px] font-medium">
+        <SlidersHorizontal size={15} aria-hidden="true" />
+        {m.plugin_voice_input_options()}
+        <ChevronDown size={15} aria-hidden="true" class="ml-auto text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div class="space-y-6 pb-5">
     <div id="voice-hotkey" class="scroll-mt-16">
     <SettingsSection title={m.voice_hotkey_name_record()}>
       <SettingsRow label={m.voice_hotkey_name_record()} description={m.voice_general_hotkey_desc()} stacked>
@@ -390,6 +421,9 @@
       {m.voice_general_shared_game()} <b class="font-medium text-foreground">{game?.displayName ?? m.voice_general_shared_game_generic()}</b>{#if game}{m.voice_general_shared_game_info({ chatKey: game.openChatKey, count: game.hotwords.length })}{/if}
       <button class="text-primary hover:underline" onclick={onOpenGames}>{m.voice_general_shared_games_link()}</button>
     </section>
+
+      </div>
+    </details>
 
     {#if !guideOpen}
       <div class="flex justify-center">

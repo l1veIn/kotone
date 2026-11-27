@@ -379,6 +379,27 @@ fn make_orchestrator_tuned(
 }
 
 #[tokio::test]
+async fn page_voice_trial_returns_text_only_to_its_owner() {
+    let (orch, emitter, sent) = make_orchestrator(true);
+    let id = orch.begin_voice_trial().await.unwrap();
+    assert!(orch.begin().await.is_err());
+    assert!(orch.begin_voice_trial().await.is_err());
+    assert!(orch.finish_voice_trial("stale").await.is_err());
+    orch.cancel_voice_trial("stale").await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(!orch.finish_voice_trial(&id).await.unwrap().is_empty());
+    assert!(orch.finish_voice_trial(&id).await.is_err());
+    let next = orch.begin_voice_trial().await.unwrap();
+    orch.cancel_voice_trial(&next).await;
+    assert!(orch.finish_voice_trial(&next).await.is_err());
+    assert!(sent.lock().unwrap().is_empty());
+    assert!(emitter.events.lock().unwrap().is_empty());
+    orch.begin().await.unwrap();
+    assert!(orch.begin_voice_trial().await.is_err());
+    orch.cancel().await;
+}
+
+#[tokio::test]
 async fn preview_flow_full_transitions() {
     let (orch, emitter, sent) = make_orchestrator(false);
 
@@ -3827,6 +3848,17 @@ async fn hold_release_right_after_speech_keeps_sentence_tail() {
     let hist_dir = tempfile::tempdir().unwrap();
     orch.history_dir = Some(hist_dir.path().to_path_buf());
     let orch = orch.into_arc();
+
+    // 对同一段真实语音先做一次页内试说：即使配置为直发并保存历史，
+    // 这段文字也只应返回给调用页，下一次普通听写仍能正常发送。
+    let trial = orch.begin_voice_trial().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(audio_ms + 350)).await;
+    let text = orch.finish_voice_trial(&trial).await.unwrap();
+    assert!(text.contains(&expected), "试说识别结果：{text}");
+    assert!(sent.lock().unwrap().is_empty());
+    assert!(kotone_core::history::list_in(hist_dir.path())
+        .unwrap()
+        .is_empty());
 
     orch.begin().await.unwrap();
     // 等音频按真实节奏全部推完，立刻松手（最坏时序：不留任何自然尾音）；

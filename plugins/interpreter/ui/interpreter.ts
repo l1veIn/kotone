@@ -26,6 +26,9 @@ export type InterpreterDisplay = "danmaku" | "bubble";
 export interface InterpreterStatus {
   /** 她的耳朵现在在听的程序（进程名）。 */
   listening: string[];
+  /** null = 当前对话的同传任务未运行；空列表 = 任务运行中、还没有监听程序。 */
+  sessionListeners: string[] | null;
+  recent: { text: string; heard?: string | null; app?: string | null; atMs: number } | null;
   /** 听哪个程序；空 = 现在的游戏。 */
   app: string;
   target: string;
@@ -60,16 +63,18 @@ export async function saveInterpreter(patch: Partial<InterpreterPrefs>): Promise
 /** 状态；插件关着时 null。 */
 export async function interpreterStatus(): Promise<InterpreterStatus | null> {
   const result = await pluginCall(PLUGIN_ID, "interpreter.status");
-  const content = result.content as (InterpreterStatus & { status?: string }) | null;
-  return content && content.status !== "disabled" ? content : null;
+  const content = result.content as (InterpreterStatus & { status?: string; text?: string }) | null;
+  if (content?.status === "disabled") return null;
+  if (!Array.isArray(content?.targets)) throw new Error(content?.text ?? "interpreter.status");
+  return content;
 }
 
 /** 替玩家对她说一句（开始 / 停止同传）；回替玩家说了什么。插件关着时报错。 */
 async function say(tool: "interpreter.start" | "interpreter.stop"): Promise<string> {
   const result = await pluginCall(PLUGIN_ID, tool);
   const content = result.content as { said?: string; status?: string; text?: string } | null;
-  if (content?.status === "disabled") throw new Error(content.text ?? "disabled");
-  return content?.said ?? "";
+  if (!content?.said) throw new Error(content?.text ?? content?.status ?? tool);
+  return content.said;
 }
 
 export const interpreterStart = () => say("interpreter.start");

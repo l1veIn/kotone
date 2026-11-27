@@ -32,8 +32,8 @@ use crate::client::text::{self, ScoutPlayer};
 use crate::client::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
 use crate::pages;
 use crate::tools::{
-    TOOL_CHAMPION, TOOL_CHAMPIONS, TOOL_CLIENT, TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT,
-    TOOL_SHOUT, TOOL_SOURCE, TOOL_SPELL, TOOL_TIER,
+    TOOL_CHAMPION, TOOL_CHAMPIONS, TOOL_CLIENT, TOOL_GAME, TOOL_HISTORY, TOOL_MATCH, TOOL_PLAYER,
+    TOOL_SCOUT, TOOL_SHOUT, TOOL_SOURCE, TOOL_SPELL, TOOL_TIER,
 };
 use crate::LolPlugin;
 
@@ -41,9 +41,11 @@ use crate::LolPlugin;
 mod auto_cards;
 /// 选人阶段的“这局”（调研 G1）。
 mod champ_select;
+mod history_page;
 /// 隐藏了身份的人、电脑（ADR 043 D9）：名单、合并、局内接口补电脑、页面和给她的字。
 #[cfg(test)]
 mod identity_tests;
+mod profile_background;
 /// 一键喊话（ADR 041 第 3 期，`lol.shout`）。
 mod shout;
 
@@ -930,6 +932,7 @@ impl LolPlugin {
                 Err(result) => ToolResult::content(result),
             },
             TOOL_GAME => self.game_tool(host.as_ref(), arguments).await,
+            TOOL_HISTORY => self.history_page_tool(host.as_ref(), arguments).await,
             other => return Err(format!("{other} 不是英雄联盟工具")),
         })
     }
@@ -1312,10 +1315,31 @@ impl LolPlugin {
             .current
             .as_ref()
             .and_then(|m| m.histories.get(&puuid).cloned());
-        let history = match cached {
-            Some(h) => h,
-            None => fetch_history(&lcu, &puuid).await,
-        };
+        let include_background = arguments["includeProfileBackground"].as_bool() == Some(true)
+            && str_arg(arguments, "puuid").is_none()
+            && str_arg(arguments, "player").is_none();
+        let (history, background) = tokio::join!(
+            async {
+                match cached {
+                    Some(h) => h,
+                    None => fetch_history(&lcu, &puuid).await,
+                }
+            },
+            async {
+                if include_background {
+                    // 装饰图查询和资料并行；客户端忙碌时仍及时显示战绩。
+                    tokio::time::timeout(
+                        Duration::from_secs(3),
+                        profile_background::resolve(&lcu, &puuid),
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                }
+            }
+        );
         let queue_id = self
             .state()
             .current
@@ -1323,10 +1347,12 @@ impl LolPlugin {
             .map(|m| m.queue_id)
             .unwrap_or(0);
         let text = pages::player_text(&history, data.as_deref());
-        ToolResult::content(json!({"status": "ok", "text": text})).with_page(
-            pages::PAGE_PLAYER,
-            pages::player_page(&puuid, &history, queue_id, data.as_deref()),
-        )
+        let mut page = pages::player_page(&puuid, &history, queue_id, data.as_deref());
+        if include_background {
+            page["profileBackground"] = json!(background);
+        }
+        ToolResult::content(json!({"status": "ok", "text": text}))
+            .with_page(pages::PAGE_PLAYER, page)
     }
 
     async fn find_player(

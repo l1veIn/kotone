@@ -5,6 +5,7 @@ import { AudioLines } from "@lucide/svelte";
 import type { PluginUi } from "$lib/pluginUi";
 import { m } from "$lib/paraglide/messages.js";
 import GameVoicePage from "./GameVoicePage.svelte";
+import GameVoiceSettings from "./GameVoiceSettings.svelte";
 import GameVoiceView from "./GameVoiceView.svelte";
 import SaidCard from "./SaidCard.svelte";
 import { PAGE_HOME, PAGE_SAID } from "./voiceChat";
@@ -12,6 +13,7 @@ import { PAGE_HOME, PAGE_SAID } from "./voiceChat";
 const ui: PluginUi = {
   icon: AudioLines,
   page: GameVoicePage,
+  settings: GameVoiceSettings,
   views: {
     [PAGE_HOME]: { page: GameVoiceView, title: () => m.plugin_game_voice_name() },
     [PAGE_SAID]: { card: SaidCard, page: SaidCard, title: () => m.plugin_game_voice_push_said_title() },

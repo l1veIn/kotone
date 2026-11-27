@@ -75,9 +75,10 @@
 }
 .tabs {
   display: flex;
+  flex-shrink: 0;
   gap: var(--lol-sp-6);
   align-self: stretch;
-  min-width: 0;
+  max-width: 100%;
 }
 .tab {
   position: relative;
@@ -150,11 +151,22 @@
 }
 @container (max-width: 519px) {
   .top {
-    gap: var(--lol-sp-4);
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 44px;
+    gap: 0 var(--lol-sp-4);
     padding: 0 var(--lol-sp-5);
   }
   .tabs {
-    gap: var(--lol-sp-5);
+    gap: clamp(6px, 2.5cqi, 12px);
+    min-height: 44px;
+    overflow-x: auto;
+  }
+  .tab[aria-current="page"]::after {
+    bottom: 0;
+  }
+  .top-end:not(:empty) {
+    min-height: 36px;
   }
   .phase .more {
     display: none;

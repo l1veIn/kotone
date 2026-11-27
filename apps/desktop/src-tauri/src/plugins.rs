@@ -513,6 +513,10 @@ impl Host for DesktopHost {
             .collect()
     }
 
+    fn background_task_listeners(&self, name: &str) -> Option<Vec<String>> {
+        crate::agent::background_task_listeners(&self.app, name)
+    }
+
     fn she_is_audible(&self) -> bool {
         crate::assistant::she_is_audible(&self.app)
     }

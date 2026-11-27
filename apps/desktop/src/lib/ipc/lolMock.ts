@@ -2,7 +2,7 @@
  * dev:web 和 e2e 用的英雄联盟示例数据（ADR 038 第 2 步）：这局、某人的战绩、一局的详情，形状照后端
  * plugins/lol/src/pages.rs。玩家名都是编的（玩家甲#1001……），不是真人。
  */
-import type { Champion, GameData, MatchData, MatchPlayer, PlayerData, PlayerGame, Summary } from "$plugins/lol/ui/types";
+import type { Champion, GameData, HistoryPage, MatchData, MatchPlayer, PlayerData, PlayerGame, Summary } from "$plugins/lol/ui/types";
 
 // i18n-ignore-start：整个文件是浏览器预览的示例数据（真实应用里来自英雄联盟客户端），不是界面文字
 const CHAMPIONS: Champion[] = [
@@ -20,6 +20,7 @@ const CHAMPIONS: Champion[] = [
 const NAMES = ["玩家甲", "玩家乙", "玩家丙", "玩家丁", "玩家戊", "对手子", "对手丑", "对手寅", "对手卯", "对手辰"];
 const RANKS = ["黄金 2", "铂金 4", null, "白银 1", "翡翠 3", "钻石 4", "黄金 1", "白银 3", null, "铂金 2"];
 const QUEUE = "海克斯大乱斗";
+const HISTORY_LENGTH = 47;
 const AUGMENTS = [{ id: 1001, name: "泰坦的坚决" }, { id: 1004, name: "回归基本功" }, { id: 1006, name: "利刃华尔兹" }];
 const ITEMS = [{ id: 3031, name: "无尽之刃" }, { id: 6672, name: "海妖杀手" }, { id: 3036, name: "多米尼克领主的致意" }, { id: 3006, name: "狂战士胫甲" }];
 
@@ -30,10 +31,10 @@ function puuid(i: number): string {
 }
 
 /** 第 i 个人最近的输赢（对面 5 号连败、7 号隐藏战绩；我方 3、4 号隐藏了身份）。 */
-function wins(i: number): boolean[] {
+function wins(i: number, count = 20): boolean[] {
   // 对面 5 号：先 6 连败，20 局只赢 6 局
-  if (i === 5) return Array.from({ length: 20 }, (_, g) => g >= 6 && g % 2 === 0 && g < 18);
-  return Array.from({ length: 20 }, (_, g) => (g + i) % 3 !== 0);
+  if (i === 5) return Array.from({ length: count }, (_, g) => g >= 6 && g % 2 === 0 && g < 18);
+  return Array.from({ length: count }, (_, g) => (g + i) % 3 !== 0);
 }
 
 function summary(i: number): Summary {
@@ -49,8 +50,8 @@ function summary(i: number): Summary {
   };
 }
 
-function games(i: number): PlayerGame[] {
-  return wins(i).map((win, g) => {
+function games(i: number, count = 20): PlayerGame[] {
+  return wins(i, count).map((win, g) => {
     const champion = CHAMPIONS[(i + g) % CHAMPIONS.length];
     const durationS = 900 + ((i + g) % 7) * 60;
     const damage = 22_000 + ((i * 3 + g * 5) % 20) * 1500;
@@ -60,6 +61,15 @@ function games(i: number): PlayerGame[] {
       damage, dpm: Math.round(damage / (durationS / 60)), gold: 11_000 + g * 120, cs: 30 + g, augments: AUGMENTS.slice(0, 1 + (g % 3)),
     };
   });
+}
+
+/** 浏览器预览的账号有 47 局，可以翻过概况的 20 局并看到不足一页的末页。 */
+export function sampleHistory(id: string, offset: number, pageSize: 10 | 20): HistoryPage {
+  const index = NAMES.findIndex((_, i) => puuid(i) === id);
+  const history = index < 0 ? [] : games(index, HISTORY_LENGTH);
+  const rows = history.slice(offset, offset + pageSize);
+  const hasMore = offset + rows.length < history.length;
+  return { puuid: id, offset, pageSize, games: rows, hasMore, nextOffset: hasMore ? offset + rows.length : null };
 }
 
 /** 我方 3、4 号隐藏了身份（照 2026-11-26 那一把海斗：客户端不给名字和 puuid，只有英雄；ADR 043 D9）。 */
@@ -110,6 +120,14 @@ export function samplePlayer(id?: string): PlayerData {
   }
   return {
     puuid: puuid(index), riotId: `${NAMES[index]}#${1001 + index}`, hidden: index === 7, rank: RANKS[index], error: null,
+    ...(index === 0 ? {
+      profileIconId: 5463, summonerLevel: 186,
+      ranked: {
+        solo: { queue: "RANKED_SOLO_5x5", tier: "GOLD", division: "II", lp: 64, wins: 43, losses: 35,
+          highestTier: "GOLD", label: "黄金 II", crest: "" },
+        flex: null,
+      },
+    } : {}),
     summary: summary(index), champions: [...top.values()].sort((a, b) => b.games - a.games).slice(0, 5), games: list,
   };
 }
@@ -125,20 +143,27 @@ export function findSamplePlayer(query: string): string | null {
 
 /** 一局的详情（`lol.game`）。 */
 export function sampleGame(gameId: number): GameData {
-  const durationS = 1080;
+  const historyIndex = gameId - 9_000_000;
+  const owner = Math.floor(historyIndex / 100);
+  const gameIndex = historyIndex % 100;
+  const record = owner >= 0 && owner < NAMES.length ? games(owner, HISTORY_LENGTH)[gameIndex] : undefined;
+  const durationS = record?.durationS ?? 1080;
+  const blueWon = record ? (owner < 5 ? record.win : !record.win) : true;
   const row = (i: number) => {
-    const damage = 18_000 + i * 2_300;
+    const played = i === owner ? record : undefined;
+    const damage = played?.damage ?? 18_000 + i * 2_300;
     return {
-      puuid: puuid(i), riotId: `${NAMES[i]}#${1001 + i}`, champion: CHAMPIONS[i], level: 14 + (i % 4),
-      kills: 2 + i, deaths: 3 + (i % 5), assists: 10 + (i % 7), damage, dpm: Math.round(damage / 18), taken: 20_000 + i * 900,
-      gold: 10_500 + i * 300, cs: 40 + i * 3, items: ITEMS.slice(0, 2 + (i % 3)), augments: AUGMENTS.slice(0, 1 + (i % 3)),
+      puuid: puuid(i), riotId: `${NAMES[i]}#${1001 + i}`, champion: CHAMPIONS[(i + (record ? gameIndex : 0)) % CHAMPIONS.length], level: 14 + (i % 4),
+      kills: played?.kills ?? 2 + i, deaths: played?.deaths ?? 3 + (i % 5), assists: played?.assists ?? 10 + (i % 7),
+      damage, dpm: Math.round(damage * 60 / durationS), taken: 20_000 + i * 900,
+      gold: played?.gold ?? 10_500 + i * 300, cs: played?.cs ?? 40 + i * 3, items: ITEMS.slice(0, 2 + (i % 3)), augments: played?.augments ?? AUGMENTS.slice(0, 1 + (i % 3)),
     };
   };
   return {
-    gameId, queueId: 2400, queue: QUEUE, createdMs: LOL_SAMPLE_T0 - 3_600_000, durationS,
+    gameId, queueId: 2400, queue: QUEUE, createdMs: record?.createdMs ?? LOL_SAMPLE_T0 - 3_600_000, durationS,
     teams: [
-      { teamId: 100, win: true, players: [0, 1, 2, 3, 4].map(row) },
-      { teamId: 200, win: false, players: [5, 6, 7, 8, 9].map(row) },
+      { teamId: 100, win: blueWon, players: [0, 1, 2, 3, 4].map(row) },
+      { teamId: 200, win: !blueWon, players: [5, 6, 7, 8, 9].map(row) },
     ],
   };
 }
@@ -166,7 +191,7 @@ export function sampleToday(games = 5, date = "2026-11-26") {
 
 /** 海斗的“这局总结”（推送 `summary` 的数据）：我是我方第一个（`me`、`ally`），每个人 4 个海克斯（名字照客户端的写法，
  * 有长有短）。 */
-export function sampleSummary(gameId = 9_000_001) {
+export function sampleSummary(gameId = 9_100_000) {
   const game = sampleGame(gameId);
   const pool = [
     { id: 1018, name: "巨像的勇气", rarity: "kPrismatic", icon: "" }, { id: 1353, name: "坦克引擎", rarity: "kGold", icon: "" },

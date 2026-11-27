@@ -36,47 +36,60 @@ test("game voice is a plugin: off by default, turn it on, install the virtual mi
   await expect(card.getByTestId("plugins-card-game-voice-enabled")).toHaveAttribute("aria-checked", "false");
   await screenshot(page, { path: shot(testInfo, "settings-plugins-game-voice") });
 
-  // 从卡片点开插件的 App：关着时只有开关和一句说明；左侧栏没有单个插件，亮的是「插件」
+  // 首次打开从启用开始，设备设置留在独立的设置页。
   await expect(page.getByTestId("app-sidebar").locator('[data-testid^="settings-nav-plugin:"]')).toHaveCount(0);
   await card.getByTestId("plugins-card-game-voice-open").click();
   await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
   const pluginPage = page.getByTestId("plugin-page-game-voice");
-  await expect(pluginPage.getByRole("heading", { name: "游戏语音", exact: true })).toBeVisible();
+  await expect(pluginPage.getByRole("heading", { name: "开麦试音", exact: true })).toBeVisible();
   await expect(pluginPage.getByTestId("plugin-game-voice-off")).toBeVisible();
   await expect(pluginPage.getByTestId("voice-chat-settings")).toHaveCount(0);
+  await expect(pluginPage.getByTestId("voice-chat-test-result")).toHaveText("等待读数");
+  await screenshot(page, { path: shot(testInfo, "game-voice-home-first") });
 
   // 打开插件：还没装虚拟麦克风
   await pluginPage.getByTestId("plugin-game-voice-enabled").click();
   await expect(pluginPage.getByTestId("plugin-game-voice-enabled")).toHaveAttribute("aria-checked", "true");
-  const section = pluginPage.getByTestId("voice-chat-settings");
-  await expect(section).toBeVisible();
   await expect(pluginPage.getByTestId("voice-chat-state")).toContainText("还没有安装");
-  await expect(section).toContainText("VB-Audio 的捐赠软件");
+  await expect(pluginPage).toContainText("VB-Audio 的捐赠软件");
 
   await pluginPage.getByTestId("voice-chat-install").click();
   await expect(pluginPage.getByTestId("voice-chat-state")).toContainText("运行中");
 
-  await pluginPage.getByTestId("voice-chat-use-cable").click();
-  await expect(pluginPage.getByTestId("voice-chat-restore-mic")).toBeVisible();
+  await expect(pluginPage.getByTestId("voice-chat-active-mic")).toHaveText("麦克风 (USB Audio)");
+  await expect(pluginPage.getByTestId("voice-chat-say")).toBeEnabled();
   await pluginPage.getByTestId("voice-chat-test").click();
-  await expect(page.getByText("通了")).toBeVisible();
+  await expect(pluginPage.getByTestId("voice-chat-test-result")).toContainText("已录到测试音");
+  await expect(pluginPage.getByTestId("voice-chat-meter")).toContainText("-10.5");
   await screenshot(page, { path: shot(testInfo, "game-voice-page") });
-  await pluginPage.getByTestId("voice-chat-restore-mic").click();
-  await expect(pluginPage.getByTestId("voice-chat-use-cable")).toBeVisible();
+  await pluginPage.getByTestId("voice-chat-open-settings").click();
+  const deviceSettings = page.getByTestId("game-voice-device-settings");
+  await expect(deviceSettings).toBeVisible();
+  await deviceSettings.getByTestId("voice-chat-use-cable").click();
+  await expect(deviceSettings.getByTestId("voice-chat-restore-mic")).toBeVisible();
+  // 即使 Windows 默认设备变成虚拟线，主页的输入也应是真正打开的物理麦克风。
+  await page.getByTestId("plugin-app-name").click();
+  await expect(pluginPage.getByTestId("voice-chat-active-mic")).toHaveText("麦克风 (USB Audio)");
+  await pluginPage.getByTestId("voice-chat-open-settings").click();
+  await deviceSettings.getByTestId("voice-chat-restore-mic").click();
+  await expect(deviceSettings.getByTestId("voice-chat-use-cable")).toBeVisible();
 
   // 只混她的声音：写进插件自己的设置
-  await pluginPage.getByTestId("voice-chat-include-mic").click();
-  await expect(pluginPage.getByTestId("voice-chat-mic")).toHaveCount(0);
+  await deviceSettings.getByTestId("voice-chat-include-mic").click();
+  await expect(deviceSettings.getByTestId("voice-chat-mic")).toHaveCount(0);
   await expect.poll(async () => (await settings(page)).plugins?.["game-voice"]).toMatchObject({
     enabled: true,
     settings: { includeMic: false },
   });
   expect((await settings(page)).voiceChat).toBeUndefined();
 
-  // 关掉插件：又只剩开关
+  // 返回主页后会报告实际的混音状态。关掉后清除上次试音结果。
+  await page.getByTestId("plugin-app-name").click();
+  await expect(pluginPage.getByTestId("voice-chat-active-mic")).toHaveText("未混入");
   await pluginPage.getByTestId("plugin-game-voice-enabled").click();
   await expect(pluginPage.getByTestId("plugin-game-voice-off")).toBeVisible();
   await expect(pluginPage.getByTestId("voice-chat-settings")).toHaveCount(0);
+  await expect(pluginPage.getByTestId("voice-chat-test-result")).toHaveText("等待读数");
   expect((await settings(page)).plugins?.["game-voice"]?.enabled).toBe(false);
 });
 

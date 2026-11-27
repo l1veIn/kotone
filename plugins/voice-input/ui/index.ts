@@ -6,6 +6,7 @@ import { Mic } from "@lucide/svelte";
 import type { PluginUi } from "$lib/pluginUi";
 import { m } from "$lib/paraglide/messages.js";
 import VoiceInputApp from "./VoiceInputApp.svelte";
+import VoiceInputSettings from "./VoiceInputSettings.svelte";
 import SentCard from "./SentCard.svelte";
 import FailedCard from "./FailedCard.svelte";
 import { PAGE_FAILED, PAGE_SENT } from "./pushes";
@@ -13,6 +14,7 @@ import { PAGE_FAILED, PAGE_SENT } from "./pushes";
 const ui: PluginUi = {
   icon: Mic,
   page: VoiceInputApp,
+  settings: VoiceInputSettings,
   views: {
     [PAGE_SENT]: { card: SentCard, page: SentCard, title: () => m.plugin_voice_input_push_sent_title() },
     [PAGE_FAILED]: { card: FailedCard, page: FailedCard, title: () => m.plugin_voice_input_push_failed_title() },

@@ -1,4 +1,5 @@
 // 英雄联盟插件页面的数据（照 MCP Apps 的 structuredContent）：和后端 plugins/lol/src/pages.rs 一一对应。
+export const PAGE_LOL_HOME = "ui://kotone/lol/home";
 export const PAGE_MATCH = "ui://kotone/lol/match";
 export const PAGE_PLAYER = "ui://kotone/lol/player";
 export const PAGE_GAME = "ui://kotone/lol/game";
@@ -84,9 +85,15 @@ export interface PlayerGame {
 export interface PlayerData {
   puuid: string; riotId: string; hidden: boolean; rank: string | null; error: string | null;
   profileIconId?: number | null; profileIcon?: string; summonerLevel?: number | null; ranked?: Ranks;
+  profileBackground?: string | null;
   summary: Summary | null;
   champions: { champion: Champion; games: number; wins: number }[];
   games: PlayerGame[];
+}
+
+export interface HistoryPage {
+  puuid: string; offset: number; pageSize: 10 | 20; games: PlayerGame[];
+  hasMore: boolean; nextOffset: number | null;
 }
 
 export interface GamePlayer {

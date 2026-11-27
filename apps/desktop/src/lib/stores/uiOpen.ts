@@ -28,7 +28,7 @@ import { openRightSidebar, setRightSidebarTab } from "./rightSidebar";
  * 页面，打开左侧栏「插件」里它的页面（右侧栏还显示不了第三方的 App）。 */
 export interface UiOpen {
   uri: string; params?: Record<string, unknown> | null; title?: string; plugin?: string | null;
-  byPlayer?: boolean; thirdParty?: boolean;
+  byPlayer?: boolean; thirdParty?: boolean; standalone?: boolean;
 }
 
 /** 处理完的结果：直接显示了 / 放在右侧栏等玩家点。 */
@@ -162,6 +162,10 @@ export function handleUiOpen(event: UiOpen): UiOpenOutcome | null {
   const section = /^ui:\/\/kotone\/settings\/([a-z]+)$/.exec(uri)?.[1] ?? null;
   const plugin = section ? null : pluginOfUri(uri);
   if (!section && !plugin) return null;
+  if (event.byPlayer && event.standalone && plugin && viewOf(uri)) {
+    openTarget({ page: "plugin", id: plugin, params: { uri } });
+    return "shown";
+  }
   const page: WaitingPage = {
     key: pageKey(uri, params), uri, params, plugin, section,
     title: section ? settingsTitle(section) : pageTitle(uri, plugin!, event?.title),
@@ -188,7 +192,9 @@ export function listenUiOpen(): () => void {
   }
   const off = listen<UiOpen>("kotone://ui-open", (e) => {
     const outcome = handleUiOpen(e.payload);
-    void invoke("ui_open_reply", { uri: String(e.payload?.uri ?? "").trim(), outcome }).catch(() => {});
+    if (!e.payload?.byPlayer) {
+      void invoke("ui_open_reply", { uri: String(e.payload?.uri ?? "").trim(), outcome }).catch(() => {});
+    }
   });
   return () => { void off.then((unlisten) => unlisten()); };
 }

@@ -21,6 +21,7 @@ export type DisplayMode = McpUiDisplayMode;
 export const TOOL_TIER = "kotone_lol_tier";
 export const TOOL_SCOUT = "kotone_lol_scout";
 export const TOOL_PLAYER = "kotone_lol_player";
+export const TOOL_HISTORY = "kotone_lol_history";
 export const TOOL_GAME = "kotone_lol_game";
 export const TOOL_CHAMPION = "kotone_lol_champion";
 /** 来源标签换来源（只给页面，ADR 043 D8）：记在插件设置里。 */
@@ -31,7 +32,7 @@ export const PAGE_SETTINGS = "ui://kotone/lol/settings";
 
 /** 插件给资源时插的那一行（`plugins/lol/src/app.rs`）：这个 HTML 显示哪一页。 */
 export function currentPage(): string {
-  return document.querySelector('meta[name="kotone:page"]')?.getAttribute("content") ?? "tier";
+  return document.querySelector('meta[name="kotone:page"]')?.getAttribute("content") ?? "home";
 }
 
 export interface Session {

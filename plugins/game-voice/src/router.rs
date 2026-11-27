@@ -105,6 +105,8 @@ struct Shared {
 pub struct VoiceRouter {
     shared: Arc<Shared>,
     rate: u32,
+    /// 系统默认设备有时是虚拟线，保留这次真正打开的物理设备名。
+    pub active_mic: Option<String>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -193,7 +195,13 @@ where
         .map_err(|e| format!("无法打开麦克风：{e}"))
 }
 
-fn open(config: &RouterConfig, shared: &Arc<Shared>) -> Result<(Vec<cpal::Stream>, u32), String> {
+struct OpenedRoute {
+    streams: Vec<cpal::Stream>,
+    rate: u32,
+    mic: Option<String>,
+}
+
+fn open(config: &RouterConfig, shared: &Arc<Shared>) -> Result<OpenedRoute, String> {
     let host = cpal::default_host();
     let out_device = find_device(&host, &config.output, false)?;
     let out_config = out_device
@@ -215,9 +223,10 @@ fn open(config: &RouterConfig, shared: &Arc<Shared>) -> Result<(Vec<cpal::Stream
         other => Err(format!("暂不支持虚拟麦克风的格式 {other}")),
     }?;
     let mut streams = vec![output];
+    let mut active_mic = None;
     if let Some(mic) = &config.mic {
         let (in_device, choice) = kotone_platform_windows::audio::input_device(&host, mic)?;
-        forwarded_mic(choice)?;
+        active_mic = Some(forwarded_mic(choice)?.name().to_owned());
         let in_config = in_device
             .default_input_config()
             .map_err(|e| format!("读取麦克风格式失败：{e}"))?;
@@ -239,7 +248,11 @@ fn open(config: &RouterConfig, shared: &Arc<Shared>) -> Result<(Vec<cpal::Stream
     for stream in &streams {
         stream.play().map_err(|e| format!("无法开始转发：{e}"))?;
     }
-    Ok((streams, rate))
+    Ok(OpenedRoute {
+        streams,
+        rate,
+        mic: active_mic,
+    })
 }
 
 impl VoiceRouter {
@@ -251,18 +264,18 @@ impl VoiceRouter {
         });
         shared.mixer.lock().unwrap().mic_gain = config.mic_gain.clamp(0.0, 4.0);
         let stop = Arc::new(AtomicBool::new(false));
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<u32, String>>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let thread_shared = shared.clone();
         let thread_stop = stop.clone();
         let thread = std::thread::Builder::new()
             .name("kotone-voice-router".into())
             .spawn(move || match open(&config, &thread_shared) {
-                Ok((streams, rate)) => {
-                    let _ = ready_tx.send(Ok(rate));
+                Ok(route) => {
+                    let _ = ready_tx.send(Ok((route.rate, route.mic)));
                     while !thread_stop.load(Ordering::SeqCst) {
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
-                    drop(streams);
+                    drop(route.streams);
                 }
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
@@ -270,9 +283,10 @@ impl VoiceRouter {
             })
             .map_err(|e| format!("无法启动转发线程：{e}"))?;
         match ready_rx.recv() {
-            Ok(Ok(rate)) => Ok(Self {
+            Ok(Ok((rate, active_mic))) => Ok(Self {
                 shared,
                 rate,
+                active_mic,
                 stop,
                 thread: Some(thread),
             }),

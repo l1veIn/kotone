@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 她用 ui.open 打开 `ui://kotone/game-voice/home` 时，右侧栏里的游戏语音页面（和左侧栏的插件页同一个组件，不要大标题）。
+  // ui.open 打开主页时，右侧栏使用同一张试音台的紧凑布局。
   import { onMount } from "svelte";
   import { listPlugins, pluginsStore } from "$lib/plugins";
   import type { PluginViewProps } from "$lib/pluginUi";

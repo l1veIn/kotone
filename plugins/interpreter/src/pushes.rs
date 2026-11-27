@@ -169,6 +169,12 @@ pub struct Desk {
 }
 
 impl Desk {
+    /// 主页展示最后一条实际译文，包括来源和时间，独立于当前监听状态。
+    pub(crate) fn recent(&self) -> Option<Value> {
+        let line = self.card.as_ref()?.lines.back()?;
+        Some(json!({"text": line.text, "heard": line.heard, "app": line.app, "atMs": line.at_ms}))
+    }
+
     /// 玩家在页面上点了开始 / 停止：分不出局时下一句另起一张（同一局的照旧在一张里）。
     pub fn reset(&mut self) {
         if let Some(card) = &mut self.card {
@@ -329,6 +335,7 @@ mod tests {
     #[test]
     fn lines_of_one_match_share_one_card() {
         let mut desk = Desk::default();
+        assert!(desk.recent().is_none());
         let a = desk.plan(line("小心左边", T, lol("m1")));
         let b = desk.plan(line("我去拿龙", T + 30 * 60 * 1000, lol("m1")));
         assert_eq!(a.push.key, b.push.key, "同一局：隔得再久也是同一张");
@@ -339,6 +346,7 @@ mod tests {
         assert_eq!(lines[1]["text"], "我去拿龙");
         assert_eq!(lines[1]["heard"], "heard 我去拿龙");
         assert_eq!(lines[1]["app"], "League of Legends.exe");
+        assert_eq!(desk.recent().as_ref(), Some(&lines[1]));
         assert_eq!(card(&b)["total"], 2);
         assert_eq!(card(&b)["target"], "中文");
         assert_eq!(b.push.card.as_ref().unwrap().title, TITLE_LINES);

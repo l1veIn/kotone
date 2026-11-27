@@ -352,12 +352,26 @@ pub fn agent_held_cards(id: String) -> Vec<Message> {
 
 /// 玩家在悬浮窗里点了卡片上面那一行（或“打开 Kotone”）：打开 Kotone 的聊天页，定位到那条推送。这是玩家自己的动作，
 /// 照“点托盘打开窗口”把主窗口拿到前面；她不在回答时顺便把那段对话切成当前对话（在回答时不切，和对话列表的规矩一样）。
-/// 悬浮窗的小窗和几行收起（推送都在聊天里了）。命令名是只有自动卡片时起的，不改。
+/// 开局战绩展开到英雄联盟插件的「这局」。悬浮窗的小窗和几行一起收起。
 #[tauri::command]
-pub fn auto_card_open(app: AppHandle, conversation_id: String, key: String) -> Result<(), String> {
+pub fn auto_card_open(
+    app: AppHandle,
+    conversation_id: String,
+    key: String,
+    open_match: Option<bool>,
+) -> Result<(), String> {
     crate::floating::opened(&app);
     if let Some(win) = app.get_webview_window("main") {
         crate::show_and_focus(&win);
+    }
+    if open_match == Some(true) {
+        return app
+            .emit_to(
+                "main",
+                crate::plugins::UI_OPEN_EVENT,
+                json!({"uri": kotone_plugin_lol::pages::PAGE_MATCH, "plugin": "lol", "byPlayer": true, "standalone": true}),
+            )
+            .map_err(|error| error.to_string());
     }
     if !is_running(&app) {
         let store = store(&app)?;

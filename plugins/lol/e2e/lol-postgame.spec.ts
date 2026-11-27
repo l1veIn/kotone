@@ -14,7 +14,7 @@ import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 test.use({ launchOptions: { args: ["--disable-features=LocalNetworkAccessChecks"] } });
 
 const T = 1_800_000_000_000;
-const SUMMARY_KEY = "summary:9000001";
+const SUMMARY_KEY = "summary:9100000";
 const TODAY_KEY = "today:2026-11-26";
 const GAME = "ui://kotone/lol/game";
 const TODAY = "ui://kotone/lol/today";

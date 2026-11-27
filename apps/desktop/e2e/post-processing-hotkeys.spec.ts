@@ -6,6 +6,7 @@ import { openSettingsTab, openVoiceInput } from "./nav";
 test("named hotkey rows render with defaults and can be configured/cleared", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await openVoiceInput(page);
+  await page.getByTestId("voice-input-options").click();
   const rows = page.getByTestId("voice-hotkeys");
 
   // 四个语音输入的热键行：频道切换（老用户迁移来的 Shift+CapsLock）/ 重发 / 文字处理开关 / 切换流程
@@ -61,6 +62,7 @@ test("named hotkey rows render with defaults and can be configured/cleared", asy
 
   // 语音输入页跟着变
   await openVoiceInput(page);
+  await page.getByTestId("voice-input-options").click();
   await expect(page.getByTestId("hotkey-link-key-voice-input.post-process-cycle")).toHaveText("F10");
 
   // 本地识别（默认）：启动热键在「设置 → 模型 → 语音识别」只显示，默认未设置

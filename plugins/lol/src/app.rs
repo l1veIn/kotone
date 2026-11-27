@@ -17,7 +17,7 @@
 
 use kotone_plugin_api::{Csp, Resource};
 
-use crate::pages::{PAGE_GAME, PAGE_MATCH, PAGE_PLAYER, PAGE_TODAY};
+use crate::pages::{PAGE_GAME, PAGE_HOME, PAGE_MATCH, PAGE_PLAYER, PAGE_TODAY};
 use crate::pushes::{PAGE_AUGMENT_OCR, PAGE_AUGMENT_PICK, PAGE_CHAMP_SELECT, PAGE_ENEMY_BUILD};
 use crate::stats_tools::{PAGE_CHAMPION, PAGE_TIER};
 
@@ -29,6 +29,7 @@ const PLACEHOLDER: &str = "<!doctype html>\n<html lang=\"zh-CN\"><head><meta cha
 
 /// 做成 MCP App 的页面（清单 `pages` 里的地址，照清单的顺序）。
 pub const APP_PAGES: &[&str] = &[
+    PAGE_HOME,
     PAGE_MATCH,
     PAGE_PLAYER,
     PAGE_GAME,
@@ -80,7 +81,7 @@ fn with_page(html: &str, page: &str) -> String {
 mod tests {
     use super::*;
 
-    /// 清单里除了设置，每一页都是 App（聊天卡片、推送的卡片、`ui.open` 直接打开的就是它们），而且都说了要哪个数据开关。
+    /// 插件开启时始终可以打开主页；各数据页按自己的数据源开关提供。
     #[test]
     fn every_page_but_settings_is_an_app() {
         let m = crate::manifest();
@@ -93,13 +94,14 @@ mod tests {
         assert_eq!(pages, APP_PAGES, "清单的页面和 APP_PAGES 对不上");
         for uri in APP_PAGES {
             let page = m.page(uri).unwrap();
-            assert!(!page.needs.is_empty(), "{uri} 没写 needs");
+            assert_eq!(page.needs.is_empty(), *uri == PAGE_HOME, "{uri}");
         }
     }
 
     #[test]
     fn the_pages_are_apps_and_pass_the_manifest_check() {
         for (uri, page) in [
+            (PAGE_HOME, "home"),
             (PAGE_MATCH, "match"),
             (PAGE_PLAYER, "player"),
             (PAGE_GAME, "game"),

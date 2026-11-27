@@ -29,7 +29,7 @@
     /** 给了就交给它（悬浮窗：打开 Kotone、定位到这条推送），不在右侧栏打开。 */
     onOpenPush?: (push: PushRecord) => void;
     /** 工具结果的卡片：给了就交给它（悬浮窗：打开 Kotone）。 */
-    onOpenCard?: () => void;
+    onOpenCard?: (uri: string) => void;
   } = $props();
 
   // 后台做完的事交回来的那条（ADR 029）：卡片已经更新，不显示这条，只显示她接着说的话。

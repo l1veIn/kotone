@@ -31,6 +31,8 @@ export interface VoiceChatStatus {
   micGain: number;
   /** 转发在运行 */
   running: boolean;
+  /** 正在转发的真实输入，系统默认麦克风改为虚拟线时也能识别。 */
+  activeMic: string | null;
   error: string | null;
   windowsDefaultMic: CaptureEndpoint | null;
   windowsCommunicationsMic: CaptureEndpoint | null;

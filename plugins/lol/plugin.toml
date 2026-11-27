@@ -71,6 +71,10 @@ body = "Kotone 依照 Riot Games 的“Legal Jibber Jabber”政策使用了 Rio
 links = ["https://www.riotgames.com/en/legal"]
 
 [[pages]]
+uri = "ui://kotone/lol/home"
+title = "主页"
+
+[[pages]]
 uri = "ui://kotone/lol/match"
 title = "这局"
 needs = ["client"]

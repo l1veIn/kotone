@@ -3,18 +3,17 @@
    * 语音输入插件的 App（ADR 038）：原来左侧栏「语音输入」那一整块（输入 / 文字处理 / 历史三页，悬浮窗在“输入”里）
    * 原样搬进插件，从左侧栏「插件 → 语音输入」打开。页面 ID 和分组锚点不变（general / processing / history，
    * voice-asr / voice-overlay……），「去看看」的位置（「语音输入 → 悬浮窗」等）经 `open.params` 落到这里的分页和分组。
-   * 插件开关在最上面；关着时语音输入热键、悬浮窗都没有（宿主按开关处理），这里只留开关和一句说明。
+   * 插件设置里保留启用开关；关着时主页也提供打开入口。
    * 她替你在游戏聊天里发言（game_chat.send）是本体的，不跟着这个开关（ADR 039 D2）。
    */
   import { tick } from "svelte";
-  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
-  import PluginSwitches from "$lib/components/plugins/PluginSwitches.svelte";
-  import { pluginEnabled } from "$lib/plugins";
+  import { Button } from "$lib/components/ui/button";
+  import { pluginEnabled, pluginName, setPluginEnabled } from "$lib/plugins";
   import type { PluginPageProps } from "$lib/pluginUi";
   import { companionBindings, usesLegacyVoiceInput } from "$lib/ipc/contracts";
   import { openTarget, type VoiceInputPage } from "$lib/stores/navigation";
   import { pendingPrompt } from "$lib/agentChat/pendingPrompt";
-  import { settingsStore } from "$lib/stores/ui";
+  import { errText, settingsStore, toast } from "$lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
   import VoiceInputShell from "./VoiceInputShell.svelte";
   import GeneralPage from "./GeneralPage.svelte";
@@ -28,6 +27,16 @@
   let tab = $state<VoiceInputPage>("general");
   /** 语音输入的四步引导（V 路径）展开着：新用户引导选了“只用语音输入”时打开。 */
   let guideOpen = $state(false);
+  let optionsOpen = $state(false);
+  let enabling = $state(false);
+
+  async function enable() {
+    if (enabling) return;
+    enabling = true;
+    try { await setPluginEnabled(plugin.manifest.id, true); }
+    catch (error) { toast(false, m.system_plugins_save_failed({ error: errText(error) })); }
+    finally { enabling = false; }
+  }
 
   // 从「去看看」、引导、标题栏的“启动识别”打开：切到那一页，滚到那一组
   $effect(() => {
@@ -37,6 +46,7 @@
     tab = wanted && TABS.includes(wanted) ? wanted : "general";
     if (params.guide === true) guideOpen = true;
     const anchor = typeof params.anchor === "string" ? params.anchor : null;
+    if (anchor?.startsWith("voice-") && anchor !== "voice-asr") optionsOpen = true;
     if (anchor) void tick().then(() => requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" })));
   });
 
@@ -55,13 +65,8 @@
 
 {#if on}
   <VoiceInputShell page={tab} onTab={(next: VoiceInputPage) => (tab = next)} onConfigure={configure}>
-    <div class="mx-auto w-full max-w-3xl px-6 pt-4">
-      <SettingsSection testid="plugin-voice-input-switch">
-        <PluginSwitches {plugin} />
-      </SettingsSection>
-    </div>
     {#if tab === "general"}
-      <GeneralPage {guideOpen} onOpenGuide={() => (guideOpen = true)} onCloseGuide={() => (guideOpen = false)}
+      <GeneralPage {guideOpen} bind:optionsOpen onOpenGuide={() => (guideOpen = true)} onCloseGuide={() => (guideOpen = false)}
         onConfigure={configure} onOpenModels={() => openTarget({ page: "advanced", tab: "models", anchor: "models-asr" })}
         onOpenSound={() => openTarget({ page: "advanced", tab: "sound" })} onOpenGames={() => openTarget({ page: "game" })} />
     {:else if tab === "processing"}
@@ -72,9 +77,8 @@
   </VoiceInputShell>
 {:else}
   <div class="ui-scope mx-auto w-full max-w-3xl space-y-2.5 px-6 pt-7 text-foreground" data-testid="voice-input">
-    <SettingsSection testid="plugin-voice-input-switch">
-      <PluginSwitches {plugin} />
-    </SettingsSection>
-    <p class="m-0 px-1 text-xs leading-relaxed text-muted-foreground" data-testid="plugin-voice-input-off">{m.plugin_voice_input_off_note()}</p>
+    <h1 class="m-0 text-2xl font-semibold tracking-tight">{m.voice_shell_title()}</h1>
+    <p class="m-0 pb-3 text-sm text-muted-foreground" data-testid="plugin-voice-input-off">{m.plugin_voice_input_off_note()}</p>
+    <Button disabled={enabling} data-testid="voice-input-enable" onclick={() => void enable()}>{m.system_plugins_enable({ name: pluginName(plugin.manifest) })}</Button>
   </div>
 {/if}

@@ -1,4 +1,4 @@
-// 英雄联盟的 MCP App（ADR 039 D5；MCP 方案第 3 期）在 Kotone 里的样子：插件页整页是插件给的独立 HTML（从“这局”开始，
+// 英雄联盟的 MCP App（ADR 039 D5；MCP 方案第 3 期）在 Kotone 里的样子：插件页整页是插件给的独立 HTML（从“主页”开始，
 // 导航在 App 里），宿主放进沙盒 iframe（McpAppFrame + ext-apps 的 AppBridge）。浏览器预览里沙盒代理页和 App 由 Vite 开发服务器旁边的小服务照回环代理
 // 的路径、在 127.0.0.1 的另一个端口上给（apps/desktop/vite.config.ts 的 mcpAppsDevServer），App 是 plugins/lol/app/dist
 // （test:e2e 先打包）。
@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { screenshot } from "../../../apps/desktop/e2e/screenshot.cjs";
 
 const TIER = "ui://kotone/lol/tier";
+const HOME = "ui://kotone/lol/home";
 const MATCH = "ui://kotone/lol/match";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片（和 apps/desktop/e2e/nav.ts 的 openPlugin 一样）。 */
@@ -34,7 +35,7 @@ async function lolPage(page: Page) {
 }
 
 /** App 所在的那一层 iframe（沙盒代理页里面那一层，地址是 /<密钥>/app/lol/<页面>）。 */
-async function appFrame(page: Page, which = "match|tier"): Promise<Frame> {
+async function appFrame(page: Page, which: string): Promise<Frame> {
   const pattern = new RegExp(`/app/lol/(${which})$`);
   await expect.poll(() => page.frames().filter((f) => pattern.test(f.url())).length, { timeout: 15_000 }).toBeGreaterThan(0);
   return page.frames().find((f) => pattern.test(f.url()))!;
@@ -60,18 +61,18 @@ function rpc(frame: Frame, id: number, method: string, params: unknown): Promise
 test("the plugin page is the plugin's MCP App: a sandboxed iframe on another origin that fetches through the lol plugin", async ({ page }, testInfo) => {
   await open(page);
   const pluginPage = await lolPage(page);
-  const frame = pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${MATCH}"]`);
+  const frame = pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${HOME}"]`);
   await expect(frame).toHaveAttribute("data-display", "fullscreen");
   await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   await expect(frame).toHaveAttribute("data-plugin", "lol");
   const iframe = frame.getByTestId("mcp-app-iframe");
   await expect(iframe).toHaveAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
   // 沙盒代理页在另一个源上（127.0.0.1 的另一个端口），路径照回环代理
-  await expect(iframe).toHaveAttribute("src", /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]+\/sandbox\/lol\/match$/);
+  await expect(iframe).toHaveAttribute("src", /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]+\/sandbox\/lol\/home$/);
   expect(new URL((await iframe.getAttribute("src"))!).port).not.toBe(new URL(page.url()).port);
-  // 插件页直接打开（宿主没推结果）：App 自己调 kotone_lol_scout，宿主还原成 lol.scout、绑定英雄联盟插件
-  await expect.poll(async () => (await calls(page)).filter((c) => c.tool === "lol.scout").slice(0, 1)).toEqual([{ plugin: "lol", tool: "lol.scout" }]);
-  const app = await appFrame(page, "match");
+  // 插件页直接打开时，App 向英雄联盟插件查询当前召唤师。
+  await expect.poll(async () => (await calls(page)).filter((c) => c.tool === "lol.player")).toContainEqual({ plugin: "lol", tool: "lol.player" });
+  const app = await appFrame(page, "home");
   // App 里换到强度榜：App 自己调 kotone_lol_tier
   await app.getByTestId("lol-app-tab-tier").click();
   await expect.poll(async () => (await calls(page)).filter((c) => c.tool === "lol.tier")).toEqual([{ plugin: "lol", tool: "lol.tier" }]);
@@ -83,8 +84,12 @@ test("the plugin page is the plugin's MCP App: a sandboxed iframe on another ori
 test("the App only reaches its own plugin: lol tools work, other plugins' tools are refused, its settings link opens the plugin's settings", async ({ page }) => {
   await open(page);
   const pluginPage = await lolPage(page);
-  await expect(pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${MATCH}"]`)).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
-  const app = await appFrame(page, "match");
+  await expect(pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${HOME}"]`)).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  const app = await appFrame(page, "home");
+  await expect(app.getByTestId("lol-home-name")).toContainText("玩家甲");
+  // 切到静态榜单，采样期间避免主页定时查询对局状态。
+  await app.getByTestId("lol-app-tab-tier").click();
+  await expect(app.getByTestId("lol-app-tier-row")).toHaveCount(12);
   // 从这里起宿主替 App 调的工具（别的界面，例如左侧栏的播放条，也会调自己插件的工具）
   const before = (await calls(page)).length;
   const since = async () => (await calls(page)).slice(before);

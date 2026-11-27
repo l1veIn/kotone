@@ -23,7 +23,7 @@
     ask?: AgentAsk;
     onAnswer?: (askId: string, answer: Answer) => Promise<void>;
     /** 结果卡片上面那一行：给了就交给它（悬浮窗的聊天小窗：打开 Kotone），不在右侧栏打开。 */
-    onOpenCard?: () => void;
+    onOpenCard?: (uri: string) => void;
   } = $props();
 
   let open = $state(false);

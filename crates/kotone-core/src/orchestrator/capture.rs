@@ -1,6 +1,7 @@
 use super::*;
 
 mod pump;
+pub(super) mod trial;
 
 use self::pump::{spawn_level_forwarder, CapturePump, VadDegradeSignal, VadStop};
 
@@ -169,6 +170,9 @@ impl Orchestrator {
             let mut inner = self.inner.lock().unwrap();
             if expected_gen.is_some_and(|gen| inner.gen != gen) {
                 return Ok(());
+            }
+            if inner.trial.as_ref().is_some_and(|t| t.running()) {
+                return Err("正在页内试说，请先结束试说".into());
             }
             if inner.state != OrchestratorState::Idle {
                 return Err(format!("当前状态 {:?} 不能开始新会话", inner.state));

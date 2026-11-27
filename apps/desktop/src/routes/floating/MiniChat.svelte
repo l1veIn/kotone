@@ -33,7 +33,7 @@
     /** 她这时候的状态行（在听、等你回答……），对话里还没有的。 */
     status: BubbleSnapshot | null;
     /** 打开 Kotone、定位到这一条推送（空 = 这段对话）。 */
-    onOpen: (key: string) => void;
+    onOpen: (uri?: string) => void;
     onOpenPush: (push: PushRecord) => void;
     onClose: () => void;
     onDrag: (event: PointerEvent) => void;
@@ -137,7 +137,7 @@
         data-testid="floating-newer" onclick={() => page(1)}><ChevronDown class="size-3.5" /></button>
     {/if}
     <button type="button" class="tool" aria-label={m.chat_floating_open()} title={m.chat_floating_open()} data-testid="floating-open"
-      onclick={() => onOpen("")}><SquareArrowOutUpRight class="size-3.5" /></button>
+      onclick={() => onOpen()}><SquareArrowOutUpRight class="size-3.5" /></button>
     <button type="button" class="tool" aria-label={m.chat_floating_close()} title={m.chat_floating_close()} data-testid="floating-close"
       onclick={onClose}><X class="size-3.5" /></button>
   </div>
@@ -146,7 +146,7 @@
       {#each turns as turn (turn.id)}
         <div class="turn" data-floating-turn={turn.id} data-testid="floating-turn" data-push={turnPushId(turn) ?? ""}>
           <ChatTurn {turn} compact askFor={(callId) => chat.askFor(callId)} onAnswer={(askId, answer) => chat.answer(askId, answer)}
-            {onOpenPush} onOpenCard={() => onOpen("")} />
+            {onOpenPush} onOpenCard={onOpen} />
         </div>
       {/each}
       {#if status}

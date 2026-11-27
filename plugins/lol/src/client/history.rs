@@ -125,56 +125,55 @@ fn s(v: &Value, key: &str) -> String {
 /// 战绩列表 → 每局。只留匹配到的对局（照 LeagueAkari：自定义、人机、训练不算），
 /// 重开的（5 分钟内结束或提前投降）也不算。新的在前。
 pub fn parse_match_list(v: &Value) -> Vec<GameRecord> {
-    let games = v
-        .get("games")
-        .and_then(|g| g.get("games"))
+    let mut out: Vec<GameRecord> = v
+        .pointer("/games/games")
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut out: Vec<GameRecord> = games
-        .iter()
-        .filter(|g| {
-            let kind = s(g, "gameType");
-            kind.is_empty() || kind == "MATCHED_GAME"
-        })
-        .filter_map(|g| {
-            let p = g.get("participants")?.as_array()?.first()?;
-            let st = p.get("stats")?;
-            let flag = |key: &str| st.get(key).and_then(Value::as_bool).unwrap_or(false);
-            let duration = i(g, "gameDuration");
-            if duration < 300 || flag("gameEndedInEarlySurrender") {
-                return None;
-            }
-            Some(GameRecord {
-                game_id: i(g, "gameId"),
-                queue_id: i(g, "queueId"),
-                mode: s(g, "gameMode"),
-                created_ms: i(g, "gameCreation"),
-                duration_s: duration,
-                champion_id: i(p, "championId"),
-                win: flag("win"),
-                kills: i(st, "kills"),
-                deaths: i(st, "deaths"),
-                assists: i(st, "assists"),
-                damage: i(st, "totalDamageDealtToChampions"),
-                taken: i(st, "totalDamageTaken"),
-                gold: i(st, "goldEarned"),
-                cs: i(st, "totalMinionsKilled") + i(st, "neutralMinionsKilled"),
-                augments: (1..=6)
-                    .map(|n| i(st, &format!("playerAugment{n}")))
-                    .filter(|a| *a > 0)
-                    .collect(),
-                spells: [i(p, "spell1Id"), i(p, "spell2Id")],
-                items: std::array::from_fn(|n| i(st, &format!("item{n}"))),
-                keystone: i(st, "perk0"),
-                primary_style: i(st, "perkPrimaryStyle"),
-                sub_style: i(st, "perkSubStyle"),
-                level: i(st, "champLevel"),
-            })
-        })
+        .into_iter()
+        .flatten()
+        .filter_map(parse_match)
         .collect();
     out.sort_by_key(|g| std::cmp::Reverse(g.created_ms));
     out
+}
+
+pub(crate) fn parse_match(g: &Value) -> Option<GameRecord> {
+    let kind = s(g, "gameType");
+    if !kind.is_empty() && kind != "MATCHED_GAME" {
+        return None;
+    }
+    let p = g.get("participants")?.as_array()?.first()?;
+    let st = p.get("stats")?;
+    let flag = |key: &str| st.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let duration = i(g, "gameDuration");
+    if duration < 300 || flag("gameEndedInEarlySurrender") {
+        return None;
+    }
+    Some(GameRecord {
+        game_id: i(g, "gameId"),
+        queue_id: i(g, "queueId"),
+        mode: s(g, "gameMode"),
+        created_ms: i(g, "gameCreation"),
+        duration_s: duration,
+        champion_id: i(p, "championId"),
+        win: flag("win"),
+        kills: i(st, "kills"),
+        deaths: i(st, "deaths"),
+        assists: i(st, "assists"),
+        damage: i(st, "totalDamageDealtToChampions"),
+        taken: i(st, "totalDamageTaken"),
+        gold: i(st, "goldEarned"),
+        cs: i(st, "totalMinionsKilled") + i(st, "neutralMinionsKilled"),
+        augments: (1..=6)
+            .map(|n| i(st, &format!("playerAugment{n}")))
+            .filter(|a| *a > 0)
+            .collect(),
+        spells: [i(p, "spell1Id"), i(p, "spell2Id")],
+        items: std::array::from_fn(|n| i(st, &format!("item{n}"))),
+        keystone: i(st, "perk0"),
+        primary_style: i(st, "perkPrimaryStyle"),
+        sub_style: i(st, "perkSubStyle"),
+        level: i(st, "champLevel"),
+    })
 }
 
 /// 战绩列表里这个人自己的 `名字#编号`。
