@@ -98,6 +98,18 @@ fn short(text: &str, max: usize) -> String {
 }
 
 /// 这一局的记录（对话、工具、提醒、自动化），按时间排好。
+/// 复盘记录里一条执行记录的类别（ADR 045：动作只剩程序，按程序的样子分）：提醒形状的程序（“晚一会儿开始、只说一句”）
+/// 叫“提醒”；绑了游戏窗口的（按键、看屏幕）叫“操作游戏的自动化”；别的叫“自动化”。
+fn run_kind(run: &kotone_core::automation::Run) -> &'static str {
+    if run.as_reminder().is_some() {
+        "提醒"
+    } else if run.bound_to_window() {
+        "操作游戏的自动化"
+    } else {
+        "自动化"
+    }
+}
+
 fn transcript(app: &AppHandle, name: &str, start: u64, end: u64) -> Vec<(u64, String)> {
     let mut lines: Vec<(u64, String)> = Vec::new();
     if let Ok(store) = crate::agent::conversation_store(app) {
@@ -172,12 +184,7 @@ fn transcript(app: &AppHandle, name: &str, start: u64, end: u64) -> Vec<(u64, St
                 if !(start..=end).contains(&run.created_at_ms) {
                     continue;
                 }
-                // TODO(ADR 045 B): 类别标签。这里只照旧：提醒形状的程序叫“提醒”。
-                let kind = if run.as_reminder().is_some() {
-                    "提醒"
-                } else {
-                    "自动化"
-                };
+                let kind = run_kind(&run);
                 lines.push((
                     run.created_at_ms,
                     format!(
@@ -391,5 +398,26 @@ mod tests {
         assert_eq!(r, ["一", "二"]);
         assert!(m.is_empty());
         assert!(parse_reply("没有 JSON").is_none());
+    }
+
+    /// ADR 045：动作只剩程序，复盘按程序的样子分类：提醒、操作游戏的、别的。
+    #[test]
+    fn runs_are_labelled_by_what_the_program_does() {
+        let run = |source: &str, target: Value| -> kotone_core::automation::Run {
+            serde_json::from_value(serde_json::json!({
+                "id": "run-1", "sessionId": "tool", "createdAtMs": 0, "dueAtMs": 0, "status": "finished",
+                "action": {"kind": "program", "name": "n", "source": source,
+                           "args": {"text": "买眼"}, "target": target},
+            }))
+            .unwrap()
+        };
+        let window = serde_json::json!({"handle": 1, "pid": 2, "label": "LoL"});
+        assert_eq!(run_kind(&run("say(args.text)", Value::Null)), "提醒");
+        assert_eq!(
+            run_kind(&run("say(args.text, { toast = true })", Value::Null)),
+            "提醒"
+        );
+        assert_eq!(run_kind(&run("key(\"q\")", window)), "操作游戏的自动化");
+        assert_eq!(run_kind(&run("push(\"该买眼了\")", Value::Null)), "自动化");
     }
 }

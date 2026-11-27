@@ -13,6 +13,8 @@
 //!   就弹出小窗，带 `alert` 的更新再弹一次；`push_done` 收起那一行。点卡片上面那一行打开聊天、定位到这条（[`auto_card_open`]）。
 //! - **语音**：说法轮着用（每条推送一个计数），照 `kotone_agent::push_voice` 的规矩排（同一时刻只说最要紧的、20 秒冷却、
 //!   不打断、排了 5 秒过时），用她的声音说（`assistant::speak_push`）。更新时说法没变就不再说（结论没变不重复）。
+//! - **自动化也走这条路**（ADR 045 D2，程序里的 `push(text)`，[`post_automation_push`]）：不经清单核对，宿主照插件推送
+//!   的样子合成一条只有一行的推送；给她的那句（不叫模型）说是哪个自动化推的。
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -20,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use kotone_agent::push::{self as pushes, Decision, Record};
 use kotone_agent::push_voice::{Verdict, VoiceArbiter};
-use kotone_plugin_api::{Push, PushOutcome, PushPriority, PushSpec};
+use kotone_plugin_api::{Push, PushCell, PushForm, PushLine, PushOutcome, PushPriority, PushSpec};
 
 use super::*;
 
@@ -48,10 +50,134 @@ fn arbiter() -> &'static Mutex<VoiceArbiter> {
     ARBITER.get_or_init(Mutex::default)
 }
 
+/// 推送是谁发的：给她的那句（`note`）说法不一样。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sender {
+    Plugin,
+    Automation,
+}
+
+/// 自动化推送在聊天记录里的插件 id（界面按它显示本地化的“自动化”，ADR 045 D2）。
+pub const AUTOMATION_PUSH_PLUGIN: &str = "automation";
+/// 自动化推送记录里的 `pluginName`（旧版本、悬浮窗没有本地化文案时看到的字）。
+pub const AUTOMATION_PUSH_NAME: &str = "自动化";
+/// 临时程序（没保存成自动化）推送的 `trigger`。
+const ADHOC_TRIGGER: &str = "adhoc";
+
+/// 程序里的 `push(text)`（ADR 045 D2）：和插件推送同一条路，Kotone 聊天里记一条、悬浮窗显示一行，不调用模型、不出声；
+/// 附一条不叫模型的说明（[`automation_note`]），她之后在对话里看得到。她正忙时先排着，界面照样马上显示。
+/// 合成的样子见 [`automation_push`]；`key` 每条都是新的（`<执行记录 id>-<第几条>`）。
+/// 0.1.x 升级上来、还没启用琴音时没有她的聊天：报错。
+pub fn post_automation_push(
+    app: &AppHandle,
+    automation_id: Option<&str>,
+    name: &str,
+    key: &str,
+    text: &str,
+) -> Result<(), String> {
+    let (spec, push) = automation_push(automation_id, name, key, text);
+    match post_from(
+        app,
+        Sender::Automation,
+        AUTOMATION_PUSH_PLUGIN,
+        AUTOMATION_PUSH_NAME,
+        &spec,
+        push,
+    )? {
+        PushOutcome::Off => {
+            Err("还没启用琴音，没有聊天，push() 用不了：先在聊天页添加一个 DeepSeek Key".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// 自动化推送的样子：插件 `automation`，清单里那一条的 id = 自动化 id（临时程序是 `adhoc`）、名字 = 自动化的名字，
+/// 只有一行（显示几秒就收起），一格就是推的那句（最多 40 字，[`PushCell::ONE_CELL_MAX_CHARS`]）；给她的那句也是它。
+fn automation_push(
+    automation_id: Option<&str>,
+    name: &str,
+    key: &str,
+    text: &str,
+) -> (PushSpec, Push) {
+    let id = automation_id.unwrap_or(ADHOC_TRIGGER).to_string();
+    let title = match name.trim() {
+        "" => AUTOMATION_PUSH_NAME.to_string(),
+        name => name.to_string(),
+    };
+    let spec = PushSpec {
+        id: id.clone(),
+        title,
+        when: String::new(),
+        what: String::new(),
+        forms: vec![PushForm::Line],
+        until_done: false,
+        priority: PushPriority::Normal,
+        enabled_by_default: true,
+        needs: Vec::new(),
+    };
+    let push = Push {
+        trigger: id,
+        key: key.to_string(),
+        line: Some(PushLine {
+            cells: vec![PushCell {
+                text: text.to_string(),
+                tone: None,
+            }],
+        }),
+        note: text.to_string(),
+        ..Push::default()
+    }
+    .shaped(&spec);
+    (spec, push)
+}
+
+/// 自动化推送给她的那句（不叫模型；她之后在对话里看得到）：说法照插件推送（“系统消息，不是玩家说的话”），推的字按数据
+/// 附上（可能有从游戏事件填进来的、别人起的名字）。
+fn automation_note(name: &str, text: &str, at_ms: u64) -> Message {
+    Message::User {
+        text: format!(
+            "（系统消息，不是玩家说的话：自动化「{name}」推送了一条，玩家在聊天里看得到；内容见附件。）"
+        ),
+        attachments: vec![Attachment::Data {
+            label: format!("{AUTOMATION_PUSH_NAME} · {name}"),
+            text: text.to_string(),
+        }],
+        source: pushes::SOURCE.into(),
+        at_ms,
+        context: String::new(),
+    }
+}
+
+/// 给她的那句（推送带了 `note` 才有）。
+fn note_for(
+    from: Sender,
+    plugin_name: &str,
+    title: &str,
+    note: &str,
+    updated: bool,
+    at_ms: u64,
+) -> Message {
+    match from {
+        Sender::Plugin => pushes::note_message(plugin_name, title, note, updated, at_ms),
+        Sender::Automation => automation_note(title, note, at_ms),
+    }
+}
+
 /// 插件发来一条推送（`Host::push`；只有内置插件的宿主、开关和清单都核对过、`push` 已经按清单截过时才到这里）。
 /// `plugin_name` 是清单里的名字。
 pub fn post_push(
     app: &AppHandle,
+    plugin: &str,
+    plugin_name: &str,
+    spec: &PushSpec,
+    push: Push,
+) -> Result<PushOutcome, String> {
+    post_from(app, Sender::Plugin, plugin, plugin_name, spec, push)
+}
+
+fn post_from(
+    app: &AppHandle,
+    from: Sender,
     plugin: &str,
     plugin_name: &str,
     spec: &PushSpec,
@@ -67,6 +193,8 @@ pub fn post_push(
     let remembered = desk().lock().unwrap().record(&id).cloned();
     let previous = match remembered {
         Some(r) => Some(r),
+        // 自动化的 key 每条都是新的（带执行记录 id）：不用去对话里找
+        None if from == Sender::Automation => None,
         // 内存里没有（Kotone 重启过）：看当前对话里有没有
         None => looked_up(app, &id)?,
     };
@@ -88,8 +216,8 @@ pub fn post_push(
     let hash = pushes::content_hash(&record);
     let posted = match pushes::decide(previous, hash) {
         Decision::Unchanged => return Ok(PushOutcome::Unchanged),
-        Decision::Post => post_new(app, plugin_name, &push, record, &id)?,
-        Decision::Update(previous) => update(app, plugin_name, &push, record, &id, previous)?,
+        Decision::Post => post_new(app, from, plugin_name, &push, record, &id)?,
+        Decision::Update(previous) => update(app, from, plugin_name, &push, record, &id, previous)?,
     };
     desk().lock().unwrap().remember(
         id,
@@ -171,6 +299,7 @@ fn looked_up(app: &AppHandle, id: &str) -> Result<Option<Record>, String> {
 /// 新的一条：推送那条 + 给她的那句（有 note 才有），追加在当前主会话末尾。
 fn post_new(
     app: &AppHandle,
+    from: Sender,
     plugin_name: &str,
     push: &Push,
     record: Value,
@@ -183,7 +312,8 @@ fn post_new(
     let notice = pushes::notice(plugin_name, record, at_ms);
     let mut messages = vec![notice.clone()];
     if !push.note.is_empty() {
-        messages.push(pushes::note_message(
+        messages.push(note_for(
+            from,
             plugin_name,
             &title,
             &push.note,
@@ -212,6 +342,7 @@ fn post_new(
 /// 同一个 key、内容变了：原地改上一次那条（D5）。带了 note 再追加一条给她的；那段对话没了就当新的发。
 fn update(
     app: &AppHandle,
+    from: Sender,
     plugin_name: &str,
     push: &Push,
     mut record: Value,
@@ -230,12 +361,12 @@ fn update(
             // 上一次那段对话被删了：当成新的一条发到当前对话
             desk().lock().unwrap().forget(id);
             record.as_object_mut().map(|r| r.remove("updatedAtMs"));
-            return post_new(app, plugin_name, push, record, id);
+            return post_new(app, from, plugin_name, push, record, id);
         }
     };
     emit_push(app, "updated", &conversation, &notice, held, push.alert);
     if !push.note.is_empty() {
-        let note = pushes::note_message(plugin_name, &title, &push.note, true, now);
+        let note = note_for(from, plugin_name, &title, &push.note, true, now);
         if let Err(e) = post(app, &conversation, &[note], IfBusy::Wait) {
             log::log(&format!("push: 更新带的那句没记进对话：{e}"));
         }
@@ -385,4 +516,93 @@ pub fn auto_card_open(
         json!({"conversationId": conversation_id, "key": key}),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试清单 19：自动化的 `push()` 在聊天里的记录和插件推送同一个形状（界面照 `PushRecord` 画、悬浮窗显示一行）：
+    /// 插件 `automation`、trigger = 自动化 id（临时程序 `adhoc`）、title = 自动化名字、只有一行、key 是这次给的。
+    #[test]
+    fn an_automation_push_is_a_one_line_push_from_the_automation_plugin() {
+        let (spec, push) = automation_push(Some("a-1"), "提醒买眼", "run-7-2", " 记得买真眼 ");
+        let record = pushes::record(
+            AUTOMATION_PUSH_PLUGIN,
+            AUTOMATION_PUSH_NAME,
+            &spec,
+            &push,
+            "",
+        );
+        assert_eq!(
+            record,
+            json!({
+                "plugin": "automation", "pluginName": "自动化", "trigger": "a-1", "title": "提醒买眼",
+                "key": "run-7-2", "line": {"cells": [{"text": "记得买真眼"}]},
+            })
+        );
+        assert!(!spec.until_done, "一行显示几秒就收起");
+        assert!(
+            push.voice.is_empty() && push.card.is_none(),
+            "不出声、没有卡片"
+        );
+        assert_eq!(
+            pushes::id(AUTOMATION_PUSH_PLUGIN, &push.key),
+            "automation:run-7-2"
+        );
+
+        // 临时程序、没名字的
+        let (spec, push) = automation_push(None, " ", "run-8-1", "x");
+        assert_eq!(
+            (spec.id.as_str(), push.trigger.as_str()),
+            ("adhoc", "adhoc")
+        );
+        assert_eq!(spec.title, "自动化");
+        // 一行最多 40 字（脚本引擎已经挡过，这里再截一次）
+        let (_, push) = automation_push(None, "n", "k", &"长".repeat(60));
+        let cell = &push.line.unwrap().cells[0].text;
+        assert_eq!(cell.chars().count(), PushCell::ONE_CELL_MAX_CHARS);
+    }
+
+    /// 给她的那句（不叫模型、界面不显示）：说是哪个自动化推的，推的字按数据附上（可能有别人起的名字）。
+    #[test]
+    fn the_note_for_her_says_which_automation_pushed_and_attaches_the_text() {
+        let Message::User {
+            text,
+            attachments,
+            source,
+            ..
+        } = note_for(
+            Sender::Automation,
+            AUTOMATION_PUSH_NAME,
+            "提醒买眼",
+            "某人拿了龙",
+            false,
+            1,
+        )
+        else {
+            panic!("要是给她的用户消息")
+        };
+        assert_eq!(source, pushes::SOURCE);
+        assert!(
+            text.starts_with("（系统消息，不是玩家说的话：自动化「提醒买眼」推送了一条"),
+            "{text}"
+        );
+        assert!(!text.contains("某人"), "推的字不进正文");
+        assert!(!text.contains("插件"), "自动化不是插件");
+        assert!(matches!(
+            &attachments[..],
+            [Attachment::Data { label, text }] if label == "自动化 · 提醒买眼" && text == "某人拿了龙"
+        ));
+        // 插件的照旧
+        let Message::User { text, .. } =
+            note_for(Sender::Plugin, "英雄联盟", "开局战绩", "x", false, 1)
+        else {
+            panic!()
+        };
+        assert!(
+            text.contains("英雄联盟插件发来一条推送「开局战绩」"),
+            "{text}"
+        );
+    }
 }

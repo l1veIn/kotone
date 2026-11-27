@@ -114,10 +114,10 @@ pub(super) fn schedule_report(app: &AppHandle, main: &str) {
     });
 }
 
-/// “让她做”最多等主会话空下来多久（玩家一直在和她说话就算了：事件已经过去了）。
+/// 程序里的 `ask()`（以前的“让她做”）最多等主会话空下来多久（玩家一直在和她说话就算了：事件已经过去了）。
 const PROMPT_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// “让她做”等过 [`PROMPT_WAIT`] 没做时，留在聊天里给玩家看的那一句（不发给模型）。
+/// `ask()` 等过 [`PROMPT_WAIT`] 没交出去时，留在聊天里给玩家看的那一句（不发给模型）。
 fn prompt_skipped_notice(name: &str) -> Message {
     Message::Notice {
         text: format!(
@@ -133,28 +133,19 @@ fn prompt_skipped_notice(name: &str) -> Message {
     }
 }
 
-/// 自动化“让她做”（ADR 036 D8）：等主会话空下来，放一条系统消息进当前对话，让她跑一轮。
-///
-/// TODO(ADR 045 B): “让她做”成了程序里的 `ask()`，暂时没人调用；`ask_from_automation` 接上以后去掉 allow。
-/// 来源是 `automation`：界面当系统消息显示；算游戏里的入口（开口说）；不是玩家亲口说的，
-/// 这一轮不能交给后台（ADR 030 第 2 节）。触发它的游戏事件按数据附上。等过 [`PROMPT_WAIT`] 还不空就不做了
-/// （事件已经过去了），但在聊天里留一句（照 `when_free.rs` 排着，不悄悄丢；共享资源评估第二节第 9 条）。
-#[allow(dead_code)]
-pub fn run_prompt(
-    app: &AppHandle,
-    name: &str,
-    text: &str,
-    event: Option<&kotone_core::games::GameEvent>,
-) {
+/// `ask()` 交给她的那条消息。来源是 `automation`：界面当系统消息显示；算游戏里的入口（开口说）；不是玩家亲口说的，
+/// 这一轮不能交给后台（ADR 030 第 2 节）。触发它的游戏事件按数据附上（里面可能有别人起的名字；话里不能带，
+/// `ProgramAction::check_ask` 查过了）。
+fn ask_message(name: &str, text: &str, event: Option<&kotone_core::games::GameEvent>) -> Message {
     let why = match event {
-        Some(e) => format!("因为游戏事件 {} 触发", e.kind),
-        None => "被运行".to_string(),
-    };
-    let message = Message::User {
-        text: format!(
-            "（系统消息，不是玩家说的话：自动化「{name}」{why}，请照下面这句做；触发它的事件见附件。）
-{text}"
+        Some(e) => format!(
+            "因为游戏事件 {} 触发，请照下面这句做；触发它的事件见附件",
+            e.kind
         ),
+        None => "被运行，请照下面这句做".to_string(),
+    };
+    Message::User {
+        text: format!("（系统消息，不是玩家说的话：自动化「{name}」{why}。）\n{text}"),
         attachments: event
             .map(|e| Attachment::Data {
                 label: "游戏事件".into(),
@@ -165,26 +156,42 @@ pub fn run_prompt(
         source: "automation".into(),
         at_ms: now_ms(),
         context: String::new(),
-    };
-    let app = app.clone();
-    let name = name.to_string();
-    tauri::async_runtime::spawn(async move {
-        let deadline = std::time::Instant::now() + PROMPT_WAIT;
-        while !main_is_quiet(&app) {
-            if std::time::Instant::now() >= deadline {
-                log::log(&format!(
-                    "automation {name}: 她一直没空，这次“让她做”不做了"
-                ));
-                post_notice(&app, prompt_skipped_notice(&name));
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+}
+
+/// 程序里的 `ask()`（ADR 045 D2，以前的“让她做”，ADR 036 D8）：等主会话空下来，放一条系统消息（[`ask_message`]）进
+/// 当前对话，让她跑一轮。阻塞到交出去为止：交出去返回 true；等过 [`PROMPT_WAIT`] 还不空就不交了（事件已经过去了），
+/// 在聊天里留一句（照 `when_free.rs` 排着，不悄悄丢；共享资源评估第二节第 9 条），返回 false。等的时候程序被停下
+/// （`stopped`）就什么都不发，返回错误（脚本引擎记成“已取消”）。0.1 旧助手没有她：报错。
+/// 两道护栏和每局 3 次由调用方（`DesktopHost::ask`）先查。
+pub async fn ask_from_automation(
+    app: &AppHandle,
+    name: &str,
+    text: &str,
+    event: Option<&kotone_core::games::GameEvent>,
+    stopped: impl Fn() -> bool,
+) -> Result<bool, String> {
+    store(app)?;
+    let deadline = std::time::Instant::now() + PROMPT_WAIT;
+    loop {
+        if stopped() {
+            return Err("已停下，没有交给她".into());
         }
-        match send_message(&app, message) {
-            Ok(_) => log::log(&format!("automation {name}: 交给她做了")),
-            Err(e) => log::log(&format!("automation {name}: 没能交给她：{e}")),
+        if main_is_quiet(app) {
+            break;
         }
-    });
+        if std::time::Instant::now() >= deadline {
+            log::log(&format!(
+                "automation {name}: 她一直没空，这次 ask() 没交给她"
+            ));
+            post_notice(app, prompt_skipped_notice(name));
+            return Ok(false);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    send_message(app, ask_message(name, text, event))?;
+    log::log(&format!("automation {name}: 交给她了"));
+    Ok(true)
 }
 
 /// 只把一条消息记进某段对话（不调用模型）；那段对话恰好在跑就作为插话交给它，她正忙就排着（`when_free.rs`）。
@@ -381,7 +388,45 @@ mod tests {
         );
     }
 
-    /// “让她做”过时没做：留给玩家看的是一条说明（`Notice` 不发给模型，她不会照着晚做），说清是哪个自动化、为什么。
+    /// 测试清单 20：`ask()` 交给她的那条：来源 automation（不是玩家的话，这一轮不能交给后台）、话在正文、触发它的
+    /// 事件整份按数据附上；手动运行的没有附件。
+    #[test]
+    fn an_ask_goes_to_her_as_an_automation_message_with_the_event_attached() {
+        let event: kotone_core::games::GameEvent = serde_json::from_value(json!({
+            "id": "e-1", "type": "game.phase_changed", "game": "lol", "match": "m-1", "time": 5,
+            "source": "lol/client", "data": {"to": "loading", "summoner": "某人"},
+        }))
+        .unwrap();
+        let Message::User {
+            text,
+            attachments,
+            source,
+            ..
+        } = ask_message("突破口", "看看对面谁是突破口", Some(&event))
+        else {
+            panic!()
+        };
+        assert_eq!(source, "automation");
+        assert!(!is_player_message(&user(&source)));
+        assert_eq!(
+            text,
+            "（系统消息，不是玩家说的话：自动化「突破口」因为游戏事件 game.phase_changed 触发，请照下面这句做；\
+             触发它的事件见附件。）\n看看对面谁是突破口"
+        );
+        assert!(
+            matches!(&attachments[..], [Attachment::Data { label, text }] if label == "游戏事件" && text.contains("某人"))
+        );
+        let Message::User {
+            text, attachments, ..
+        } = ask_message("突破口", "看看", None)
+        else {
+            panic!()
+        };
+        assert!(text.contains("「突破口」被运行，请照下面这句做"), "{text}");
+        assert!(attachments.is_empty());
+    }
+
+    /// `ask()` 过时没交出去：留给玩家看的是一条说明（`Notice` 不发给模型，她不会照着晚做），说清是哪个自动化、为什么。
     #[test]
     fn a_skipped_prompt_leaves_a_line_for_the_player() {
         let Message::Notice {

@@ -1,7 +1,8 @@
 //! 她正忙时插进来、要进聊天的东西怎么排——只写在这里（共享资源评估第二节第 9 条、第四节“聊天流”：排队，不丢）。
 //!
-//! 谁用：插件的推送（[`post_push`]，ADR 043；原地更新也在这里排）、对局复盘的那一条（[`post_notice`]，`recap.rs`）、自动化跑完的结果
-//! （[`on_run_finished`]）、交回不是当前对话的后台结果（`relay.rs`）、“让她做”没做成时留的那一句（[`run_prompt`]）。
+//! 谁用：插件和自动化的推送（[`post_push`]、[`post_automation_push`]，ADR 043、ADR 045；原地更新也在这里排）、对局复盘的那一条
+//! （[`post_notice`]，`recap.rs`）、自动化跑完的结果（[`on_run_finished`]）、交回不是当前对话的后台结果（`relay.rs`）、
+//! 程序里的 `ask()` 没交出去时留的那一句（[`ask_from_automation`]）。
 //!
 //! 规矩（[`post_locked`]）：
 //! 1. **她这一轮就该看的**（[`IfBusy::Steer`]：自动化的结果、交回的后台结果）：那段对话正有模型在跑，就作为插话
@@ -21,8 +22,8 @@
 //! `agent/auto-cards-held.json`（名字是只有自动卡片时起的；里面就是对话消息，旧版本读得懂）。锁的先后：先“桌子”再
 //! `Inner`，反过来的地方没有。
 //!
-//! 不在这里的：要叫她开口说一句的（后台的结果交回当前对话 `relay::schedule_report`、“让她做” `relay::run_prompt`）——
-//! 那要花一次 AI 调用，另有等法；“让她做”等过 2 分钟就不做了（ADR 036，事件已经过去了），不做时照这里的规矩在聊天里
+//! 不在这里的：要叫她开口说一句的（后台的结果交回当前对话 `relay::schedule_report`、程序里的 `ask()` `relay::ask_from_automation`）——
+//! 那要花一次 AI 调用，另有等法；`ask()` 等过 2 分钟就不交了（ADR 036、ADR 045，事件已经过去了），不交时照这里的规矩在聊天里
 //! 留一句。
 
 use std::collections::HashSet;

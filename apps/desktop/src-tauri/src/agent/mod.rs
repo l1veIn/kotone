@@ -34,9 +34,7 @@ use context::*;
 use exec_tools::*;
 use host::*;
 pub use push::*;
-// TODO(ADR 045 B): 程序里的 `ask()` 接上以后（`ask_from_automation`）去掉 allow。
-#[allow(unused_imports)]
-pub use relay::run_prompt;
+pub use relay::ask_from_automation;
 use relay::*;
 pub use subagents::*;
 pub use turn::*;

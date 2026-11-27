@@ -22,10 +22,6 @@ use tokio::sync::broadcast;
 
 /// 进程和前台窗口多久看一次。
 const POLL: Duration = Duration::from_secs(2);
-/// “让她做”每局最多触发几次（D8：每次花一次 AI 调用）。
-// TODO(ADR 045 B): 换成 core 的 `Triggers::take_ask(.., kotone_core::games::ASKS_PER_MATCH)`，然后删掉这个。
-#[allow(dead_code)]
-pub const PROMPT_PER_MATCH: u32 = 3;
 
 #[derive(Default)]
 struct Inner {
@@ -97,7 +93,18 @@ pub fn push(
     dispatch(app, event.into_iter().collect());
 }
 
-/// 有事件触发的自动化。每局叫她几次看程序里的 `ask()`（ADR 045 D2，`Triggers::take_ask`）。
+/// 按游戏事件触发的执行要叫她一次（程序里的 `ask()`，ADR 045 D2）：这一局这个自动化在这个游戏上还没到
+/// [`kotone_core::games::ASKS_PER_MATCH`] 次就记一次、返回 true；到了返回 false（这次不交给她）。和触发次数同处清零
+/// （一局结束、游戏退出）。手动、热键、定时运行的不走这里（不限）。
+pub fn take_ask(automation: &str, game: &str) -> bool {
+    inner()
+        .lock()
+        .unwrap()
+        .triggers
+        .take_ask(automation, game, kotone_core::games::ASKS_PER_MATCH)
+}
+
+/// 有事件触发的自动化。每局叫她几次看程序里的 `ask()`（[`take_ask`]）。
 fn armed(automations: &[Automation]) -> Vec<Armed<'_>> {
     automations
         .iter()

@@ -841,6 +841,8 @@ fn now_ms() -> u64 {
 
 struct DesktopDelivery {
     app: AppHandle,
+    /// 用旧语音引擎（0.1 升级上来的提醒，[`AssistantConfig::legacy_tts_engine`]）。
+    legacy_voice: bool,
 }
 
 // Dropping a future (cancellation, shutdown, timeout) must also stop native work.
@@ -865,7 +867,6 @@ impl Drop for OutputGuard {
 type DeliveryFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>;
 
-// TODO(ADR 045 B): `deliver_text` 接收取消 token 和 legacy_voice 标记（程序里的 `say()` 用）。
 impl DesktopDelivery {
     fn deliver<'a>(
         &'a self,
@@ -929,7 +930,7 @@ impl DesktopDelivery {
                 }
                 let mut speech_error = None;
                 if use_voice {
-                    let engine = if is_legacy_reminder_session(&reminder.session_id) {
+                    let engine = if self.legacy_voice {
                         config.legacy_tts_engine()
                     } else {
                         effective_engine(&self.app, &config)
@@ -1314,6 +1315,19 @@ pub async fn deliver_text(
     text: String,
     kinds: Vec<DeliveryKind>,
 ) -> Result<Vec<DeliveryKind>, String> {
+    deliver_text_with(app, text, kinds, CancellationToken::default(), false).await
+}
+
+/// [`deliver_text`]，可以从外面停下（程序里的 `say()`，ADR 045 D3）：`cancel` 取消后排队、等麦克风、说话、等弹幕
+/// 都马上结束，语音停下、弹幕收起（投递自己收尾，调用方再等它一会儿）。`legacy_voice` = 用旧语音引擎
+/// （0.1 升级上来的提醒）。
+pub async fn deliver_text_with(
+    app: &AppHandle,
+    text: String,
+    kinds: Vec<DeliveryKind>,
+    cancel: CancellationToken,
+    legacy_voice: bool,
+) -> Result<Vec<DeliveryKind>, String> {
     let delivery = if kinds.is_empty() {
         app.state::<crate::SharedState>()
             .settings
@@ -1336,9 +1350,12 @@ pub async fn deliver_text(
         status: kotone_core::reminders::ReminderStatus::Delivering,
         error: None,
     };
-    DesktopDelivery { app: app.clone() }
-        .deliver(&reminder, CancellationToken::default())
-        .await?;
+    DesktopDelivery {
+        app: app.clone(),
+        legacy_voice,
+    }
+    .deliver(&reminder, cancel)
+    .await?;
     Ok(delivery)
 }
 
