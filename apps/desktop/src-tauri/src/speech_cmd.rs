@@ -320,6 +320,22 @@ pub fn speech_providers(app: AppHandle) -> Vec<ProviderInfo> {
     providers(&app)
 }
 
+/// 这个模型配置里的 Key 存了没有（「设置 → 模型」里 `secret` 字段显示“已保存”用，ADR 048；不返回 Key）。
+#[tauri::command]
+pub fn model_secret_saved(app: AppHandle, model_id: String) -> bool {
+    kotone_core::model_secrets::get_from(
+        app.state::<SharedState>().secrets.as_ref(),
+        model_id.trim(),
+    )
+    .is_some()
+}
+
+/// 她现在用的声音（“自动”时是哪一家、怎么计费；声音设置页顶上那句）。
+#[tauri::command]
+pub fn speech_current(app: AppHandle) -> Value {
+    current(&app)
+}
+
 /// 这一家的声音（不管现在选的是哪家）：Kokoro、系统语音和在线的几家。
 #[tauri::command]
 pub async fn speech_voices(app: AppHandle, model_id: String) -> Result<Vec<SpeechVoice>, String> {

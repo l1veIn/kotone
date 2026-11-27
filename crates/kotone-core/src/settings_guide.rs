@@ -146,7 +146,7 @@ pub const FIELDS: &[Field] = &[
     f("assistant.route", "呼叫交给谁", "琴音 → 唤醒", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "琴音 → 交互 → 声音与弹幕", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
     f("assistant.speechEngine", "本地语音合成", "琴音 → 交互 → 声音与弹幕", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
-    f("assistant.ttsModelId", "在线语音合成", "设置 → 模型 → 语音合成", "空 = 自动（默认）：她用的 API 连接是 DeepSeek 且有 Key 时用 DeepSeek 语音，否则用本地的 assistant.speechEngine。在线语音按字数计费。一般用 models.activate {category: tts}。", &[("", "自动（默认）"), ("local", "本地（assistant.speechEngine）"), ("deepseek-tts", "DeepSeek 语音（在线）"), ("openai-compat-tts", "OpenAI 兼容在线语音"), ("volcano-tts", "火山在线语音")], NOW),
+    f("assistant.ttsModelId", "她的声音用哪家", "琴音 → 交互 → 声音与弹幕", "空 = 自动（默认）：跟着她用的模型走——她的 API 连接是 DeepSeek / MiniMax / 阿里云百炼、那家有 Key 时用那家的声音，否则用本地的 assistant.speechEngine。在线声音按字数计费，怎么计费见 speech.status。Key 不写在这里：DeepSeek、MiniMax、百炼的声音自动用同一家 API 连接的 Key，其余请玩家在声音与弹幕页填。声音、模型写 modelConfigs.<ID>.voice / model。一般用 models.activate {category: tts}。", &[("", "自动（默认）"), ("local", "本地（assistant.speechEngine）"), ("deepseek-tts", "DeepSeek（在线）"), ("minimax-tts", "MiniMax（在线）"), ("dashscope-tts", "阿里云百炼（在线）"), ("siliconflow-tts", "硅基流动（在线）"), ("volcano-tts", "火山引擎（在线）"), ("openai-compat-tts", "自定义（OpenAI 兼容接口，在线；地址、模型、声音名要自己填）")], NOW),
     f("assistant.voiceId", "系统语音音色", "琴音 → 交互 → 声音与弹幕", "Windows 系统语音的音色 ID；空 = 默认。", NONE, NOW),
     f("assistant.kokoroVoiceId", "Kokoro 音色", "琴音 → 交互 → 声音与弹幕", "如 kokoro:zf_001。", NONE, NOW),
     f("assistant.speechVolume", "语音音量", "琴音 → 交互 → 声音与弹幕", "0–100。", NONE, NOW),

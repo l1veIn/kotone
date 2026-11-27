@@ -682,6 +682,14 @@ export async function getSettingsLoadWarning(): Promise<string | null> {
 }
 
 export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
+  // 模型配置里的 Key 不留在设置里（ADR 048，和后端 model_secrets::take 一样）
+  for (const [model, field] of [["volcano-asr", "accessToken"], ["iflytek-asr", "apiSecret"]] as const) {
+    const config = (patch as { modelConfigs?: Record<string, Record<string, unknown> | undefined> }).modelConfigs?.[model];
+    if (config && field in config) {
+      if (String(config[field] ?? "").trim()) mockModelSecrets.add(model);
+      delete config[field];
+    }
+  }
   const wasBrowserOn = mock.settings.browser?.enabled !== false;
   const merged = clone(mock.settings) as unknown as Record<string, unknown>;
   mergeJson(merged, patch);
@@ -1395,16 +1403,16 @@ const mockCatalog: CatalogModel[] = [
     apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "服务商条款", files: [],
   },
   {
-    category: "tts", id: "openai-compat-tts", engineId: "openai", displayName: "OpenAI 兼容语音合成（在线）",
-    description: "调用 /audio/speech 接口；每次播报都会把文字发给服务商", sizeBytes: 0, backend: "remote", downloaded: true,
-    ready: false, state: "not-configured", reason: "在线语音合成还没有选择 API 连接（模型 → 语音合成）", active: false,
+    category: "tts", id: "openai-compat-tts", engineId: "openai", displayName: "自定义（OpenAI 兼容接口）（在线）",
+    description: "填地址、模型和声音名，接任何支持 /audio/speech 的服务；每次说话都会把文字发给它", sizeBytes: 0, backend: "remote", downloaded: true,
+    ready: false, state: "not-configured", reason: "自定义语音接口还没有填地址", active: false,
     recommended: false, languages: ["zh"], dataEgress: "text",
     configSchema: [
-      { key: "connection", label: "API 连接", kind: "connection", default: "", options: [], required: true },
-      { key: "model", label: "合成模型", kind: "string", default: "gpt-4o-mini-tts", options: [], required: false },
-      { key: "voice", label: "声音（服务商的声音名，如 alloy）", kind: "string", default: "alloy", options: [], required: true },
+      { key: "baseUrl", label: "接口地址", kind: "string", default: "", options: [], required: false },
+      { key: "model", label: "合成模型", kind: "string", default: "", options: [], required: true },
+      { key: "voice", label: "声音（服务商的声音名）", kind: "string", default: "", options: [], required: true },
     ],
-    apiKeyUrl: "https://platform.openai.com/api-keys", license: "服务商条款", files: [],
+    apiKeyUrl: null, license: "服务商条款", files: [],
   },
   {
     category: "tts", id: "kokoro-zh", engineId: "kokoro", displayName: "Kokoro 中文（本地神经语音）",
@@ -1479,7 +1487,7 @@ export async function activateCatalogModel(category: ModelCategory, id: string):
   if (m.backend === "local" && !m.downloaded) throw new Error(`${m.displayName} 尚未下载，请先下载再切换`);
   if (category === "ocr") mock.settings.ocr.activeModelId = id;
   else if (category === "search") mock.settings.search = { activeModelId: id };
-  else if (id === "openai-compat-tts" || id === "volcano-tts" || id === "deepseek-tts") mock.settings.assistant.ttsModelId = id;
+  else if (SPEECH_ONLINE_IDS.includes(id)) mock.settings.assistant.ttsModelId = id;
   else {
     mock.settings.assistant.speechEngine = id === "kokoro-zh" ? "kokoro" : "system";
     // 明确选系统语音写 "local"，不再参与“自动”
@@ -1797,4 +1805,118 @@ export function browserPreviewStep(step: "closed" | "playing" | "handover" | "er
 
 if (typeof window !== "undefined" && import.meta.env?.DEV) {
   (window as unknown as { __kotoneBrowserPreview?: typeof browserPreviewStep }).__kotoneBrowserPreview = browserPreviewStep;
+}
+
+
+// ---------- 她的声音（ADR 048）：声音设置页的服务商、Key、声音、试听 ----------
+
+/** 在线声音的几家（和后端 `kotone_tts::catalog::PROVIDERS` 同一个顺序）。 */
+const SPEECH_ONLINE_IDS = ["deepseek-tts", "minimax-tts", "dashscope-tts", "siliconflow-tts", "volcano-tts", "openai-compat-tts"];
+const speechProviderTable: Record<string, { provider: string; apiKeyUrl: string | null; defaultModel: string; defaultVoice: string; rate: boolean; regions: boolean; keyOnly: boolean; vendor?: string[] }> = {
+  "deepseek-tts": { provider: "deepseek", apiKeyUrl: "https://platform.deepseek.com/api_keys", defaultModel: "", defaultVoice: "stella", rate: false, regions: false, keyOnly: true, vendor: ["deepseek"] },
+  "minimax-tts": { provider: "minimax", apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key", defaultModel: "speech-2.8-turbo", defaultVoice: "female-shaonv", rate: true, regions: true, keyOnly: true, vendor: ["minimax-cn", "minimax"] },
+  "dashscope-tts": { provider: "dashscope", apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key", defaultModel: "qwen3-tts-flash", defaultVoice: "Cherry", rate: false, regions: true, keyOnly: true, vendor: ["dashscope", "dashscope-intl"] },
+  "siliconflow-tts": { provider: "siliconflow", apiKeyUrl: "https://cloud.siliconflow.cn/account/ak", defaultModel: "FunAudioLLM/CosyVoice2-0.5B", defaultVoice: "FunAudioLLM/CosyVoice2-0.5B:claire", rate: true, regions: false, keyOnly: true },
+  "volcano-tts": { provider: "volcano", apiKeyUrl: "https://console.volcengine.com/speech/app", defaultModel: "volcano_tts", defaultVoice: "BV700_streaming", rate: true, regions: false, keyOnly: false },
+  "openai-compat-tts": { provider: "openai", apiKeyUrl: null, defaultModel: "", defaultVoice: "", rate: true, regions: false, keyOnly: false },
+};
+/** 预览里“存进凭据库”的声音 Key（只记有没有，不记值）。 */
+const mockSpeechKeys = new Map<string, "cn" | "intl" | null>();
+const mockSpeechVoices: Record<string, { id: string; name: string }[]> = {
+  deepseek: [{ id: "deepseek/stella", name: "海星（女声）" }, { id: "deepseek/tide", name: "暗潮（男声）" }],
+  minimax: [
+    { id: "minimax/my-voice-01", name: "我的声音（复刻）· my-voice-01" },
+    { id: "minimax/female-shaonv", name: "少女音色" }, { id: "minimax/female-yujie", name: "御姐音色" },
+    { id: "minimax/Chinese (Mandarin)_Warm_Girl", name: "温暖少女" }, { id: "minimax/male-qn-qingse", name: "青涩青年音色" },
+  ],
+  dashscope: [{ id: "dashscope/Cherry", name: "芊悦（女）" }, { id: "dashscope/Serena", name: "苏瑶（女）" }, { id: "dashscope/Sunny", name: "四川话 · 晴儿（女）" }],
+  siliconflow: [{ id: "siliconflow/FunAudioLLM/CosyVoice2-0.5B:claire", name: "温柔女声（claire）" }, { id: "siliconflow/FunAudioLLM/CosyVoice2-0.5B:alex", name: "沉稳男声（alex）" }],
+  volcano: [{ id: "volcano/BV700_streaming", name: "灿灿（女声）" }, { id: "volcano/BV001_streaming", name: "通用女声" }, { id: "volcano/BV002_streaming", name: "通用男声" }],
+  kokoro: [{ id: "kokoro/zf_001", name: "中文女声 001" }, { id: "kokoro/zf_003", name: "中文女声 003" }, { id: "kokoro/zf_017", name: "中文女声 017" }],
+};
+
+function speechConfig(id: string): Record<string, unknown> {
+  return (mock.settings.modelConfigs[id] ?? {}) as Record<string, unknown>;
+}
+
+function mockSpeechProvider(id: string) {
+  const spec = speechProviderTable[id];
+  const config = speechConfig(id);
+  let keySource: { kind: string; id?: string; name?: string } = { kind: "none" };
+  let region: "cn" | "intl" | null = null;
+  if (mockSpeechKeys.has(id)) {
+    keySource = { kind: "own" };
+    region = spec.regions ? mockSpeechKeys.get(id) ?? "cn" : null;
+  } else if (spec.vendor) {
+    const her = mock.settings.assistant.connectionId;
+    const all = mock.settings.connections.filter((c) => spec.vendor!.includes(c.provider));
+    const found = all.find((c) => c.id === her) ?? all[0];
+    if (found) {
+      keySource = { kind: "connection", id: found.id, name: found.displayName };
+      region = spec.regions ? (found.provider.endsWith("intl") || found.provider === "minimax" ? "intl" : "cn") : null;
+    }
+  } else if (id === "openai-compat-tts") keySource = { kind: "notNeeded" };
+  let reason: string | null = null;
+  if (id === "openai-compat-tts") {
+    if (!String(config.baseUrl ?? "").trim()) reason = "自定义语音接口还没有填地址";
+    else if (!String(config.model ?? "").trim()) reason = "自定义语音接口还没有填模型名";
+    else if (!String(config.voice ?? "").trim()) reason = "自定义语音接口还没有填声音名";
+  } else if (keySource.kind === "connection" && !mockConnectionSecrets.has(keySource.id!)) reason = `API 连接「${keySource.name}」还没有保存 Key`;
+  else if (keySource.kind === "none") reason = id === "volcano-tts" ? "缺少 Access Token：请填写，或先在语音识别里填写火山配置" : "还没有 Key";
+  return {
+    modelId: id, provider: spec.provider, displayName: id, description: "", billing: "", apiKeyUrl: spec.apiKeyUrl,
+    defaultModel: spec.defaultModel, defaultVoice: spec.defaultVoice, rate: spec.rate, regions: spec.regions, keyOnly: spec.keyOnly,
+    active: mock.settings.assistant.ttsModelId === id, ready: reason === null, reason, keySource, region,
+  };
+}
+
+export async function speechProviders() {
+  return SPEECH_ONLINE_IDS.map(mockSpeechProvider);
+}
+
+/** 她现在用的声音（预览里“自动”只认她的连接是不是 DeepSeek / MiniMax / 百炼、有没有 Key）。 */
+export async function speechCurrent() {
+  const assistant = mock.settings.assistant;
+  const auto = !assistant.ttsModelId && assistant.speechEngine === "system";
+  let modelId = assistant.ttsModelId && SPEECH_ONLINE_IDS.includes(assistant.ttsModelId) ? assistant.ttsModelId
+    : assistant.speechEngine === "kokoro" ? "kokoro-zh" : "system-speech";
+  if (auto) {
+    const her = mock.settings.connections.find((c) => c.id === assistant.connectionId);
+    const vendor = her && Object.entries(speechProviderTable).find(([, spec]) => spec.vendor?.includes(her.provider));
+    if (her && vendor && mockConnectionSecrets.has(her.id) && vendor[0] !== "siliconflow-tts") modelId = vendor[0];
+  }
+  const online = SPEECH_ONLINE_IDS.includes(modelId);
+  const provider = online ? mockSpeechProvider(modelId) : null;
+  return {
+    modelId, auto, online, ready: provider?.ready ?? true, reason: provider?.reason ?? null,
+    keySource: provider?.keySource ?? { kind: "notNeeded" }, region: provider?.region ?? null, rate: provider?.rate ?? true,
+  };
+}
+
+/** 保存 Key：预览不联网，“bad” 当作被拒的 Key。 */
+export async function speechKeySave(modelId: string, key: string) {
+  if (!speechProviderTable[modelId]) throw new Error(`不认识的声音服务商 ${modelId}`);
+  if (!key.trim()) throw new Error("Key 是空的");
+  if (key.trim() === "bad") return { ok: false, saved: false, message: "这个 Key 被拒了（预览）", region: null };
+  const region = speechProviderTable[modelId].regions ? (key.includes("intl") ? "intl" : "cn") : null;
+  mockSpeechKeys.set(modelId, region);
+  return { ok: true, saved: true, message: "可以用了", region };
+}
+
+export async function speechKeyClear(modelId: string) {
+  mockSpeechKeys.delete(modelId);
+}
+
+/** 当前引擎的声音（预览里系统语音读不到，返回空）。 */
+export async function speechVoices() {
+  const current = await speechCurrent();
+  if (current.modelId === "kokoro-zh") return clone(mockSpeechVoices.kokoro);
+  const provider = speechProviderTable[current.modelId]?.provider;
+  return provider ? clone(mockSpeechVoices[provider] ?? []) : [];
+}
+
+/** 模型配置里的 Key 存了没有（预览：保存过一次就算有，值不留）。 */
+const mockModelSecrets = new Set<string>();
+export async function modelSecretSaved(modelId: string): Promise<boolean> {
+  return mockModelSecrets.has(modelId);
 }

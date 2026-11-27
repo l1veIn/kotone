@@ -40,9 +40,9 @@ test("chat is home and keeps the draft across the role tabs and 设置; speech l
   await expect(page.getByTestId("settings-call")).toContainText("呼叫琴音");
   await openSettingsTab(page, "reply");
   const output = page.getByTestId("output-settings");
-  // 默认“自动”：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则系统语音（预览里没有 DeepSeek 连接）
-  await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "auto");
-  await expect(output.getByTestId("auto-speech-info")).toContainText("自动用 DeepSeek 语音");
+  // 默认“自动”：跟着她用的模型走（ADR 048）；预览里她没有连接，用系统语音
+  await expect(output.getByLabel("服务商", { exact: true })).toHaveAttribute("data-value", "auto");
+  await expect(output.getByTestId("auto-speech-info")).toContainText("Windows 系统语音");
   await expect(output.getByRole("button", { name: "下载语音模型", exact: true })).toHaveCount(0);
   await screenshot(output, { path: testInfo.outputPath("output-settings.png") });
 });
@@ -160,6 +160,14 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await output.getByLabel("播报音量").fill("65");
   await output.getByLabel("播报音量").dispatchEvent("change");
   await expect(output.getByText("65%", { exact: true })).toBeVisible();
+  // 她用的是通义千问（百炼）的连接：“自动”就用百炼的声音（ADR 048），这一家不能调语速
+  await expect(output.getByTestId("auto-speech-info")).toContainText("阿里云百炼");
+  await expect(output.getByTestId("speech-billing")).toContainText("0.8 元");
+  await expect(output.getByLabel("播报语速")).toBeDisabled();
+  await expect(output).toContainText("这一家不能调语速");
+  // 换成系统语音就能调
+  await output.getByLabel("服务商", { exact: true }).click();
+  await page.getByRole("option", { name: "Windows · 系统语音", exact: true }).click();
   await output.getByLabel("播报语速").fill("2");
   await output.getByLabel("播报语速").dispatchEvent("change");
   await expect(output.getByText("+2", { exact: true })).toBeVisible();

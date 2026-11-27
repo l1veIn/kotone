@@ -29,6 +29,8 @@
     type ModelInstallGuide,
     type ModelsDirInfo,
   } from "../../../../lib/ipc";
+  import { modelSecretSaved } from "../../../../lib/ipc";
+  import { openTarget } from "../../../../lib/stores/navigation";
   import { settingsStore, patchSettings, toast, toastInfo, toastWarn, errText } from "../../../../lib/stores/ui";
   import { runtimeStore } from "../../../../lib/stores/runtime";
   import ManualDownloadDialog from "../../../../lib/components/ManualDownloadDialog.svelte";
@@ -333,6 +335,24 @@
     );
   }
 
+  /** 模型配置里的 Key（`secret` 字段）：存在凭据库，不在设置里（ADR 048）。这里只记“存了没有”，不回显。 */
+  let secretSaved = $state<Record<string, boolean>>({});
+  async function refreshSecret(modelId: string) {
+    try { secretSaved[modelId] = await modelSecretSaved(modelId); } catch { /* 读不了就当没存 */ }
+  }
+  $effect(() => {
+    for (const model of visibleModels) {
+      if (model.configSchema.some((field) => field.kind === "secret")) void refreshSecret(model.id);
+    }
+  });
+  async function saveSecret(modelId: string, key: string, input: HTMLInputElement) {
+    const value = input.value.trim();
+    if (!value) return;
+    input.value = "";
+    await saveField(modelId, key, value);
+    await refreshSecret(modelId);
+  }
+
   function isStreaming(model: ModelInfo): boolean {
     return model.io === "streaming";
   }
@@ -442,7 +462,13 @@
   <AsrRuntimeCard models={visibleModels} />
 {/if}
 
-{#if category !== "asr"}
+{#if category === "tts"}
+  <!-- 她的声音只在一个地方配（ADR 048）：这里只留一行，点了去声音与弹幕 -->
+  <section class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-hairline bg-card/70 p-4" data-testid="models-tts-moved">
+    <p class="m-0 text-xs leading-relaxed text-muted-foreground">{m.system_models_tts_moved()}</p>
+    <Button size="sm" variant="outline" onclick={() => openTarget({ page: "assistant", section: "reply", anchor: "settings-reply-output" })}>{m.system_models_tts_open()}</Button>
+  </section>
+{:else if category !== "asr"}
   {#key category}
     <CatalogModelList {category} />
   {/key}
@@ -646,6 +672,19 @@
                     <p class="mt-1 mb-0 text-[11px] text-muted-foreground/80">
                       {m.system_models_connection_hint()}
                     </p>
+                  {:else if field.kind === "secret"}
+                    <!-- Key 在凭据库里：只显示存了没有，不回显；填了按回车（或离开输入框）就存 -->
+                    <input
+                      type="password"
+                      autocomplete="off"
+                      data-testid="model-secret-{model.id}"
+                      class="mt-1 h-8 w-full rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none focus:border-ring focus:ring-3 focus:ring-ring/30"
+                      placeholder={secretSaved[model.id] ? m.system_models_secret_placeholder_saved() : m.system_models_secret_placeholder_new()}
+                      onchange={(e) => void saveSecret(model.id, field.key, e.currentTarget)}
+                    />
+                    {#if secretSaved[model.id]}
+                      <p class="mt-1 mb-0 text-[11px] text-success" data-testid="model-secret-saved-{model.id}">{m.system_models_secret_saved()}</p>
+                    {/if}
                   {:else}
                     <input
                       class="mt-1 h-8 w-full rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none focus:border-ring focus:ring-3 focus:ring-ring/30"

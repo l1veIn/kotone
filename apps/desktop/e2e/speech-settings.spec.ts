@@ -79,6 +79,10 @@ async function openNativeSettings(page: Page) {
       if (command === "list_reminders") return [];
       if (command === "get_startup_options") return { onboarding: "never" };
       if (command === "update_settings") return browser.updateSettings(args.patch);
+      // 她的声音（ADR 048）：服务商状态、Key 都走浏览器预览的那份（不联网）
+      if (command === "speech_key_save") return browser.speechKeySave(args.modelId, args.key);
+      if (command === "speech_key_clear") return browser.speechKeyClear(args.modelId);
+      if (command === "speech_try_voice") return null;
       // 插件清单照预览的那份（语音输入是插件的 App，ADR 038：从「插件 → 语音输入」进）
       if (command === "plugins_list") return (await import("/src/lib/ipc/pluginsMock.ts")).listPlugins();
       if (command.startsWith("plugin:")) return null;
@@ -98,12 +102,12 @@ test("Kokoro offers three Chinese voices and switching engines preserves each vo
   await expect(page.getByRole("option")).toHaveText(["中文女声 001", "中文女声 003", "中文女声 017"]);
   await page.getByRole("option", { name: "中文女声 017", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveAttribute("data-value", "kokoro/zf_017");
-  await speech.getByLabel("语音引擎", { exact: true }).click();
+  await speech.getByLabel("服务商", { exact: true }).click();
   await page.getByRole("option", { name: "Windows · 系统语音", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveText("系统测试声音");
   await speech.getByLabel("播报声音", { exact: true }).click();
   await page.getByRole("option", { name: "系统默认声音", exact: true }).click();
-  await speech.getByLabel("语音引擎", { exact: true }).click();
+  await speech.getByLabel("服务商", { exact: true }).click();
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveText("中文女声 017");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
@@ -122,7 +126,7 @@ test("browser preview clearly shows an uninstalled model, disables download and 
   await page.goto("/#/settings?onboarding=never");
   await openSettingsTab(page, "reply");
   await expect(page.getByTestId("auto-speech-info")).toBeVisible();
-  await page.getByLabel("语音引擎", { exact: true }).click();
+  await page.getByLabel("服务商", { exact: true }).click();
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
   await expect(page.getByTestId("speech-model")).toContainText("尚未下载");
   await expect(page.getByRole("button", { name: "下载语音模型", exact: true })).toBeDisabled();
@@ -191,13 +195,17 @@ test("leaving the page discards old model and voice responses while fresh events
 test("speech engine: automatic by default, DeepSeek or an explicit system choice are saved distinctly", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await openSettingsTab(page, "reply");
-  const engine = page.getByLabel("语音引擎", { exact: true });
+  const engine = page.getByLabel("服务商", { exact: true });
   await expect(engine).toHaveAttribute("data-value", "auto");
+  // “自动”写明现在用的是哪一家、怎么计费（预览里她没有连接：系统语音，不花钱）
+  await expect(page.getByTestId("auto-speech-info")).toContainText("Windows 系统语音");
+  await expect(page.getByTestId("speech-billing")).toContainText("不花钱");
   const saved = async () => (await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings())).assistant;
 
   await engine.click();
   await page.getByRole("option", { name: "在线 · DeepSeek 语音", exact: true }).click();
-  await expect(page.getByTestId("online-speech-info")).toContainText("DeepSeek 语音");
+  await expect(page.getByTestId("online-speech-info")).toBeVisible();
+  await expect(page.getByTestId("speech-billing")).toContainText("DeepSeek");
   expect((await saved()).ttsModelId).toBe("deepseek-tts");
 
   await engine.click();
@@ -206,7 +214,51 @@ test("speech engine: automatic by default, DeepSeek or an explicit system choice
   expect(await saved()).toMatchObject({ ttsModelId: "local", speechEngine: "system" });
 
   await engine.click();
-  await page.getByRole("option", { name: "自动（默认）", exact: true }).click();
+  await page.getByRole("option", { name: "自动（跟她用的模型走）", exact: true }).click();
   await expect(page.getByTestId("auto-speech-info")).toBeVisible();
   expect(await saved()).toMatchObject({ ttsModelId: "", speechEngine: "system" });
+});
+
+// ADR 048：选服务商 → 就地填 Key（先试一次，被拒就不存）→ 选声音；同一家 API 连接的 Key 直接用；预览里不往外发请求。
+test("MiniMax: key is checked before saving, voices come from the provider and a same-provider connection key is reused", async ({ page, baseURL }) => {
+  const origin = new URL(baseURL!).origin;
+  const external: string[] = [];
+  page.on("request", (request) => {
+    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin && !/^(127\.0\.0\.1|localhost)$/.test(new URL(request.url()).hostname)) external.push(request.url());
+  });
+  await page.goto("/#/settings?onboarding=never");
+  await openSettingsTab(page, "reply");
+  const speech = page.getByTestId("speech-settings");
+  await speech.getByLabel("服务商", { exact: true }).click();
+  await page.getByRole("option", { name: "在线 · MiniMax", exact: true }).click();
+  await expect(speech.getByTestId("speech-billing")).toContainText("Speech 2.8 Turbo");
+  const key = speech.getByTestId("speech-key-input");
+  await key.fill("bad");
+  await speech.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(speech.getByTestId("speech-key-check")).toContainText("被拒");
+  await key.fill("sk-good");
+  await speech.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(speech.getByTestId("speech-key-check")).toContainText("可以用了 · 国内站");
+  await expect(speech.getByTestId("speech-key-source")).toContainText("已保存");
+  // Key 不进设置
+  const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  expect(JSON.stringify(settings)).not.toContain("sk-good");
+  // 声音列表是这一家的（MiniMax 有 Key 时含复刻的声音），默认少女音色
+  const voice = speech.getByLabel("播报声音", { exact: true });
+  await expect(voice).toHaveAttribute("data-value", "minimax/female-shaonv");
+  await voice.click();
+  await page.getByRole("option", { name: "我的声音（复刻）· my-voice-01", exact: true }).click();
+  await expect(voice).toHaveAttribute("data-value", "minimax/my-voice-01");
+  expect((await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings())).modelConfigs["minimax-tts"]).toMatchObject({ voice: "my-voice-01" });
+  // 清掉自己填的，换成同一家 API 连接的 Key
+  await speech.getByRole("button", { name: "清掉", exact: true }).click();
+  await expect(key).toBeVisible();
+  await page.evaluate(async () => {
+    const ipc = await import("/src/lib/ipc.ts");
+    await ipc.upsertConnection({ id: "mm-cn", displayName: "MiniMax（国内）", kind: "remote", provider: "minimax-cn", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-M3" }, "sk-connection");
+    const { settingsStore } = await import("/src/lib/stores/ui.ts");
+    settingsStore.set(await ipc.getSettings());
+  });
+  await expect(speech.getByTestId("speech-key-source")).toContainText("用的是 API 连接「MiniMax（国内）」的 Key");
+  expect(external).toEqual([]);
 });

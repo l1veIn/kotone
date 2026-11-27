@@ -44,7 +44,7 @@
 | API 连接 | 一个服务商的地址、模型和 Key（设置 → API 连接）；她用哪个连接、哪个模型在聊天页输入框旁的“她用的模型”里选 | `AI 连接`、`API连接` | `Connection`、`connectionId` | API connection |
 | 服务商 | DeepSeek、阿里云百炼、火山等 | `提供商`、`厂商` | `provider` | provider |
 | 回答方式 | 她的回答和提醒用 语音 / 弹幕 / 两种都用 | `提醒方式`、`播报方式`、`回复方式` | `assistant.defaultDelivery` | reply mode (voice / floating text) |
-| 声音 / 语音合成 | 她的声音（音色、语速、音量）；“语音合成”只用在模型分类上 | `TTS`、`朗读` | `tts*`、`SpeechOutput` | voice / text-to-speech |
+| 声音 / 语音合成 | 她的声音（音色、语速、音量）；只在角色页「交互 → 声音与弹幕」一处配：选服务商、就地填 Key、选声音（ADR 048）。“语音合成”只用在模型分类和工具上 | `TTS`、`朗读` | `tts*`、`SpeechOutput` | voice / text-to-speech |
 | 语音识别 | 把说的话变成字（本地 / 在线）。只有一份，在本体：呼叫、语音输入、同传都用它，同一个模型只加载一份（ADR 039 D2）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` | speech recognition |
 | 同传 | 插件（ADR 021、038）：她在后台听你指定的程序（游戏、Discord、KOOK……，按程序录音）里队友说的话——不是你的麦克风，也录不到她自己——一句一句翻成你的语言，用气泡（默认，悬浮窗里一行）或弹幕显示，并记进聊天里一局一张的“这局的同传”卡片（推送，ADR 043 D11）。识别用本体的语音识别：你选的识别听得懂外语（自动判语种的在线识别，或本地 SenseVoice）就用它，否则用本地 SenseVoice（中英日韩粤）；用在线识别时队友的每一句都会发给它识别、每句计费。停止本地语音识别时，用本地识别的同传一起停（ADR 039 实施记录“同传用本体的识别”） | | `plugins/interpreter`、`voice.listen.*`、`voice_listen.rs`、`kotone_stt::listen` | interpreter |
 | 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` | conversation (聊天 = chat) |
@@ -55,7 +55,7 @@
 | 每日推荐 / 私人 FM | 网易云按你的口味每天给的一组歌 / 一首接一首的电台 | | `daily`、`fm` | Daily picks / Personal FM |
 | 我喜欢的音乐 / 红心 | 网易云里你红心过的歌（歌单里排第一）；红心 = 把这首加进去 | | `liked`、`like` | Liked songs / Like |
 | 歌单 / 播放列表 | 歌单是网易云里的一组歌；播放列表是正在放的这一串 | | `Playlist`、`queue` | playlist / queue |
-| 试听 | 要 VIP 的歌给没会员的账号只有 30–45 秒；她不放试听，改放能完整放的版本并说一声 | | `trial` | preview |
+| 试听 | 要 VIP 的歌给没会员的账号只有 30–45 秒；她不放试听，改放能完整放的版本并说一声。也指先听一下一个声音或音效（声音与弹幕页声音旁的“试听”、「设置 → 声音」里的音效，ADR 048） | | `trial` | preview |
 | VIP / 付费 / 无版权 | 放不了的三种：要会员、要单独买（付费专辑）、网易云没有版权；列表里灰掉并标出来 | | `Playable` | VIP / Paid / Unavailable |
 | 音质 | 标准 / 极高 / 无损；默认极高（非 VIP 的上限），无损要 VIP | | `music.quality` | Quality: Standard / Very high / Lossless |
 | 全部页面 / 恢复默认 | 左侧栏“⋯”打开：页面在组内上移下移、显示隐藏（设置、关于固定）；恢复默认 = 默认顺序、全部显示 | | `ui.sidebar` | All pages / Restore defaults |

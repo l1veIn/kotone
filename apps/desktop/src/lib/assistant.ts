@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri, type AssistantInteractionMode } from "./ipc";
+import * as browserMock from "./ipc/browserMock";
 import { m } from "./paraglide/messages.js";
 
 export interface AssistantVoiceSession { sessionId: string; interactionMode: AssistantInteractionMode }
@@ -92,6 +93,7 @@ export async function cancelReminder(id: string): Promise<boolean> {
   previewListeners.forEach((notify) => notify());
   return true;
 }
+// i18n-ignore-end
 export async function submitAssistantText(text: string, legacyReminder?: boolean): Promise<AssistantPlan> {
   if (!isTauri) throw new Error(m.shell_assistant_reminder_desktop_only());
   return invoke("assistant_submit_text", { text, legacyReminder });
@@ -100,10 +102,68 @@ export async function cancelAssistantRequest(): Promise<void> {
   if (isTauri) await invoke("cancel_assistant_request");
 }
 export async function listSpeechVoices(legacyReminder?: boolean): Promise<SpeechVoice[]> {
-  return isTauri ? invoke("list_speech_voices", { legacyReminder }) : [
-    {id:"kokoro/zf_001",name:"中文女声 001"}, {id:"kokoro/zf_003",name:"中文女声 003"}, {id:"kokoro/zf_017",name:"中文女声 017"},
-    // i18n-ignore-end
-  ];
+  return isTauri ? invoke("list_speech_voices", { legacyReminder }) : browserMock.speechVoices();
+}
+
+/** Key 从哪来（ADR 048；不含 Key 本身）。 */
+export type SpeechKeySource =
+  | { kind: "own" }
+  | { kind: "connection"; id: string; name: string }
+  | { kind: "speechRecognition" }
+  | { kind: "notNeeded" }
+  | { kind: "none" };
+/** 一家在线声音的状态（`speech_providers`）。显示名和计费说明在界面文案里按 `modelId` 取。 */
+export interface SpeechProvider {
+  modelId: string;
+  /** 声音编号的前缀（`minimax/…`）。 */
+  provider: string;
+  apiKeyUrl: string | null;
+  defaultModel: string;
+  defaultVoice: string;
+  /** 能不能调语速。 */
+  rate: boolean;
+  /** Key 分国内 / 国际站（保存时自动判断）。 */
+  regions: boolean;
+  /** 只要一个 Key。 */
+  keyOnly: boolean;
+  active: boolean;
+  ready: boolean;
+  reason: string | null;
+  keySource: SpeechKeySource;
+  region: "cn" | "intl" | null;
+}
+/** 她现在用的声音（`speech_current`）：“自动”时是哪一家。 */
+export interface SpeechCurrent {
+  modelId: string;
+  auto: boolean;
+  online: boolean;
+  ready: boolean;
+  reason: string | null;
+  keySource: SpeechKeySource;
+  region: "cn" | "intl" | null;
+  rate: boolean;
+}
+/** 保存 Key / 先试一次的结果。 */
+export interface SpeechCheck { ok: boolean; saved: boolean; message: string; region: "cn" | "intl" | null }
+
+export async function listSpeechProviders(): Promise<SpeechProvider[]> {
+  return isTauri ? invoke("speech_providers") : browserMock.speechProviders() as Promise<SpeechProvider[]>;
+}
+export async function getSpeechCurrent(): Promise<SpeechCurrent> {
+  return isTauri ? invoke("speech_current") : browserMock.speechCurrent() as Promise<SpeechCurrent>;
+}
+/** 保存这一家的 Key：先试一次（MiniMax、百炼顺便判断国内 / 国际站），Key 被拒就不存。 */
+export async function saveSpeechKey(modelId: string, key: string): Promise<SpeechCheck> {
+  return isTauri ? invoke("speech_key_save", { modelId, key }) : browserMock.speechKeySave(modelId, key) as Promise<SpeechCheck>;
+}
+/** 清掉声音设置里为这一家填的 Key（同一家 API 连接的 Key 不动）。 */
+export async function clearSpeechKey(modelId: string): Promise<void> {
+  return isTauri ? invoke("speech_key_clear", { modelId }) : browserMock.speechKeyClear(modelId);
+}
+/** 试听一个声音（`提供方/声音`）：念一句固定的话。 */
+export async function tryVoice(voiceId: string): Promise<void> {
+  if (!isTauri) throw new Error(m.shell_assistant_preview_output_desktop_only());
+  await invoke("speech_try_voice", { voiceId });
 }
 export async function previewReminder(kind: DeliveryKind, legacyReminder?: boolean): Promise<void> {
   if (!isTauri) throw new Error(m.shell_assistant_preview_output_desktop_only());

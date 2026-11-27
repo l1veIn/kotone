@@ -1,6 +1,6 @@
 # ADR 048：她的声音在一个地方配——选服务商、就地填 Key、选声音；加 MiniMax、阿里云百炼、硅基流动
 
-状态：Accepted（2026-11-27）/ 第 1 步（后端）已实现，第 2 步（界面）等这一轮别的改动合进 main 再做（见文末“实现情况”）。
+状态：Accepted（2026-11-27）/ 第 1 步（后端）、第 2 步（界面）已实现，待真 Key（见文末“实现情况”）。
 
 修订：[ADR 017](017-voice-wake.md) 的 TTS 一行（在线引擎不止 OpenAI 兼容和火山）、[ADR 024](024-prefix-cache-compaction-usage.md) 的价格表（加 MiniMax、百炼）、[ADR 028](028-game-companion-interaction.md) 的“自动”语音（只认 DeepSeek → 跟着她用的模型走）、[ADR 039](039-desktop-companion-and-game-apps.md) 的设置结构（「设置 → 模型」里不再有语音合成，第 2 步做）。调研（2026-11-27，结论写在下面“背景”）：Coopanion（本体不带语音合成，靠扩展市场；看的是 MIT 的自然语音扩展 `guyin24/coopanion-natural-voice`，Coopanion 本体 AGPL 只看做法）、airi（MIT）、Open-LLM-VTuber（MIT）、LobeHub、SillyTavern（AGPL，只看界面），以及 MiniMax、阿里云百炼、火山、硅基流动的官方文档。
 
@@ -38,6 +38,10 @@
 - 桌面端：`tts_online.rs`（按第 2 条的顺序解析 Key、站、模型、声音；`KeySource`）、`speech_cmd.rs`（`speech_providers`、`speech_key_save`（先试一次、判断站）、`speech_key_clear`、`speech_check`、`speech_voices`、`speech_try_voice`）、启动时迁移明文 Key、保存设置时 `model_secrets::take`；工具 `speech.status` 多了 `engine`、`providers` 和可选的 `check`。
 - 测试：本机模拟服务（wiremock）覆盖 MiniMax 成功、HTTP 200 里的 1004 / 1008、1004 后改试国际站、超大响应、跳转不跟；百炼下载不带 Key、非官方地址不下、401 翻成中文、超大音频；硅基流动预设的请求体；Key 的查找顺序、“自动”的表、明文 Key 迁移与保存。
 
-第 2 步（界面，等 main）：声音设置页按“选服务商 → Key → 声音（试听）”重写，删掉「设置 → 模型」里的语音合成，`docs/glossary.md` 补“试听”也指听一下声音、音效，`docs/assistant.md`、`PRIVACY.md` 跟上；模型配置里 `secret` 字段在界面上显示成“已保存”、不回显。
+第 2 步（界面，2026-11-28，子代理 T，分支 `claude/voice-settings`）：
+- 声音与弹幕页（`SpeechSettings.svelte`）：服务商下拉（自动 · 系统语音 · Kokoro · 在线的六家）；选了在线的一家，就地显示这一家要的东西——Key（密码框，“保存”先试一次，Key 被拒就不存，结果写在下面，MiniMax / 百炼带上“国内站 / 国际站”）、Key 从哪来（“✓ 已保存，Key 交给 Windows 保管” / “✓ 用的是 API 连接「…」的 Key” / 火山“和语音识别共用”，可以“换一个”“清掉”）、火山的 App ID、自定义接口的地址 / 合成模型 / 声音名；声音下拉旁边“试听”（`speech_try_voice`）；语速对不能调的那几家（DeepSeek、百炼）是灰的并写明；页面底下写明每次说话会把文字发给谁、怎么计费（按服务商取界面文案）；MiniMax 的“更多”里选 Turbo / HD。“自动”写明现在用的是哪一家（`speech_current`）。
+- 「设置 → 模型」：语音合成那一栏只剩一行“她的声音在角色页的「交互 → 声音与弹幕」里选”和“去看看”；模型配置里的 `secret` 字段（火山 Access Token、讯飞 APISecret）显示成密码框，存了就写“已保存（交给 Windows 保管，这里不显示）”，不回显（`model_secret_saved`）。
+- 文案：`docs/glossary.md`（声音一行、“试听”也指先听一下声音或音效）、`docs/assistant.md`、`PRIVACY.md`、`settings_guide.rs`（`assistant.ttsModelId` 的位置和取值）、`kotone-config/SKILL.md`；游戏语音“系统语音不能送进去”的提示改指声音与弹幕页。
+- 没做：“自动”时在线声音出错（Key 过期、余额不足）这一句改用系统语音念——边生成边念的那条路是按句先合成、排队播，失败的那句换系统语音会和前后句的声音叠在一起，要在 `SpeechStream` 里加一种“这一句改用系统语音念完再接着播”的处理，留到下一轮。
 
 真 Key 到了以后要测：MiniMax 国内 / 国际各一个 Key 保存时判断站对不对、合成一句（turbo 约 0.006 元）、`get_voice` 里中文声音的 `voice_name` 长什么样；百炼合成一句、音频链接的实际域名在不在白名单里、北京 / 新加坡判断；硅基流动合成一句。

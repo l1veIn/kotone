@@ -25,7 +25,7 @@ description: 帮玩家把 Kotone 配置好：语音识别、文字识别、语�
 | --- | --- |
 | 语音识别（玩家说话 → 文字） | `models.activate`，`category: "asr"`，`engineId: "deepseek-asr"`，`modelId: "deepseek-asr"` |
 | 文字识别（读游戏画面、聊天） | `models.activate`，`category: "ocr"`，`modelId: "deepseek-ocr"` |
-| 语音合成（琴音说话） | 默认“自动”就会用 DeepSeek 语音（`assistant.ttsModelId` 为空），不用改；想换声音请玩家在「琴音 → 设置 → 回答」里试听后选 |
+| 语音合成（琴音说话） | 默认“自动”跟着她用的模型走（`assistant.ttsModelId` 为空）：她用 DeepSeek 就是 DeepSeek 的声音，不用改；`speech.status` 看现在用哪家、怎么计费。想换服务商或声音请玩家在「琴音 → 交互 → 声音与弹幕」里选、试听；MiniMax、百炼的声音用同一家 API 连接的 Key（没有就 `connections.request_key`），别家的 Key 请玩家在那一页填 |
 
 要告诉玩家：在线识别会把**录音**和**游戏截图**发给 DeepSeek，按量计费（很便宜，但不是零）。
 

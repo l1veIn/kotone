@@ -25,7 +25,8 @@
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import { m } from "$lib/paraglide/messages.js";
 
-  let { category }: { category: Exclude<ModelCategory, "asr"> } = $props();
+  // 语音合成不在这里配了（ADR 048：她的声音只在声音与弹幕页）
+  let { category }: { category: Exclude<ModelCategory, "asr" | "tts"> } = $props();
 
   let models = $state<CatalogModel[] | null>(null);
   let connections = $state<ConnectionInfo[]>([]);
@@ -36,7 +37,7 @@
   let guide = $state<ModelInstallGuide | null>(null);
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);
-  const title = $derived(category === "ocr" ? m.system_catalog_title_ocr() : category === "search" ? m.system_catalog_title_search() : m.system_catalog_title_tts());
+  const title = $derived(category === "ocr" ? m.system_catalog_title_ocr() : m.system_catalog_title_search());
 
   onMount(() => {
     let un: (() => void) | undefined;
@@ -182,12 +183,10 @@
     <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">
       {m.system_catalog_ocr_intro_before()}<b class="font-medium text-brand-pink">{m.system_catalog_ocr_intro_strong()}</b>{m.system_catalog_ocr_intro_after()}
     </p>
-  {:else if category === "search"}
+  {:else}
     <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">
       {m.system_catalog_search_intro_before()}<b class="font-medium text-brand-pink">{m.system_catalog_search_intro_strong()}</b>{m.system_catalog_search_intro_after()}
     </p>
-  {:else}
-    <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">{m.system_catalog_tts_intro()}</p>
   {/if}
   {#if models === null}
     <p class="mx-2 my-3 text-xs text-muted-foreground">{m.system_catalog_loading()}</p>

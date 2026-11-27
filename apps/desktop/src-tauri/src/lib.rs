@@ -537,6 +537,8 @@ pub fn run() {
             assistant::list_speech_voices,
             assistant::preview_reminder,
             speech_cmd::speech_providers,
+            speech_cmd::speech_current,
+            speech_cmd::model_secret_saved,
             speech_cmd::speech_key_save,
             speech_cmd::speech_key_clear,
             speech_cmd::speech_check,

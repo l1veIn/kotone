@@ -225,7 +225,7 @@ const TOOL_LOCATIONS: Record<string, [string, string]> = {
   "models.download": [m.shell_nav_changed_models(), "设置 → 模型"],
   "models.delete": [m.shell_nav_changed_models(), "设置 → 模型"],
   "models.dir.set": [m.shell_nav_changed_models_dir(), "设置 → 模型"],
-  "speech.model.download": [m.shell_nav_changed_tts_model(), "设置 → 模型 → 语音合成"],
+  "speech.model.download": [m.shell_nav_changed_tts_model(), "琴音 → 交互 → 声音与弹幕"],
   "connections.upsert": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.delete": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.request_key": [m.shell_nav_changed_connections(), "设置 → API 连接"],

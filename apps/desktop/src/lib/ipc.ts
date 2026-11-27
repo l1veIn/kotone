@@ -100,6 +100,12 @@ export async function listConnections(): Promise<ConnectionInfo[]> {
   return invoke<ConnectionInfo[]>("list_connections");
 }
 
+/** 模型配置里的 Key（`secret` 字段）存进凭据库了没有（ADR 048；不返回 Key 本身）。 */
+export async function modelSecretSaved(modelId: string): Promise<boolean> {
+  if (!isTauri) return browserMock.modelSecretSaved(modelId);
+  return invoke<boolean>("model_secret_saved", { modelId });
+}
+
 export async function upsertConnection(
   connection: Connection,
   apiKey?: string,
