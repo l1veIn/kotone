@@ -72,12 +72,12 @@
 
 <div class="measure" bind:clientWidth={width}></div>
 {#if grid && !champSelect}
-  <div class="grids" data-testid="lol-match-grid">
-    <TeamGrid ally={false} team={match.enemies} {party} recent={10} testid="lol-match-player" {onPlayer} />
-    <TeamGrid ally team={match.allies} {party} recent={10} testid="lol-match-player" {onPlayer} />
+  <div class="roster grids" data-testid="lol-match-grid">
+    <TeamGrid full ally={false} team={match.enemies} {party} recent={10} testid="lol-match-player" {onPlayer} />
+    <TeamGrid full ally team={match.allies} {party} recent={10} testid="lol-match-player" {onPlayer} />
   </div>
 {:else}
-<div class="teams">
+<div class="roster teams">
   <section class="team ally" aria-label={m.plugin_lol_allies()} data-testid="lol-match-allies">
     <TeamHead ally team={match.allies} {party} />
     {#each match.allies as p, i (p.puuid || `a${i}`)}
@@ -121,6 +121,32 @@
 {/if}
 
 <style>
+  .roster :global(.team) {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+  }
+  .roster :global(.team-head) {
+    flex-wrap: wrap;
+    min-height: 40px;
+    height: auto;
+    padding: var(--lol-sp-3) var(--lol-sp-5);
+    gap: var(--lol-sp-2) var(--lol-sp-6);
+    border-block-end: 1px solid var(--lol-line);
+    background: var(--lol-bg-2);
+  }
+  .roster :global(.team-head .label) {
+    font-size: var(--lol-fs-lg);
+  }
+  .roster :global(.team-head .stats) {
+    flex-wrap: wrap;
+    gap: var(--lol-sp-1) var(--lol-sp-5);
+    overflow: visible;
+    white-space: normal;
+  }
+  .note {
+    margin-block-end: var(--lol-sp-5);
+  }
   .teams {
     display: grid;
     gap: var(--lol-sp-5);
@@ -144,7 +170,7 @@
   }
   .grids {
     display: grid;
-    gap: var(--lol-sp-5);
+    gap: var(--lol-sp-7);
   }
   /* 一人一块之间的细线（PlayerBlock 一个组件只有一块，兄弟选择器写在这里） */
   .team :global(.p + .p) {

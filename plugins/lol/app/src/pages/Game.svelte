@@ -153,7 +153,7 @@
             {#each t.players as p, i (p.puuid || i)}
               {@const k = kdaOf(p.kills, p.deaths, p.assists)}
               {@const [nm, tag] = splitRiotId(p.riotId)}
-              <div class="grid row stripe" class:me={p.me} data-testid="lol-game-player"
+              <div class="grid row" class:me={p.me} data-testid="lol-game-player"
                 title={m.plugin_lol_game_more({ taken: num(p.taken), gold: num(p.gold), cs: p.cs })}>
                 <span class="pics">
                   <ChampIcon id={p.champion.id} icon={p.champion.icon} name={p.champion.short} size={32} level={p.level} />
@@ -286,7 +286,7 @@
     color: var(--lol-text-2);
   }
   .title .outcome {
-    font-size: var(--lol-fs-lg);
+    font-size: var(--lol-fs-xl);
   }
   .tag-ink {
     padding: 0 6px;
@@ -303,8 +303,27 @@
   .outcome {
     font-weight: 700;
   }
+  .team {
+    border: 0;
+    border-radius: 0;
+  }
+  .team-head {
+    flex-wrap: wrap;
+    min-height: 40px;
+    height: auto;
+    padding: var(--lol-sp-3) var(--lol-sp-5);
+    gap: var(--lol-sp-2) var(--lol-sp-6);
+    white-space: normal;
+  }
+  .team-head .stats {
+    flex-wrap: wrap;
+    gap: var(--lol-sp-2) var(--lol-sp-5);
+  }
+  .team-head .label {
+    font-size: var(--lol-fs-lg);
+  }
   .team + .team {
-    margin-top: var(--lol-sp-5);
+    margin-block-start: var(--lol-sp-7);
   }
   .wl {
     font-size: var(--lol-fs-sm);
@@ -312,11 +331,11 @@
   }
   .grid {
     display: grid;
-    /* 每行是自己的 grid：列宽都写死（头像和技能 72、装备 6 + 1 格 160），表头和每一行才对得齐 */
-    grid-template-columns: 72px minmax(7em, 1fr) 6.5em 10em 4.6em 4.6em 3em 160px;
+    /* 表头和数据行共用列宽；保留装备格的实际宽度。 */
+    grid-template-columns: 72px minmax(7em, 1.6fr) minmax(78px, 1fr) minmax(116px, 1.2fr) minmax(4em, .6fr) minmax(4em, .6fr) minmax(2.5em, .4fr) 160px;
     align-items: center;
     column-gap: 10px;
-    padding: 0 12px 0 14px;
+    padding-inline: var(--lol-sp-5);
   }
   .cols {
     height: 26px;
@@ -354,7 +373,7 @@
     border: 0;
     background: none;
     cursor: pointer;
-    text-align: left;
+    text-align: start;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--lol-text-2);
@@ -389,8 +408,8 @@
   }
   .bar {
     flex: none;
-    width: 64px;
-    height: 6px;
+    width: 48px;
+    height: 4px;
     overflow: hidden;
     border-radius: 3px;
     background: var(--lol-bg-3);
@@ -406,7 +425,7 @@
     background: var(--lol-text-3);
   }
   .r {
-    text-align: right;
+    text-align: end;
   }
   .muted {
     color: var(--lol-text-3);
@@ -417,8 +436,14 @@
   }
   /* 海克斯（全屏每队下面、卡片最后一块） */
   .team-augs {
-    padding: 4px 0 6px;
+    padding-block: var(--lol-sp-4);
     border-top: 1px solid var(--lol-line);
+  }
+  .team-augs :global(.ar) {
+    padding-inline: var(--lol-sp-5);
+  }
+  .team-augs :global(.ar::before) {
+    content: none;
   }
   .aug-t {
     margin: 0;
@@ -427,7 +452,7 @@
     color: var(--lol-text-2);
   }
   .team-augs .aug-t {
-    padding: 2px 12px 2px 14px;
+    padding: 0 var(--lol-sp-5) var(--lol-sp-2);
   }
   .card-augs {
     margin-top: 2px;

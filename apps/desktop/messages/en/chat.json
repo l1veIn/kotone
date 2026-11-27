@@ -334,6 +334,8 @@
   "chat_push_voice": "Voice",
   "chat_floating_label": "Floating window",
   "chat_floating_mini_label": "Mini chat",
+  "chat_floating_send_placeholder": "Message {name}…",
+  "chat_floating_conversation_changed": "The active conversation changed. Call from the active conversation.",
   "chat_floating_open": "Open Kotone here",
   "chat_floating_close": "Close (it comes back with the next push)",
   "chat_floating_older": "Older",

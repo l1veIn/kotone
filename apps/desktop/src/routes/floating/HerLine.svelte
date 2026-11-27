@@ -44,8 +44,8 @@
 <style>
   .bubble {
     position: relative; max-width: 300px; min-width: 96px; padding: 8px 12px 9px; border-radius: 14px;
-    background: rgba(22, 20, 34, .92); color: #f4f2fb; border: 1px solid rgba(255, 255, 255, .12);
-    box-shadow: 0 6px 18px #0007; animation: rise .18s ease-out both;
+    background: var(--floating-bubble, #1d201d); color: var(--floating-bubble-ink, #eeefe6);
+    border: 1px solid var(--floating-bubble-border, #ffffff22); box-shadow: 0 6px 18px #0007;
   }
   /* 聊天小窗最下面的一行：跟着小窗的配色 */
   .bubble.compact {
@@ -80,7 +80,6 @@
   .bars i:nth-child(3) { animation-delay: .4s; }
   .bars i:nth-child(4) { animation-delay: .1s; }
 
-  @keyframes rise { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
   @keyframes hop { 0%, 100% { transform: translateY(0); opacity: .5; } 50% { transform: translateY(-3px); opacity: 1; } }
   @keyframes eq { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
   @media (prefers-reduced-motion: reduce) {

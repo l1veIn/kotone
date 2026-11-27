@@ -115,93 +115,103 @@
   <div class="app" data-testid="lol-app-player">
     <TopBar current="player" {onTab} onRefresh={() => void load(lastArgs)} {loading} />
     <main class="page">
-      <form class="search" onsubmit={search}>
-        <span class="field"><Icon name="search" /><input bind:value={query} placeholder={m.plugin_lol_search_placeholder()} aria-label={m.plugin_lol_search_placeholder()} data-testid="lol-player-search" /></span>
-        <button type="submit" class="btn primary" disabled={loading} data-testid="lol-player-search-go">{m.plugin_lol_search()}</button>
-        <button type="button" class="btn" disabled={loading} data-testid="lol-player-me" onclick={() => { query = ""; void load({}); }}>{m.plugin_lol_search_me()}</button>
-      </form>
-      {#if error}<p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_failed({ error })}</p>{/if}
-      {#if status}
+      <div class="record" class:populated={!!player}>
+        <form class="search" onsubmit={search}>
+          <span class="field"><Icon name="search" /><input bind:value={query} placeholder={m.plugin_lol_search_placeholder()} aria-label={m.plugin_lol_search_placeholder()} data-testid="lol-player-search" /></span>
+          <button type="submit" class="btn primary" disabled={loading} data-testid="lol-player-search-go">{m.plugin_lol_search()}</button>
+          <button type="button" class="btn" disabled={loading} data-testid="lol-player-me" onclick={() => { query = ""; void load({}); }}>{m.plugin_lol_search_me()}</button>
+        </form>
         {#if player}
-          <p class="banner" data-testid="lol-app-status-banner" title={status.text}><Icon name="info" />{stateView(status).text}</p>
-        {:else}
-          <StateBlock state={status} onSettings={() => session.openPage(PAGE_SETTINGS, {})} />
+          <aside class="profile">
+            <header class="head" data-testid="lol-player-head">
+              {@render avatar(56)}
+              <div class="head-text">
+                <p class="name">
+                  <span data-testid="lol-player-name">{nm}{#if tag}<span class="tagline">#{tag}</span>{/if}</span>
+                  {#if player.hidden}<span class="chip warn" data-testid="lol-player-hidden"><Icon name="eyeOff" />{m.plugin_lol_hidden()}</span>{/if}
+                </p>
+                <p class="ranks">
+                  {#if player.ranked?.solo}
+                    <span data-testid="lol-player-rank-solo"><span class="q">{m.plugin_lol_queue_solo()}</span><RankBadge ranked={player.ranked.solo} />
+                      {#if rankDetail(player.ranked.solo)}<span class="more">· {rankDetail(player.ranked.solo)}</span>{/if}</span>
+                  {/if}
+                  {#if player.ranked?.flex}
+                    <span><span class="q">{m.plugin_lol_queue_flex()}</span><RankBadge ranked={player.ranked.flex} /></span>
+                  {/if}
+                  {#if !player.ranked?.solo && !player.ranked?.flex && player.rank}<span>{m.plugin_lol_queue_solo()} {player.rank}</span>{/if}
+                </p>
+              </div>
+            </header>
+            {#if s}
+              <p class="sum num" data-testid="lol-player-summary">
+                <span class="k">{m.plugin_lol_recent_games({ count: s.games })}</span>
+                <b class="balance">{m.plugin_lol_wins_losses({ wins: s.wins, losses: s.losses })}</b>
+                <b class="rate {rateTone(s.wins, s.games)}">{pctOf(s.wins, s.games)}%</b>
+                <span>KDA <b class={kdaTone(s.kda)}>{one(s.kda)}</b></span>
+                <span>{m.plugin_lol_avg_deaths()} <b>{one(s.deaths)}</b></span>
+                {#if streak}<span class="chip {s.streak > 0 ? 'good' : 'bad'}">{streak}</span>{/if}
+              </p>
+            {/if}
+            {#if player.champions.length}
+              <p class="mains" data-testid="lol-player-champions">
+                <span class="k">{m.plugin_lol_top_champions()}</span>
+                {#each player.champions.slice(0, 5) as c (c.champion.id)}
+                  <span class="main"><ChampIcon id={c.champion.id} icon={c.champion.icon} name={c.champion.short} size={24} />
+                    <span>{c.champion.short}</span><span class="num muted">{m.plugin_lol_games_rate({ games: c.games, rate: pctOf(c.wins, c.games) })}</span></span>
+                {/each}
+              </p>
+            {/if}
+          </aside>
         {/if}
-      {/if}
-      {#if player}
-        <header class="head" data-testid="lol-player-head">
-          {@render avatar(56)}
-          <div class="head-text">
-            <p class="name">
-              <span data-testid="lol-player-name">{nm}{#if tag}<span class="tagline">#{tag}</span>{/if}</span>
-              {#if player.hidden}<span class="chip warn" data-testid="lol-player-hidden"><Icon name="eyeOff" />{m.plugin_lol_hidden()}</span>{/if}
-            </p>
-            <p class="ranks">
-              {#if player.ranked?.solo}
-                <span data-testid="lol-player-rank-solo"><span class="q">{m.plugin_lol_queue_solo()}</span><RankBadge ranked={player.ranked.solo} />
-                  {#if rankDetail(player.ranked.solo)}<span class="more">· {rankDetail(player.ranked.solo)}</span>{/if}</span>
-              {/if}
-              {#if player.ranked?.flex}
-                <span><span class="q">{m.plugin_lol_queue_flex()}</span><RankBadge ranked={player.ranked.flex} /></span>
-              {/if}
-              {#if !player.ranked?.solo && !player.ranked?.flex && player.rank}<span>{m.plugin_lol_queue_solo()} {player.rank}</span>{/if}
-            </p>
-          </div>
-        </header>
-        {#if s}
-          <p class="sum num" data-testid="lol-player-summary">
-            <span class="k">{m.plugin_lol_recent_games({ count: s.games })}</span>
-            <b>{m.plugin_lol_wins_losses({ wins: s.wins, losses: s.losses })}</b>
-            <b class={rateTone(s.wins, s.games)}>{pctOf(s.wins, s.games)}%</b>
-            <span>KDA <b class={kdaTone(s.kda)}>{one(s.kda)}</b></span>
-            <span>{m.plugin_lol_avg_deaths()} <b>{one(s.deaths)}</b></span>
-            {#if streak}<span class="chip {s.streak > 0 ? 'good' : 'bad'}">{streak}</span>{/if}
-          </p>
-        {/if}
-        {#if player.champions.length}
-          <p class="mains" data-testid="lol-player-champions">
-            <span class="k">{m.plugin_lol_top_champions()}</span>
-            {#each player.champions.slice(0, 5) as c (c.champion.id)}
-              <span class="main"><ChampIcon id={c.champion.id} icon={c.champion.icon} name={c.champion.short} size={24} />
-                <span>{c.champion.short}</span><span class="num muted">{m.plugin_lol_games_rate({ games: c.games, rate: pctOf(c.wins, c.games) })}</span></span>
-            {/each}
-          </p>
-        {/if}
-        {#if player.error && !player.games.length}<p class="banner" title={player.error}><Icon name="info" />{m.plugin_lol_lookup_failed({ error: player.error })}</p>{/if}
-        {#if player.games.length}
-          <ol class="games" data-testid="lol-player-games">
-            {#each player.games as g (g.gameId)}
-              {@const k = kdaOf(g.kills, g.deaths, g.assists)}
-              <li>
-                <button type="button" class="game" class:augs={g.augments.length > 0} onclick={() => onGame(g.gameId)} data-testid="lol-player-game" data-game-id={g.gameId}
-                  title={m.plugin_lol_open_game_title()}>
-                  <span class="res {g.win ? 'win' : 'loss'}"><b>{g.win ? m.plugin_lol_win() : m.plugin_lol_loss()}</b><span class="num">{duration(g.durationS)}</span></span>
-                  <ChampIcon id={g.champion.id} icon={g.champion.icon} name={g.champion.short} level={g.level} />
-                  <span class="wide-only"><Spells spells={g.spells} /></span>
-                  <span class="wide-only"><Perks perks={g.perks} /></span>
-                  <span class="kda num">
-                    <b>{g.kills} / <span class="bad">{g.deaths}</span> / {g.assists}</b>
-                    <span>KDA <span class={kdaTone(k)}>{one(k)}</span></span>
-                  </span>
-                  <span class="dmg num">
-                    <span>{m.plugin_lol_damage_short({ damage: num(g.damage) })}</span>
-                    <span class="muted">{m.plugin_lol_dpm_short({ dpm: num(g.dpm) })}</span>
-                  </span>
-                  <span class="gear">
-                    <Items items={g.items} size={22} />
-                    {#if g.augments.length}<span class="aug-row">{#each g.augments as a (a.id)}<Augment augment={a} size={18} />{/each}</span>{/if}
-                  </span>
-                  <span class="when"><span>{g.queue}</span><span class="num">{when(g.createdMs)}</span></span>
-                </button>
-              </li>
-            {/each}
-          </ol>
-        {:else if !player.error}
-          <p class="banner"><Icon name="info" />{m.plugin_lol_no_games()}</p>
-        {/if}
-      {:else if loading}
-        <div class="skel-head" aria-busy="true" aria-label={m.plugin_lol_loading()}><span class="ci round s56"></span><span class="skel" style:width="160px"></span></div>
-      {/if}
+        <div class="history">
+          {#if error}<p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_failed({ error })}</p>{/if}
+          {#if status}
+            {#if player}
+              <p class="banner" data-testid="lol-app-status-banner" title={status.text}><Icon name="info" />{stateView(status).text}</p>
+            {:else}
+              <StateBlock state={status} onSettings={() => session.openPage(PAGE_SETTINGS, {})} />
+            {/if}
+          {/if}
+          {#if player}
+            {#if player.error && !player.games.length}<p class="banner" title={player.error}><Icon name="info" />{m.plugin_lol_lookup_failed({ error: player.error })}</p>{/if}
+            {#if player.games.length}
+              <ol class="games" data-testid="lol-player-games">
+                {#each player.games as g (g.gameId)}
+                  {@const k = kdaOf(g.kills, g.deaths, g.assists)}
+                  <li>
+                    <button type="button" class="game" onclick={() => onGame(g.gameId)} data-testid="lol-player-game" data-game-id={g.gameId}
+                      title={m.plugin_lol_open_game_title()}>
+                      <span class="res {g.win ? 'win' : 'loss'}"><b>{g.win ? m.plugin_lol_win() : m.plugin_lol_loss()}</b><span class="num">{duration(g.durationS)}</span></span>
+                      <span class="pick">
+                        <ChampIcon id={g.champion.id} icon={g.champion.icon} name={g.champion.short} level={g.level} />
+                        <Spells spells={g.spells} />
+                        <Perks perks={g.perks} />
+                      </span>
+                      <span class="kda num">
+                        <b>{g.kills} / <span class="bad">{g.deaths}</span> / {g.assists}</b>
+                        <span>KDA <span class={kdaTone(k)}>{one(k)}</span></span>
+                      </span>
+                      <span class="dmg num">
+                        <span>{m.plugin_lol_damage_short({ damage: num(g.damage) })}</span>
+                        <span class="muted">{m.plugin_lol_dpm_short({ dpm: num(g.dpm) })}</span>
+                      </span>
+                      <span class="gear">
+                        <Items items={g.items} size={22} />
+                        {#if g.augments.length}<span class="aug-row">{#each g.augments as a (a.id)}<Augment augment={a} size={18} />{/each}</span>{/if}
+                      </span>
+                      <span class="when"><span>{g.queue}</span><span class="num">{when(g.createdMs)}</span></span>
+                    </button>
+                  </li>
+                {/each}
+              </ol>
+            {:else if !player.error}
+              <p class="banner"><Icon name="info" />{m.plugin_lol_no_games()}</p>
+            {/if}
+          {:else if loading}
+            <div class="skel-head" aria-busy="true" aria-label={m.plugin_lol_loading()}><span class="ci round s56"></span><span class="skel" style:width="160px"></span></div>
+          {/if}
+        </div>
+      </div>
       <Footer sources={[{ id: "client" }]} onLink={session.openLink} />
     </main>
   </div>
@@ -250,7 +260,7 @@
   .search {
     display: flex;
     gap: 8px;
-    margin-bottom: var(--lol-sp-5);
+    min-width: 0;
   }
   .field {
     display: flex;
@@ -258,12 +268,15 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    height: 32px;
+    min-height: 32px;
     padding: 0 10px;
     border: 1px solid var(--lol-line-2);
     border-radius: var(--lol-r-md);
     background: var(--lol-bg-2);
     color: var(--lol-text-3);
+  }
+  .field:focus-within {
+    border-color: var(--lol-ring);
   }
   .field input {
     flex: 1;
@@ -275,7 +288,7 @@
     color: var(--lol-text);
   }
   .search .btn {
-    height: 32px;
+    min-height: 32px;
   }
   .avatar {
     position: relative;
@@ -301,7 +314,7 @@
     display: flex;
     align-items: center;
     gap: 14px;
-    margin-bottom: var(--lol-sp-5);
+    min-width: 0;
   }
   .head-text {
     min-width: 0;
@@ -312,9 +325,11 @@
   .name {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: var(--lol-fs-lg);
-    line-height: var(--lol-lh-lg);
+    flex-wrap: wrap;
+    overflow-wrap: anywhere;
+    gap: 4px 8px;
+    font-size: var(--lol-fs-xl);
+    line-height: var(--lol-lh-xl);
     font-weight: var(--lol-fw-strong);
   }
   .tagline {
@@ -331,6 +346,7 @@
   }
   .ranks > span {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
   }
@@ -341,150 +357,190 @@
   .ranks .more {
     color: var(--lol-text-3);
   }
+  .record,
+  .profile {
+    display: grid;
+    gap: var(--lol-sp-6);
+    min-width: 0;
+    align-content: start;
+  }
+  .history {
+    container: history / inline-size;
+    min-width: 0;
+  }
   .sum,
   .mains {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 12px;
-    margin: 0 0 var(--lol-sp-4);
+    align-items: baseline;
+    gap: var(--lol-sp-2) var(--lol-sp-5);
+    margin: 0;
     color: var(--lol-text-2);
   }
   .sum b {
     font-weight: var(--lol-fw-medium);
     color: var(--lol-text);
   }
+  .sum .rate {
+    font-size: var(--lol-fs-xl);
+    line-height: var(--lol-lh-xl);
+    font-weight: var(--lol-fw-strong);
+  }
+  .mains {
+    align-items: center;
+    gap: var(--lol-sp-4) var(--lol-sp-6);
+  }
   .main {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--lol-sp-3);
   }
   .muted {
     color: var(--lol-text-3);
   }
+  @container (min-width: 940px) {
+    .record.populated {
+      grid-template: "profile search" auto "profile history" 1fr / clamp(216px, 22%, 288px) minmax(0, 1fr);
+      gap: var(--lol-sp-5) var(--lol-sp-7);
+    }
+    .populated .search { grid-area: search; }
+    .populated .history { grid-area: history; }
+    .profile {
+      grid-area: profile;
+      align-self: start;
+      padding-inline-end: var(--lol-sp-6);
+      border-inline-end: 1px solid var(--lol-line);
+      gap: var(--lol-sp-7);
+    }
+    .sum {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      column-gap: var(--lol-sp-4);
+    }
+    .sum .k { grid-column: 1 / -1; }
+    .sum .balance { font-size: var(--lol-fs-md); }
+    .sum .chip { grid-column: 1 / -1; justify-self: start; }
+    .mains {
+      display: grid;
+      gap: var(--lol-sp-4);
+    }
+    .main {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: var(--lol-sp-4);
+    }
+  }
   .games {
-    margin: var(--lol-sp-5) 0 0;
+    margin: 0;
     padding: 0;
-    overflow: hidden;
     list-style: none;
-    border: 1px solid var(--lol-line);
-    border-radius: var(--lol-r-lg);
+    border-block: 1px solid var(--lol-line);
   }
   .games li + li {
-    border-top: 1px solid var(--lol-line);
+    border-block-start: 1px solid var(--lol-line);
   }
   .game {
-    display: flex;
+    display: grid;
+    grid-template-columns: 40px 84px minmax(80px, 1fr) minmax(76px, 1fr) minmax(174px, 1.25fr) minmax(70px, auto);
+    grid-template-areas: "result pick kda damage gear when";
     align-items: center;
-    gap: 10px;
+    column-gap: var(--lol-sp-5);
     width: 100%;
     min-height: var(--lol-row-list);
-    padding: 4px 12px 4px 4px;
+    padding: var(--lol-sp-3) var(--lol-sp-2);
     border: 0;
     background: transparent;
     cursor: pointer;
-    text-align: left;
+    text-align: start;
   }
-  .game.augs {
-    min-height: 52px;
-  }
-  .game:hover {
+  .game:hover,
+  .game:focus-visible {
     background: var(--lol-hover);
   }
-  .wide-only {
-    display: contents;
+  .game:focus-visible {
+    outline-offset: -2px;
   }
-  .res {
+  .pick {
+    grid-area: pick;
+    display: flex;
+    align-items: center;
+    gap: var(--lol-sp-1);
+  }
+  .res,
+  .kda,
+  .dmg,
+  .when {
     display: grid;
-    flex: none;
-    place-content: center;
-    justify-items: center;
-    width: 48px;
-    align-self: stretch;
-    border-radius: var(--lol-r-md);
-    font-size: var(--lol-fs-xs);
-    color: var(--lol-text-3);
-  }
-  .res b {
-    font-size: var(--lol-fs-md);
-    font-weight: var(--lol-fw-strong);
-  }
-  .res.win {
-    background: var(--lol-win-soft);
-  }
-  .res.win b {
-    color: var(--lol-win);
-  }
-  .res.loss {
-    background: var(--lol-loss-soft);
-  }
-  .res.loss b {
-    color: var(--lol-loss);
-  }
-  .kda {
-    display: grid;
-    flex: none;
-    width: 92px;
+    align-content: center;
+    gap: var(--lol-sp-1);
+    min-width: 0;
     font-size: var(--lol-fs-xs);
     color: var(--lol-text-2);
   }
-  .kda b {
+  .res { grid-area: result; }
+  .res b, .kda b {
     font-size: var(--lol-fs-md);
-    font-weight: var(--lol-fw-medium);
+    line-height: var(--lol-lh-md);
+    font-weight: var(--lol-fw-strong);
     color: var(--lol-text);
   }
-  .dmg {
-    display: grid;
-    flex: none;
-    width: 112px;
-    font-size: var(--lol-fs-xs);
-    white-space: nowrap;
-  }
+  .res.win b { color: var(--lol-win); }
+  .res.loss b { color: var(--lol-loss); }
+  .kda { grid-area: kda; }
+  .dmg { grid-area: damage; }
   .gear {
+    grid-area: gear;
     display: grid;
+    justify-items: start;
     gap: 2px;
   }
   .aug-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 2px;
   }
   .when {
-    display: grid;
-    margin-left: auto;
-    font-size: var(--lol-fs-xs);
+    grid-area: when;
+    text-align: end;
     color: var(--lol-text-3);
-    text-align: right;
-    white-space: nowrap;
   }
   .skel-head {
     display: flex;
     align-items: center;
     gap: 14px;
   }
-  @container (max-width: 759px) {
-    .dmg {
-      display: none;
+  @container history (max-width: 640px) {
+    .game {
+      grid-template-columns: 32px 82px minmax(70px, 1fr) minmax(76px, 1fr) auto;
+      grid-template-areas: "result pick kda damage gear" "result pick when when gear";
+      gap: 0 var(--lol-sp-3);
+      padding-block: var(--lol-sp-2);
+    }
+    .when {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0 var(--lol-sp-3);
+      text-align: start;
+      line-height: var(--lol-lh-xs);
+    }
+    .gear :global(.items .ci) {
+      --s: 18px;
     }
   }
-  @container (max-width: 519px) {
+  @container history (max-width: 455px) {
     .game {
+      grid-template-columns: 30px 82px minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas: "result pick kda damage" "when when gear gear";
+      row-gap: var(--lol-sp-2);
+    }
+    .gear {
+      display: flex;
+      align-items: center;
       flex-wrap: wrap;
-      gap: 4px 8px;
-      min-height: 52px;
+      gap: 2px var(--lol-sp-3);
     }
-    .res {
-      width: 28px;
-    }
-    .res span,
-    .wide-only,
-    .when {
-      display: none;
-    }
-    .game :global(.items .ci) {
-      --s: 18px !important;
-    }
-    .search .btn:last-child {
-      display: none;
+    .gear :global(.items .ci) {
+      --s: 16px;
     }
   }
   /* 卡片 */

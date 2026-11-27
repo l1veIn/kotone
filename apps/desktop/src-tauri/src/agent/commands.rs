@@ -134,7 +134,14 @@ pub fn state(app: &AppHandle) -> Result<Value, String> {
 // ---------- Tauri 命令 ----------
 
 #[tauri::command]
-pub fn agent_send(app: AppHandle, text: String) -> Result<Value, String> {
+pub fn agent_send(
+    app: AppHandle,
+    text: String,
+    conversation_id: Option<String>,
+) -> Result<Value, String> {
+    if let Some(id) = conversation_id {
+        return super::turn::send_text_to(&app, text, &id);
+    }
     send(
         &app,
         Outgoing {

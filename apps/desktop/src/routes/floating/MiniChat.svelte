@@ -5,18 +5,21 @@
   // 高度跟着“这一次来的”那几轮走（从 `anchor` 那一轮到最下面），最高 `maxList`；更早的往回翻（滚轮；滚轮在不可聚焦的窗口里
   // 真机验证前先留着往前 / 往后翻的按钮，能翻时才出来）。跟着最新的：`target` 那一轮放进来（比框矮就贴着最下面，比框高就
   // 从它上面开始看）；玩家自己往回翻了就不跟，翻回最下面又跟上，弹出了新的那条再跟上（照 dsh-orb-cordis 的 followBottom，MIT）。
-  import { tick } from "svelte";
+  import { setContext, tick } from "svelte";
   import { ChevronDown, ChevronUp, SquareArrowOutUpRight, X } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
+  import { FLOATING_PLUGIN_APP } from "$lib/pluginUi";
   import ChatTurn from "../../lib/agentChat/ChatTurn.svelte";
   import type { AgentChat } from "../../lib/agentChat/chatController.svelte";
   import type { Turn } from "../../lib/agentChat/timeline";
   import type { PushRecord } from "../../lib/agent";
   import type { BubbleSnapshot } from "../../lib/bubble";
   import HerLine from "./HerLine.svelte";
+  import QuickComposer from "./QuickComposer.svelte";
   import { turnPushId } from "./shape";
 
-  let { turns, anchor, target, pop, maxList, title, chat, status, onOpen, onOpenPush, onClose, onDrag, onLayout }: {
+  let { turns, anchor, target, pop, maxList, title, chat, status, onOpen, onOpenPush, onClose, onDrag, onLayout,
+    active = true, conversationId = null, onInputFocus = () => {}, onComposerActive = () => {} }: {
     turns: Turn[];
     /** 高度从这一轮算起（这一次来的第一轮）。 */
     anchor: string | null;
@@ -36,15 +39,22 @@
     onDrag: (event: PointerEvent) => void;
     /** 高度、滚动变了：外面再量一次报给后端。 */
     onLayout: () => void;
+    active?: boolean;
+    conversationId?: string | null;
+    onInputFocus?: (focused: boolean) => void | Promise<void>;
+    onComposerActive?: (active: boolean) => void;
   } = $props();
+  setContext(FLOATING_PLUGIN_APP, true);
 
   /** 列表最矮多高（卡片还没画出来时）。 */
   const MIN_LIST = 72;
   /** 列表上下的留白（px，和样子里的 padding 一样）。 */
-  const PADDING = 4 + 8;
+  const TOP_PADDING = 4;
+  const PADDING = TOP_PADDING + 8;
 
   let list = $state<HTMLDivElement>();
   let inner = $state<HTMLDivElement>();
+  let composerHeight = $state(0);
   let height = $state(MIN_LIST);
   let follow = true;
   /** 自己滚的那一下引起的 scroll 不算玩家在翻。 */
@@ -58,7 +68,7 @@
     if (!id || !list) return null;
     const el = list.querySelector<HTMLElement>(`[data-floating-turn="${CSS.escape(id)}"]`);
     if (!el) return null;
-    return el.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    return el.offsetTop + TOP_PADDING;
   }
 
   let queued = false;
@@ -70,14 +80,14 @@
     if (!list || !inner) return;
     // 从那一轮的上沿到内容最下面（量里面那一块：列表比内容高时 scrollHeight 不会变小），加上列表上下的留白
     const el = anchor ? inner.querySelector<HTMLElement>(`[data-floating-turn="${CSS.escape(anchor)}"]`) : null;
-    const from = el ? el.getBoundingClientRect().top - inner.getBoundingClientRect().top : 0;
-    height = Math.max(MIN_LIST, Math.min(Math.ceil(inner.offsetHeight - from) + PADDING, maxList));
+    const from = el?.offsetTop ?? 0;
+    height = Math.max(MIN_LIST, Math.min(inner.offsetHeight - from + PADDING, maxList - composerHeight));
     await tick();
     if (follow && list) {
       ownScrollUntil = performance.now() + 200;
       const bottom = list.scrollHeight - list.clientHeight;
       const top = topOf(target);
-      list.scrollTop = top === null ? bottom : Math.min(Math.max(0, top - 4), bottom);
+      list.scrollTop = top === null ? bottom : Math.min(Math.max(0, top - TOP_PADDING), bottom);
     }
     arrows();
     onLayout();
@@ -102,7 +112,7 @@
 
   // 新的一轮、原地更新、她的状态、弹出了新的那条：再量一次
   $effect(() => {
-    void turns; void anchor; void target; void status; void maxList;
+    void turns; void anchor; void target; void status; void maxList; void composerHeight;
     if (pop !== seenPop) { seenPop = pop; follow = true; }
     void relayout();
   });
@@ -144,21 +154,40 @@
       {/if}
     </div>
   </div>
+  <div bind:offsetHeight={composerHeight} class="composer">
+    <QuickComposer {active} {chat} {conversationId} name={title} {onInputFocus} onActiveChange={onComposerActive} />
+  </div>
 </section>
 
 <style>
   .mini {
+    --floating-surface: var(--card);
+    --floating-raised: var(--muted);
+    --floating-line: var(--hairline, var(--border));
+    --floating-ink: var(--foreground);
+    --floating-muted: var(--muted-foreground);
     display: flex; flex-direction: column; width: 360px; overflow: hidden; box-sizing: border-box;
-    background: var(--card); color: var(--foreground); border: 1px solid var(--hairline, var(--border));
+    background: var(--floating-surface); color: var(--floating-ink); border: 1px solid var(--floating-line);
     border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
-    animation: enter 180ms cubic-bezier(.2, .8, .3, 1) both;
   }
-  :global(:root[data-theme="dark"]) .mini { box-shadow: 0 8px 24px rgb(0 0 0 / 0.55); }
+  :global(:root[data-theme="dark"]) .mini {
+    --floating-surface: #171916;
+    --floating-raised: #22251f;
+    --floating-line: #343832;
+    --floating-ink: #eeefe6;
+    --floating-muted: #acb0a6;
+    --card: var(--floating-surface);
+    --foreground: var(--floating-ink);
+    --muted: var(--floating-raised);
+    --muted-foreground: var(--floating-muted);
+    --hairline: var(--floating-line);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.55);
+  }
   .head {
     display: flex; height: 32px; flex: none; align-items: center; gap: 2px; padding: 0 6px 0 12px;
-    border-bottom: 1px solid var(--hairline, var(--border)); cursor: grab;
+    border-bottom: 1px solid var(--floating-line); cursor: grab;
   }
-  .title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--muted-foreground); }
+  .title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--floating-ink); }
   .tool {
     display: flex; width: 24px; height: 24px; align-items: center; justify-content: center; border: 0; border-radius: 6px;
     background: transparent; color: var(--muted-foreground); cursor: pointer;
@@ -168,6 +197,8 @@
   .list { box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 4px 10px 8px; scrollbar-width: thin; }
   .inner { position: relative; display: flex; flex-direction: column; gap: 14px; }
   .turn { min-width: 0; }
-  @keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-  @media (prefers-reduced-motion: reduce) { .mini { animation: none; } }
+  .composer {
+    flex: none;
+    padding: 0 calc(10px + var(--floating-compose-end, 0px)) 9px calc(10px + var(--floating-compose-start, 0px));
+  }
 </style>

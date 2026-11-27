@@ -73,13 +73,18 @@ export function subscribeFloating(callback: (view: FloatingView) => void): Promi
 export type FloatingBox = [number, number, number, number];
 
 /** 量好的内容大小（逻辑像素）：后端按它摆窗口、该显示就显示。`mini`：头像旁边放的是聊天小窗（进度条的一圈长一些）。
- *  `boxes`：头像、气泡 / 小窗各一块（带着阴影那一圈）——窗口只留这几块挡鼠标，透明的地方点得到下面的游戏。 */
+ *  `boxes`：头像、气泡 / 小窗各一块（带着阴影那一圈）；空数组表示已完成退场。 */
 export async function floatingLayout(revision: number, width: number, height: number, mini: boolean, boxes: FloatingBox[]): Promise<void> {
   if (isTauri) await invoke("floating_layout", { revision, width, height, mini, boxes });
 }
 
 export async function floatingHover(inside: boolean): Promise<void> {
   if (isTauri) await invoke("floating_hover", { inside });
+}
+
+/** 玩家主动编辑快捷输入时借用键盘，离开后把焦点还给原窗口。 */
+export async function floatingInputFocus(active: boolean): Promise<void> {
+  if (isTauri) await invoke("floating_input_focus", { active });
 }
 
 /** ×：现在显示着的都收起，直到下一条推送。 */

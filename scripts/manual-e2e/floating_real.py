@@ -1,7 +1,8 @@
 """The floating window (悬浮窗, ADR 043 D6, revised 2026-11-26 evening) on a real Kotone: her avatar in the corner with a
 progress ring, and next to it the mini chat (the chat page's components) when a card is pushed — over a "game" (a test
-window) without ever taking its foreground; clicking buttons in it, the wheel, dragging it and × all leave the
-foreground (and the keyboard) with the game; the ring stops while the mouse is over it and, with the mouse away, runs
+window) without taking its foreground on arrival; clicking card buttons, scrolling, dragging and × all leave the
+foreground with the game. Clicking the quick input explicitly claims keyboard focus and gives it back on blur.
+The ring stops while the mouse is over it and, with the mouse away, runs
 out and hides the window by itself; the next appearance uses the dragged position; it is excluded from capture; it
 sits above the voice input bar in the bottom-right corner. Replaces message_popup_real.py (the message pop-up merged
 into the floating window).
@@ -13,7 +14,7 @@ pushes (文字识别模型 at once — no local OCR model in the isolated home �
 KOTONE_HOME=target/floating-real/home, `--background`, no AI key (pushes never call the model), input tools denied,
 the voice input bar at its bottom-right preset with visibility always (online recognition that cannot reach anything —
 a DeepSeek connection without a key, pointed at the local discard port, as in focus_steal_real.py — so the runtime runs
-and the bar shows). A test window (target_window.ps1) stands in for the game and is in front the whole time.
+and the bar shows). A test window (target_window.ps1) stands in for the game.
 
 Checks:
 F1 the input bar is shown at the bottom-right.
@@ -32,6 +33,8 @@ F5 one click on 往后翻 / 往前翻 (or, without them, on the card's title lin
    click), the ring stops while the mouse is over it, the foreground stays the test window, no key.
 F6 the wheel over the list: the page gets the wheel event and the list scrolls (when it can); foreground stays, no
    key. If the wheel does not arrive, this FAILs: the up / down buttons in the mini window are the fallback.
+F6a clicking the quick input brings the floating window to the foreground and focuses its text input. Blurring that
+   DOM input gives the foreground back to the test window without submitting any chat message.
 F7 dragging the mini window's title line by (-160, -120): the window follows, the foreground stays the test window the
    whole time (sampled every 50 ms), no key; `assistant.bubble.position` is saved.
 F8 × closes it; the foreground stays the test window; no key.
@@ -173,12 +176,15 @@ if (!w.__floatingTest) {
 const box = (sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height] : null; };
 const list = document.querySelector('[data-testid=floating-list]');
 const ring = document.querySelector('[data-testid=floating-ring]');
+const editor = document.querySelector('[data-testid=floating-composer-input]');
 const seen = { events: w.__floatingTest.events.slice(), mode: document.querySelector('[data-testid=floating]')?.dataset.mode,
   turns: [...document.querySelectorAll('[data-testid=floating-turn]')].map((e) => e.dataset.push),
   avatar: box('[data-testid=floating-avatar]'), ring: ring ? { running: ring.dataset.running, left: Number(ring.dataset.left) } : null,
   head: box('[data-testid=floating-mini-head]'), list: box('[data-testid=floating-list]'),
   older: box('[data-testid=floating-older]'), newer: box('[data-testid=floating-newer]'),
   close: box('[data-testid=floating-close]'), title: box('[data-testid=push-from]'),
+  composer: box('[data-testid=floating-composer-input]'),
+  composerFocused: !!editor && document.activeElement === editor && document.hasFocus(),
   scrollTop: list ? list.scrollTop : null, scrollable: list ? list.scrollHeight > list.clientHeight + 2 : false,
   dpr: window.devicePixelRatio };
 w.__floatingTest.events.length = 0;
@@ -427,6 +433,27 @@ def run(app, target, ui):
                   f"wheel event seen {seen_wheel}, scrollTop {before} → {wheeled.get('scrollTop')}, "
                   f"scrollable {after.get('scrollable')}")
             no_change_checks("F6", sampler, target)
+
+        # F6a：真实点击输入框。只用 DevTools 读焦点和触发失焦，不输入文字、不发消息。
+        editor = floating_page().get("composer")
+        if check("F6a: the quick input is visible", editor):
+            x, y = at(floating, editor, dpr=dpr)
+            click_at(pid, target, x, y, "the quick input", floating)
+            foreground = wait_until(lambda: fs.hval(user32.GetForegroundWindow()) == floating, 2, 0.05)
+            check("F6a: clicking quick input gives the floating window the foreground", foreground,
+                  fs.describe(user32.GetForegroundWindow()))
+            focused = wait_until(lambda: floating_page().get("composerFocused"), 2, 0.1)
+            check("F6a: the WebView text input has keyboard focus", focused)
+            blurred = fs.page_eval("#/floating", """
+const editor = document.querySelector('[data-testid=floating-composer-input]');
+editor?.blur();
+return !!editor && document.activeElement !== editor;
+""")
+            check("F6a: blurring the quick input ends keyboard focus", blurred.get("ok"), str(blurred))
+            returned = wait_until(lambda: fs.hval(user32.GetForegroundWindow()) == target.hwnd, 2, 0.05)
+            if not check("F6a: blur restores the test window's foreground", returned,
+                         fs.describe(user32.GetForegroundWindow())):
+                return
 
         # F7：拖上面那一行
         head = floating_page().get("head")

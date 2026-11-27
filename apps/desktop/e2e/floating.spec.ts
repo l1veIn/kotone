@@ -95,13 +95,17 @@ async function open(page: Page, size = { width: 460, height: 640 }) {
     mockWindows("floating");
     mockIPC(async (command, args) => {
       const a = (args ?? {}) as Record<string, never>;
-      if (command.startsWith("floating_") || command === "auto_card_open") bridge.calls.push({ command, args: a });
+      if (command.startsWith("floating_") || ["auto_card_open", "agent_send", "assistant_call"].includes(command)) bridge.calls.push({ command, args: a });
       switch (command) {
         case "floating_current": return null;
         case "bubble_snapshot": return null;
         case "agent_state": return { current: "c1", running: null, conversations: [], notReadyReason: null, permissions: { mode: "default", rules: {} } };
         case "agent_conversation": return (a as { id: string }).id === "c1" ? structuredClone(conversation) : null;
         case "agent_held_cards": return [];
+        case "agent_send": return { status: "started", conversationId: "c1" };
+        case "assistant_call": return null;
+        case "get_runtime_status": return { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "fixture",
+          modelId: "fixture", interactionMode: "dictation", stage: null, asrLocal: false, error: null };
         case "plugins_list": return plugins.listPlugins();
         case "plugin_app": return plugins.pluginApp((a as { uri: string }).uri);
         case "plugin_resource": return plugins.pluginResource((a as { plugin: string }).plugin, (a as { uri: string }).uri);
@@ -348,6 +352,9 @@ test("mini chat: a popped card shows the conversation's latest turns with the ch
   await expect.poll(() => page.frames().some((f) => /\/app\/lol\/match$/.test(f.url()))).toBe(true);
   const app = page.frames().find((f) => /\/app\/lol\/match$/.test(f.url()))!;
   await expect(app.locator("body")).toContainText("改过的名字", { timeout: 10_000 });
+  await expect(app.getByTestId("lol-match-card")).toHaveAttribute("data-surface", "floating");
+  await expect(app.getByTestId("lol-source-tag")).toHaveCount(0);
+  await expect(app.getByTestId("lol-card-row")).toHaveCount(10);
   await expect(turns).toHaveCount(4);
   expect(await turns.evaluateAll((els) => els.map((e) => e.getAttribute("data-push")))).toEqual(["", "lol:augment:1", "lol:augment:2", `lol:${OPENING}`]);
   // 新的一条推送：放在最后面
@@ -370,8 +377,8 @@ test("mini chat: a popped card shows the conversation's latest turns with the ch
   expect((await calls(page, "auto_card_open"))[1]).toEqual({ conversationId: "c1", key: OPENING });
   await page.getByTestId("floating-close").click();
   await expect.poll(() => calls(page, "floating_close")).toHaveLength(1);
-  // 报上去的大小就是这一块（小窗 360 + 头像 56 + 中间 8 + 两边 8）
-  await expect.poll(async () => (await lastLayout(page))?.width).toBe(440);
+  // 小窗 360 + 头像 56 - 重叠的 18 + 两边 8。
+  await expect.poll(async () => (await lastLayout(page))?.width).toBe(414);
   // 挡鼠标的只有两块：小窗、右下角的头像（各带着阴影那 8）；头像上面那一条透明的不挡（窗口只留这两块，点得到下面的游戏）
   const layout = (await lastLayout(page))!;
   expect(layout.boxes).toHaveLength(2);
@@ -388,6 +395,88 @@ test("mini chat: a popped card shows the conversation's latest turns with the ch
   expect(hitAt(layout.boxes, strip[0], 4)).toBe(-1);
 });
 
+test("the bubble folds into the avatar before the mini unfolds; the composer sends to that chat and takes focus only on request", async ({ page }) => {
+  await open(page);
+  const floating = page.getByTestId("floating");
+  await page.evaluate(() => window.floatingTest.view({
+    revision: 1,
+    lines: [{ id: "lol:enemy-6", plugin: "lol", pluginName: "英雄联盟", key: "enemy-6", conversationId: "c1", untilDone: false,
+      cells: [{ text: "对面艾希" }, { text: "6 级了，有大招" }] }], // i18n-ignore
+  }));
+  await expect(floating).toHaveAttribute("data-surface", "bubble");
+  await expect(floating).toHaveAttribute("data-unfolded", "true");
+  await floating.evaluate((el) => {
+    const stages: string[] = [];
+    const capture = () => {
+      const stage = `${el.dataset.surface}:${el.dataset.unfolded}`;
+      if (stages.at(-1) !== stage) stages.push(stage);
+    };
+    capture();
+    new MutationObserver(capture).observe(el, { attributes: true, attributeFilter: ["data-surface", "data-unfolded"] });
+    Object.assign(window.floatingTest, { stages });
+  });
+  await page.evaluate(() => window.floatingTest.view({ revision: 2, mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } }));
+  const input = page.getByTestId("floating-composer-input");
+  const mic = page.getByTestId("floating-composer-mic");
+  const send = page.getByTestId("floating-composer-send");
+  await expect(floating).toHaveAttribute("data-surface", "mini");
+  await expect(floating).toHaveAttribute("data-unfolded", "true");
+  const stages = await page.evaluate(() => (window.floatingTest as Bridge & { stages: string[] }).stages);
+  expect(stages).toEqual(["bubble:true", "bubble:false", "mini:false", "mini:true"]);
+  await expect(input).toBeVisible();
+  await expect(input).not.toBeFocused();
+  await expect(mic).toBeEnabled();
+  await expect(send).toHaveCount(0);
+  expect(await calls(page, "floating_input_focus")).toEqual([]);
+
+  await mic.click();
+  await expect.poll(() => calls(page, "assistant_call")).toHaveLength(1);
+  expect(await calls(page, "floating_input_focus")).toEqual([]);
+  await input.click();
+  await expect.poll(() => calls(page, "floating_input_focus")).toEqual([{ active: true }]);
+  await input.fill("看看我的战绩"); // i18n-ignore
+  await expect(send).toBeVisible();
+  await input.dispatchEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true });
+  expect(await calls(page, "agent_send")).toEqual([]);
+  await input.press("Enter");
+  await expect.poll(() => calls(page, "agent_send")).toEqual([{ text: "看看我的战绩", conversationId: "c1" }]); // i18n-ignore
+  await expect(input).toHaveValue("");
+  await input.press("Escape");
+  await expect.poll(async () => (await calls(page, "floating_input_focus")).at(-1)).toEqual({ active: false });
+
+  await page.evaluate(() => window.floatingTest.view({ revision: 3, shown: false }));
+  await expect(floating).toHaveAttribute("data-unfolded", "false");
+  await expect(page.getByTestId("floating-avatar")).toHaveCount(0);
+  await expect.poll(() => lastLayout(page)).toMatchObject({ revision: 3, boxes: [] });
+
+  await page.evaluate(() => window.floatingTest.view({
+    revision: 4, corner: "bottom-left", mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" },
+  }));
+  await expect.poll(async () => {
+    const [avatar, button] = await Promise.all([page.getByTestId("floating-avatar").boundingBox(), mic.boundingBox()]);
+    return avatar && button ? button.x - (avatar.x + avatar.width) : -1;
+  }).toBeGreaterThanOrEqual(6);
+  await page.evaluate(() => window.floatingTest.view({
+    revision: 5, corner: "top-right", mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" },
+  }));
+  await input.fill("draft for c1");
+  await page.evaluate(() => window.floatingTest.view({
+    revision: 6, mini: { conversationId: "c1", focus: "lol:augment:1", key: "augment:1" },
+  }));
+  await expect(page.getByTestId("floating-mini")).toHaveAttribute("data-focus", "lol:augment:1");
+  await expect(input).toHaveValue("draft for c1");
+  await page.evaluate(() => window.floatingTest.view({
+    revision: 7, mini: { conversationId: "c2", focus: "lol:augment:2", key: "augment:2" },
+  }));
+  await expect(page.getByTestId("floating-mini")).toHaveAttribute("data-focus", "lol:augment:2");
+  await expect(input).toHaveValue("");
+  await expect(input).not.toBeFocused();
+  await expect(send).toHaveCount(0);
+  await expect.poll(async () => (await calls(page, "floating_input_focus")).at(-1)).toEqual({ active: false });
+  await page.getByTestId("floating-close").click();
+  await expect.poll(() => calls(page, "floating_close")).toHaveLength(1);
+});
+
 test("bubble: a one-cell push line (an interpreter translation, up to 40 characters) wraps inside 360 px; a line of several cells stays on one row; the hit boxes are the avatar and the bubble", async ({ page }) => {
   await open(page, { width: 460, height: 200 });
   // i18n-ignore-start：示例
@@ -401,6 +490,7 @@ test("bubble: a one-cell push line (an interpreter translation, up to 40 charact
   const line = page.getByTestId("floating-line");
   const cell = line.getByTestId("floating-cell");
   await expect(cell).toHaveText(long);
+  await expect.poll(() => line.evaluate((el) => getComputedStyle(el.parentElement!).transform)).toBe("none");
   const one = await line.boundingBox();
   expect(one!.width).toBeLessThanOrEqual(360);
   // 折成了几行：比一行高（一行 18 + 上下 2 = 22）、整句都在框里（没有横着溢出）
@@ -409,7 +499,7 @@ test("bubble: a one-cell push line (an interpreter translation, up to 40 charact
   await expect.poll(async () => (await lastLayout(page))?.revision).toBe(21);
   const layout = (await lastLayout(page))!;
   expect(layout.mini).toBe(false);
-  expect(layout.width).toBeLessThanOrEqual(8 + 360 + 8 + 56 + 8);
+  expect(layout.width).toBeLessThanOrEqual(360 + 56 - 18 + 16);
   expect(layout.boxes).toHaveLength(2);
   await screenshot(page.getByTestId("floating"), { path: shot("floating-bubble-wrapped"), omitBackground: true });
 

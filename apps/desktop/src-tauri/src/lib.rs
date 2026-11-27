@@ -531,6 +531,7 @@ pub fn run() {
             floating::floating_current,
             floating::floating_layout,
             floating::floating_hover,
+            floating::floating_input_focus,
             floating::floating_close,
             floating::floating_drag,
             floating::floating_reposition,

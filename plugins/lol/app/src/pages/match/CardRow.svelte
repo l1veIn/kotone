@@ -19,6 +19,7 @@
     party,
     mode,
     champSelect = false,
+    floating = false,
     expanded = false,
     onToggle,
     onPlayer,
@@ -27,6 +28,7 @@
     party: PartyInfo | null;
     mode: string;
     champSelect?: boolean;
+    floating?: boolean;
     expanded?: boolean;
     onToggle?: () => void;
     /** 全屏里点“看他的战绩”；卡片里没有（卡片是快照）。 */
@@ -69,7 +71,7 @@
     <span class="span2">{m.plugin_lol_pending_row()}</span>
   {:else if s}
     <span class="rec num">{m.plugin_lol_wins_losses_tight({ wins: s.wins, losses: s.losses })} <span class={rateTone(s.wins, s.games)}>{pctOf(s.wins, s.games)}%</span></span>
-    <span class="kda num {kdaTone(s.kda)}">{one(s.kda)}</span>
+    <span class="kda num {floating ? "" : kdaTone(s.kda)}">{one(s.kda)}</span>
   {:else}
     <span class="span2">{p.error ? m.plugin_lol_lookup_failed_short() : m.plugin_lol_no_games_short()}</span>
   {/if}
@@ -77,7 +79,7 @@
   <span class="chev" aria-hidden="true">{#if expandable}<svg viewBox="0 0 12 12" class:up={expanded}><path d="M3 4.5 6 7.5 9 4.5" /></svg>{/if}</span>
 {/snippet}
 
-<div class="person" class:me={p.me} class:open={expanded} data-testid="lol-card-player" data-identity={identity}>
+<div class="person" class:floating class:me={p.me} class:open={expanded} data-testid="lol-card-player" data-identity={identity}>
   {#if expandable}
     <button
       type="button"
@@ -162,6 +164,9 @@
   .person.me.open {
     background: var(--lol-ally-soft);
   }
+  .person.floating .cgrid { padding-inline: 6px; }
+  .person.floating.me { border-radius: var(--lol-r-sm); }
+  .person.floating .detail { padding-inline-start: 36px; }
   .champ {
     overflow: hidden;
     text-overflow: ellipsis;

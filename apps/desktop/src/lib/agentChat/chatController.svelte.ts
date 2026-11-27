@@ -267,8 +267,8 @@ export class AgentChat {
   }
 
   /** 发送；正在回答时算插话。返回 steered = 插话。 */
-  async send(text: string): Promise<"started" | "steered"> {
-    const result = await agentSend(text);
+  async send(text: string, conversationId?: string): Promise<"started" | "steered"> {
+    const result = await agentSend(text, conversationId);
     if (result.status === "started") this.runningId = result.conversationId;
     if (result.conversationId !== this.conversation?.id) await this.refresh();
     return result.status;

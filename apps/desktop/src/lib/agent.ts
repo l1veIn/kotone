@@ -286,9 +286,9 @@ export async function agentConversation(id: string): Promise<Conversation | null
   return invoke("agent_conversation", { id });
 }
 /** 发一条消息；琴音正在回答时算“插话”（status = steered）。 */
-export async function agentSend(text: string): Promise<{ status: "started" | "steered"; conversationId: string }> {
+export async function agentSend(text: string, conversationId?: string): Promise<{ status: "started" | "steered"; conversationId: string }> {
   if (!isTauri) throw new Error(PREVIEW_ERROR);
-  return invoke("agent_send", { text });
+  return invoke("agent_send", { text, conversationId });
 }
 /** 停止当前这一轮（同时清掉没处理的插话 / 排队）。 */
 export async function agentStop(): Promise<boolean> {

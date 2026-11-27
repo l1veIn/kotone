@@ -207,16 +207,39 @@
   <div class="app" data-testid="lol-app-champion" data-mode={data?.mode ?? ""}>
     <TopBar current="champion" {onTab} onRefresh={lastArgs ? () => void load(lastArgs ?? {}) : undefined} {loading} />
     <main class="page">
-      <div class="tools">
-        <form class="search" onsubmit={search}>
-          <span class="field"><Icon name="search" /><input bind:value={query} placeholder={m.plugin_lol_champion_search_placeholder()}
-            aria-label={m.plugin_lol_champion_search_placeholder()} data-testid="lol-champion-search" /></span>
-          <button type="submit" class="btn primary" disabled={loading} data-testid="lol-champion-search-go">{m.plugin_lol_search()}</button>
-        </form>
-        <span class="seg" role="group" aria-label={m.plugin_lol_mode()}>
-          <button type="button" aria-pressed={mode === "rift"} data-testid="lol-champion-mode-rift" onclick={() => switchMode("rift")}>{m.plugin_lol_mode_rift()}</button>
-          <button type="button" aria-pressed={mode === "mayhem"} data-testid="lol-champion-mode-mayhem" onclick={() => switchMode("mayhem")}>{m.plugin_lol_mode_mayhem()}</button>
-        </span>
+      <div class="overview">
+        {#if data}
+          <header class="head">
+            <ChampIcon id={data.champion.id} icon={data.champion.icon} name={data.champion.short} size={56} />
+            <div class="identity">
+              <h1 class="name" data-testid="lol-champion-name">{data.champion.label}</h1>
+              {#if data.mode === "rift"}
+                <p class="meta num">
+                  <span class="lane-now"><LaneIcon lane={data.lane} />{laneName(data.lane) || data.laneName}</span>
+                  <span>{data.patch}</span>
+                  {#if data.tier}
+                    <span class="tier {data.tier.tier === 'T0' ? 't0' : data.tier.tier === 'T1' ? 't1' : ''}" data-testid="lol-champion-tier">{data.tier.tier}</span>
+                    <span>{m.plugin_lol_tier_stats({ win: rate(data.tier.winRate), pick: rate(data.tier.pickRate), ban: rate(data.tier.banRate) })}</span>
+                  {/if}
+                </p>
+              {:else}
+                <p class="meta num" data-testid="lol-champion-mayhem-rank">{m.plugin_lol_mayhem_rank({ rank: data.rank ?? "—", win: rate(data.winRate), pick: rate(data.pickRate) })}</p>
+                <p class="meta"><SourceTag id="qq101" date={qqDate} onLink={session.openLink} /></p>
+              {/if}
+            </div>
+          </header>
+        {/if}
+        <div class="tools">
+          <form class="search" onsubmit={search}>
+            <span class="field"><Icon name="search" /><input bind:value={query} placeholder={m.plugin_lol_champion_search_placeholder()}
+              aria-label={m.plugin_lol_champion_search_placeholder()} data-testid="lol-champion-search" /></span>
+            <button type="submit" class="btn primary" disabled={loading} data-testid="lol-champion-search-go">{m.plugin_lol_search()}</button>
+          </form>
+          <span class="seg" role="group" aria-label={m.plugin_lol_mode()}>
+            <button type="button" aria-pressed={mode === "rift"} data-testid="lol-champion-mode-rift" onclick={() => switchMode("rift")}>{m.plugin_lol_mode_rift()}</button>
+            <button type="button" aria-pressed={mode === "mayhem"} data-testid="lol-champion-mode-mayhem" onclick={() => switchMode("mayhem")}>{m.plugin_lol_mode_mayhem()}</button>
+          </span>
+        </div>
       </div>
       {#if error}<p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_failed({ error })}</p>{/if}
       {#if status}
@@ -227,20 +250,6 @@
 
       {#if data?.mode === "rift"}
         {@const d = data}
-        <header class="head">
-          <ChampIcon id={d.champion.id} icon={d.champion.icon} name={d.champion.short} size={56} />
-          <div>
-            <p class="name" data-testid="lol-champion-name">{d.champion.label}</p>
-            <p class="meta num">
-              <span class="lane-now"><LaneIcon lane={d.lane} />{laneName(d.lane) || d.laneName}</span>
-              <span>{d.patch}</span>
-              {#if d.tier}
-                <span class="tier {d.tier.tier === 'T0' ? 't0' : d.tier.tier === 'T1' ? 't1' : ''}" data-testid="lol-champion-tier">{d.tier.tier}</span>
-                <span>{m.plugin_lol_tier_stats({ win: rate(d.tier.winRate), pick: rate(d.tier.pickRate), ban: rate(d.tier.banRate) })}</span>
-              {/if}
-            </p>
-          </div>
-        </header>
         <div class="lanes" role="group" aria-label={m.plugin_lol_lane()}>
           <span class="k">{m.plugin_lol_lane()}</span>
           {#each LANES as l (l)}
@@ -261,127 +270,129 @@
           {#each [["bad", m.plugin_lol_bad_against(), d.badAgainst], ["good", m.plugin_lol_good_against(), d.goodAgainst]] as const as [id, label, list] (id)}
             <section class="box" data-testid="lol-champion-{id}">
               <h3>{label}</h3>
+              <div class="opponents">
               {#each list.slice(0, 6) as x (x.champion.id)}
                 <div class="vs-row" role="link" tabindex="0" data-testid="lol-champion-link" onclick={() => openOther(x.champion.short)} onkeydown={(e) => key(e, x.champion.short)}>
                   <ChampIcon id={x.champion.id} icon={x.champion.icon} name={x.champion.short} size={24} /><span class="grow">{x.champion.short}</span>
                   <span class="num">{rate(x.winRate)}</span>
                 </div>
               {:else}<p class="muted">—</p>{/each}
+              </div>
             </section>
           {/each}
         </div>
-        <section class="sec" data-testid="lol-champion-build">
-          <h3>{m.plugin_lol_build()}</h3>
-          {#each BUILD_GROUPS as [group, label] (group)}
-            {@const options = d.build[group]}
-            {#if options.length}
-              <div class="build-row" data-testid={group === "core" ? "lol-champion-core" : undefined}>
-                <span class="k">{label()}</span>
-                <span class="opts">
-                  {#each options.slice(0, group === "core" ? 2 : 1) as o, i (i)}
-                    <span class="opt">
-                      <span class="icons">{#each o.items as x, j (j)}{#if j > 0 && group === "core"}<span class="arrow">›</span>{/if}{@render item(x, 28)}{/each}</span>
-                      <span class="names">{o.items.map((x) => x.name).join(" · ")}</span>
-                      <span class="num muted">{optionRate(o)}</span>
-                    </span>
+        <div class="rift-kit">
+          <section class="sec build" data-testid="lol-champion-build">
+            <h3>{m.plugin_lol_build()}</h3>
+            {#each BUILD_GROUPS as [group, label] (group)}
+              {@const options = d.build[group]}
+              {#if options.length}
+                <div class="build-row" data-testid={group === "core" ? "lol-champion-core" : undefined}>
+                  <span class="k">{label()}</span>
+                  <span class="opts">
+                    {#each options.slice(0, group === "core" ? 2 : 1) as o, i (i)}
+                      <span class="opt">
+                        <span class="icons">{#each o.items as x, j (j)}{#if j > 0 && group === "core"}<span class="arrow">›</span>{/if}{@render item(x, 28)}{/each}</span>
+                        <span class="names">{o.items.map((x) => x.name).join(" · ")}</span>
+                        <span class="num muted">{optionRate(o)}</span>
+                      </span>
+                    {/each}
+                  </span>
+                </div>
+              {/if}
+            {/each}
+          </section>
+          {#if d.runes.length || d.skillPriority.length || d.skillOrder.length || d.spells.length}
+            <div class="setup">
+              {#if d.runes.length}
+                <section class="sec" data-testid="lol-champion-runes">
+                  <h3>{m.plugin_lol_runes()}</h3>
+                  {#each d.runes.slice(0, 2) as r, i (i)}
+                    <div class="rune-row">
+                      <span class="runes">
+                        {#each r.primary as x, j (j)}<Pic path={x.icon} name={x.name || String(x.id)} size={j === 0 ? 32 : 24} round cls="rune" />{/each}
+                        <span class="bar-sep"></span>
+                        {#each r.secondary as x, j (j)}<Pic path={x.icon} name={x.name || String(x.id)} size={24} round cls="rune" />{/each}
+                        <span class="bar-sep"></span>
+                        {#each r.shards as x, j (j)}<Pic path={x.icon} name={x.name || String(x.id)} size={16} round cls="rune" />{/each}
+                      </span>
+                      <span class="names">{r.primary.map((x) => x.name).filter(Boolean).slice(0, 1).join("")}</span>
+                      <span class="num muted">{m.plugin_lol_win_pick({ win: rate(r.winRate), pick: rate(r.pickRate) })} · {m.plugin_lol_games_count({ games: num(r.games) })}</span>
+                    </div>
                   {/each}
-                </span>
-              </div>
-            {/if}
-          {/each}
-        </section>
-        {#if d.runes.length}
-          <section class="sec" data-testid="lol-champion-runes">
-            <h3>{m.plugin_lol_runes()}</h3>
-            {#each d.runes.slice(0, 2) as r, i (i)}
-              <div class="rune-row">
-                <span class="runes">
-                  {#each r.primary as x, j (j)}<Pic path={x.icon} name={x.name || String(x.id)} size={j === 0 ? 32 : 24} round cls="rune" />{/each}
-                  <span class="bar-sep"></span>
-                  {#each r.secondary as x, j (j)}<Pic path={x.icon} name={x.name || String(x.id)} size={24} round cls="rune" />{/each}
-                  <span class="bar-sep"></span>
-                  {#each r.shards as x, j (j)}<Pic path={x.icon} name={x.name || String(x.id)} size={16} round cls="rune" />{/each}
-                </span>
-                <span class="names">{r.primary.map((x) => x.name).filter(Boolean).slice(0, 1).join("")}</span>
-                <span class="num muted">{m.plugin_lol_win_pick({ win: rate(r.winRate), pick: rate(r.pickRate) })} · {m.plugin_lol_games_count({ games: num(r.games) })}</span>
-              </div>
-            {/each}
-          </section>
-        {/if}
-        {#if d.skillPriority.length || d.skillOrder.length}
-          <section class="sec" data-testid="lol-champion-skills">
-            <h3>{m.plugin_lol_skills()}</h3>
-            {#if d.skillPriority.length}
-              <p class="prio"><span>{m.plugin_lol_skill_priority({ order: d.skillPriority.join(" > ") })}</span>
-                <span class="keys">
-                  {#if d.abilities?.some((a) => a.key === "P")}{@render keyTile("P", 24, d.abilities)}<span class="bar-sep"></span>{/if}
-                  {#each KEYS as k (k)}{@render keyTile(k, 24, d.abilities)}{/each}
-                </span></p>
-            {/if}
-            {#if d.skillOrder.length}
-              <p class="order" aria-label={m.plugin_lol_skill_order()}>{#each d.skillOrder.slice(0, 18) as k, i (i)}{@render keyTile(k, 20, d.abilities)}{/each}</p>
-            {/if}
-          </section>
-        {/if}
-        {#if d.spells.length}
-          <section class="sec">
-            <h3>{m.plugin_lol_spells()}</h3>
-            {#each d.spells.slice(0, 2) as p, i (i)}
-              <p class="spell-row"><span class="icons">{#each p.spells as x, j (j)}{@render item(x, 24)}{/each}</span>
-                <span class="names">{p.spells.map((x) => x.name).join(" + ")}</span>
-                <span class="num muted">{m.plugin_lol_win_pick({ win: rate(p.winRate), pick: rate(p.pickRate) })}</span></p>
-            {/each}
-          </section>
-        {/if}
+                </section>
+              {/if}
+              {#if d.skillPriority.length || d.skillOrder.length}
+                <section class="sec" data-testid="lol-champion-skills">
+                  <h3>{m.plugin_lol_skills()}</h3>
+                  {#if d.skillPriority.length}
+                    <p class="prio"><span>{m.plugin_lol_skill_priority({ order: d.skillPriority.join(" > ") })}</span>
+                      <span class="keys">
+                        {#if d.abilities?.some((a) => a.key === "P")}{@render keyTile("P", 24, d.abilities)}<span class="bar-sep"></span>{/if}
+                        {#each KEYS as k (k)}{@render keyTile(k, 24, d.abilities)}{/each}
+                      </span></p>
+                  {/if}
+                  {#if d.skillOrder.length}
+                    <p class="order" aria-label={m.plugin_lol_skill_order()}>{#each d.skillOrder.slice(0, 18) as k, i (i)}{@render keyTile(k, 20, d.abilities)}{/each}</p>
+                  {/if}
+                </section>
+              {/if}
+              {#if d.spells.length}
+                <section class="sec">
+                  <h3>{m.plugin_lol_spells()}</h3>
+                  {#each d.spells.slice(0, 2) as p, i (i)}
+                    <p class="spell-row"><span class="icons">{#each p.spells as x, j (j)}{@render item(x, 24)}{/each}</span>
+                      <span class="names">{p.spells.map((x) => x.name).join(" + ")}</span>
+                      <span class="num muted">{m.plugin_lol_win_pick({ win: rate(p.winRate), pick: rate(p.pickRate) })}</span></p>
+                  {/each}
+                </section>
+              {/if}
+            </div>
+          {/if}
+        </div>
         {/if}
       {:else if data?.mode === "mayhem"}
         {@const d = data}
-        <header class="head">
-          <ChampIcon id={d.champion.id} icon={d.champion.icon} name={d.champion.short} size={56} />
-          <div>
-            <p class="name" data-testid="lol-champion-name">{d.champion.label}</p>
-            <p class="meta num" data-testid="lol-champion-mayhem-rank">{m.plugin_lol_mayhem_rank({ rank: d.rank ?? "—", win: rate(d.winRate), pick: rate(d.pickRate) })}</p>
-            <p class="meta"><SourceTag id="qq101" date={qqDate} onLink={session.openLink} /></p>
-          </div>
-        </header>
-        {#if d.partners.length}
-          <section class="sec">
-            <h3>{m.plugin_lol_partners()}</h3>
-            <p class="partners">
-              {#each d.partners as c (c.id)}
-                <span class="partner" role="link" tabindex="0" onclick={() => openOther(c.short)} onkeydown={(e) => key(e, c.short)}>
-                  <ChampIcon id={c.id} icon={c.icon} name={c.short} size={24} />{c.short}</span>
-              {/each}
-            </p>
-          </section>
-        {/if}
-        <section class="sec" data-testid="lol-champion-augments">
-          <h3 class="with-src">{m.plugin_lol_best_augments()}
-            {#if choice}
-              <span class="src-at" data-testid="lol-champion-augments-source">
-                <SourceTag id={choice.id} {choice} busy={switching} onPick={(id) => void switchSource("mayhemAugments", id)} onLink={session.openLink} />
-              </span>
+        <div class="mayhem" class:paired={d.partners.length > 0}>
+          {#if d.partners.length}
+            <section class="sec">
+              <h3>{m.plugin_lol_partners()}</h3>
+              <p class="partners">
+                {#each d.partners as c (c.id)}
+                  <span class="partner" role="link" tabindex="0" onclick={() => openOther(c.short)} onkeydown={(e) => key(e, c.short)}>
+                    <ChampIcon id={c.id} icon={c.icon} name={c.short} size={24} />{c.short}</span>
+                {/each}
+              </p>
+            </section>
+          {/if}
+          <section class="sec" data-testid="lol-champion-augments">
+            <h3 class="with-src">{m.plugin_lol_best_augments()}
+              {#if choice}
+                <span class="src-at" data-testid="lol-champion-augments-source">
+                  <SourceTag id={choice.id} {choice} busy={switching} onPick={(id) => void switchSource("mayhemAugments", id)} onLink={session.openLink} />
+                </span>
+              {/if}
+            </h3>
+            {#if notSaved}<p class="hint-line muted" data-testid="lol-source-not-saved">{m.plugin_lol_source_not_saved()}</p>{/if}
+            {#if choice?.id === "opgg"}
+              {@render opggBlock(d.augmentsOpgg ?? null, "lol-champion-augments-opgg")}
+            {:else}
+            <p class="muted note-line">{m.plugin_lol_augments_note({ champion: d.champion.short })}</p>
+            {#each d.augments as a (a.id)}
+              <div class="aug" class:low={a.lowSample} data-testid="lol-champion-augment">
+                <Augment augment={a} size={40} />
+                <span class="aug-name">{a.name}</span>
+                <span class="delta num {a.delta > 0 ? 'good' : a.delta < 0 ? 'bad' : ''}">{a.delta > 0 ? "+" : ""}{a.delta.toFixed(1)}</span>
+                <span class="sample"><span class="num muted">{m.plugin_lol_augment_row({ win: rate(a.winRate), games: num(a.games) })}</span>
+                  {#if a.lowSample}<span class="chip">{m.plugin_lol_low_sample()}</span>{/if}</span>
+              </div>
+            {:else}<p class="muted">—</p>{/each}
+            {#if d.attribution}
+              <p class="muted note-line" data-testid="lol-champion-attribution">{d.attribution} · <a href={ARAMHEX_URL} onclick={(e) => { e.preventDefault(); session.openLink(ARAMHEX_URL); }}>{m.plugin_lol_attribution_open()}</a></p>
             {/if}
-          </h3>
-          {#if notSaved}<p class="hint-line muted" data-testid="lol-source-not-saved">{m.plugin_lol_source_not_saved()}</p>{/if}
-          {#if choice?.id === "opgg"}
-            {@render opggBlock(d.augmentsOpgg ?? null, "lol-champion-augments-opgg")}
-          {:else}
-          <p class="muted note-line">{m.plugin_lol_augments_note({ champion: d.champion.short })}</p>
-          {#each d.augments as a (a.id)}
-            <div class="aug" class:low={a.lowSample} data-testid="lol-champion-augment">
-              <Augment augment={a} size={40} />
-              <span class="grow">{a.name}</span>
-              <span class="delta num {a.delta > 0 ? 'good' : a.delta < 0 ? 'bad' : ''}">{a.delta > 0 ? "+" : ""}{a.delta.toFixed(1)}</span>
-              <span class="num muted">{m.plugin_lol_augment_row({ win: rate(a.winRate), games: num(a.games) })}</span>
-              {#if a.lowSample}<span class="chip">{m.plugin_lol_low_sample()}</span>{/if}
-            </div>
-          {:else}<p class="muted">—</p>{/each}
-          {#if d.attribution}
-            <p class="muted note-line" data-testid="lol-champion-attribution">{d.attribution} · <a href={ARAMHEX_URL} onclick={(e) => { e.preventDefault(); session.openLink(ARAMHEX_URL); }}>{m.plugin_lol_attribution_open()}</a></p>
-          {/if}
-          {/if}
-        </section>
+            {/if}
+          </section>
+        </div>
       {/if}
       {#if data}
         <!-- 来源标签在每块的标题旁边；页脚只有图片出处和拳头的声明 -->
@@ -435,18 +446,28 @@
 {/if}
 
 <style>
+  .overview {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--lol-sp-5) var(--lol-sp-7);
+    margin-block: var(--lol-sp-3) var(--lol-sp-6);
+  }
   .tools {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px 16px;
-    margin-bottom: var(--lol-sp-5);
+    gap: var(--lol-sp-3) var(--lol-sp-5);
+    flex: 1 1 315px;
+    max-inline-size: 410px;
+    min-inline-size: 0;
   }
   .search {
     display: flex;
     flex: 1;
     gap: 8px;
-    min-width: 240px;
+    min-width: min(175px, 100%);
   }
   .field {
     display: flex;
@@ -482,15 +503,17 @@
   .head {
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-bottom: var(--lol-sp-5);
+    gap: var(--lol-sp-5);
+    min-width: 0;
   }
+  .identity { min-width: 0; }
   .head p {
     margin: 0;
   }
   .name {
-    font-size: var(--lol-fs-lg);
-    line-height: var(--lol-lh-lg);
+    margin: 0 0 var(--lol-sp-2);
+    font-size: var(--lol-fs-2xl);
+    line-height: var(--lol-lh-2xl);
     font-weight: var(--lol-fw-strong);
   }
   .meta {
@@ -527,7 +550,9 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
-    margin-bottom: var(--lol-sp-5);
+    padding-block: var(--lol-sp-3);
+    margin-block-end: var(--lol-sp-6);
+    border-block: 1px solid var(--lol-line);
   }
   .k {
     flex: none;
@@ -549,64 +574,78 @@
     color: var(--lol-text-2);
   }
   .lane[aria-pressed="true"] {
-    border-color: var(--lol-text);
+    background: var(--lol-bg-3);
     color: var(--lol-text);
     font-weight: var(--lol-fw-medium);
   }
   .vs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--lol-sp-5);
-    margin-bottom: var(--lol-sp-5);
-  }
-  @container (max-width: 559px) {
-    .vs {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-  .box {
-    overflow: hidden;
-    border: 1px solid var(--lol-line);
-    border-radius: var(--lol-r-lg);
+    gap: var(--lol-sp-6) var(--lol-sp-8);
+    margin-block-end: var(--lol-sp-7);
   }
   .box h3,
   .sec h3 {
-    margin: 0;
-    font-size: var(--lol-fs-xs);
-    font-weight: var(--lol-fw-medium);
-    color: var(--lol-text-3);
+    margin: 0 0 var(--lol-sp-2);
+    font-size: var(--lol-fs-lg);
+    line-height: var(--lol-lh-lg);
+    font-weight: var(--lol-fw-strong);
+    color: var(--lol-text);
   }
-  .box h3 {
-    padding: 6px 12px;
-    border-bottom: 1px solid var(--lol-line);
-    background: var(--lol-bg-2);
+  .opponents {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+    gap: var(--lol-sp-2) var(--lol-sp-4);
   }
   .box .muted {
-    margin: 8px 12px;
+    margin: 0;
   }
   .vs-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    gap: 8px;
-    min-height: 34px;
-    padding: 0 12px;
+    gap: 0 var(--lol-sp-4);
+    padding-block: var(--lol-sp-2);
     cursor: pointer;
   }
-  .vs-row + .vs-row {
-    border-top: 1px solid var(--lol-line);
+  .vs-row :global(.ci) {
+    grid-row: span 2;
+  }
+  .vs-row .num {
+    color: var(--lol-text-2);
+    font-size: var(--lol-fs-xs);
   }
   .vs-row:hover,
   .partner:hover {
     background: var(--lol-hover);
   }
-  .grow {
-    flex: 1;
+  .rift-kit,
+  .setup {
+    display: grid;
+    align-items: start;
+    gap: var(--lol-sp-7) var(--lol-sp-8);
     min-width: 0;
+  }
+  @container (min-width: 860px) {
+    .rift-kit:has(.setup) {
+      grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+    }
+    .setup {
+      padding-inline-start: var(--lol-sp-7);
+      border-inline-start: 1px solid var(--lol-line);
+    }
+  }
+  .grow, .aug-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .sec {
     display: grid;
     gap: 6px;
-    margin-bottom: var(--lol-sp-5);
+    margin-block-end: var(--lol-sp-6);
+  }
+  .rift-kit .sec {
+    margin: 0;
   }
   .build-row,
   .rune-row,
@@ -621,14 +660,56 @@
   .opts {
     display: grid;
     flex: 1;
-    gap: 6px;
+    gap: var(--lol-sp-2);
     min-width: 0;
   }
   .opt {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
     align-items: center;
-    gap: 4px 10px;
+    gap: 0 var(--lol-sp-4);
+    padding-block: var(--lol-sp-2);
+  }
+  .build-row {
+    align-items: start;
+  }
+  .build-row + .build-row {
+    border-block-start: 1px solid var(--lol-line);
+    padding-block-start: var(--lol-sp-2);
+  }
+  .opt .icons {
+    grid-row: span 2;
+    flex-wrap: wrap;
+  }
+  .opt .num, .rune-row .num, .spell-row .num {
+    font-size: var(--lol-fs-xs);
+    color: var(--lol-text-2);
+  }
+  .sec .names {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    color: var(--lol-text);
+  }
+  .rune-row, .spell-row, .prio {
+    gap: var(--lol-sp-2) var(--lol-sp-4);
+  }
+  .rune-row .runes {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    margin-block-end: var(--lol-sp-2);
+  }
+  .build-row .k {
+    overflow-wrap: anywhere;
+    width: 4.5em;
+    padding-block-start: var(--lol-sp-4);
+  }
+  @container (max-width: 399px) {
+    .build-row {
+      display: grid;
+      gap: 0;
+    }
+    .build-row .k { padding-block-start: 0; }
+    .vs { gap: var(--lol-sp-4); }
   }
   .icons {
     display: inline-flex;
@@ -677,6 +758,20 @@
     gap: 6px 14px;
     margin: 0;
   }
+  @container (min-width: 760px) {
+    .mayhem.paired {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) minmax(0, 4fr);
+      align-items: start;
+      gap: var(--lol-sp-8);
+      padding-block-start: var(--lol-sp-5);
+      border-block-start: 1px solid var(--lol-line);
+    }
+    .partners {
+      display: grid;
+      justify-items: start;
+    }
+  }
   .partner {
     display: inline-flex;
     align-items: center;
@@ -693,28 +788,42 @@
     color: inherit;
   }
   .aug {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(12em, 24%);
     align-items: center;
     gap: 10px;
     min-height: 48px;
-    padding: 0 4px;
+    padding-block: var(--lol-sp-2);
   }
   .aug + .aug {
     border-top: 1px solid var(--lol-line);
   }
-  .aug.low {
-    opacity: 0.6;
+  .aug.low .aug-name {
+    color: var(--lol-text-2);
+  }
+  .sample {
+    display: flex;
+    align-items: center;
+    justify-content: end;
+    flex-wrap: wrap;
+    gap: var(--lol-sp-2);
+  }
+  @container (max-width: 479px) {
+    .aug { grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--lol-sp-1) var(--lol-sp-4); }
+    .aug > :global(:first-child) { grid-row: span 2; }
+    .sample { grid-column: 2 / -1; justify-content: start; }
   }
   .delta {
     width: 3.5em;
-    text-align: right;
+    text-align: end;
     font-weight: var(--lol-fw-medium);
   }
   .src-at {
-    margin-left: auto;
+    margin-inline-start: auto;
   }
   .with-src {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
   }

@@ -145,18 +145,20 @@
           <span class="r">{m.plugin_lol_col_win()}</span><span class="r">{m.plugin_lol_col_pick()}</span>
           {#if full}<span class="r wide">{m.plugin_lol_col_ban()}</span><span class="wide">{m.plugin_lol_col_counters()}</span>{/if}
         </div>
-        {#each full ? riftRows : riftRows.slice(0, 10) as row (row.champion.id)}
-          <div class="row link" role="link" tabindex="0" data-testid="lol-app-tier-row" title={row.champion.label}
+        {#each full ? riftRows : riftRows.slice(0, 10) as row, i (row.champion.id)}
+          <div class="row link" class:group-start={full && i > 0 && row.tier !== riftRows[i - 1].tier} role="link" tabindex="0" data-testid="lol-app-tier-row" title={row.champion.label}
             onclick={() => openChampion(row.champion.short)} onkeydown={(e) => key(e, row.champion.short)}>
             <span class="c-rank num">{row.rank ?? ""}</span>
             {@render tierBadge(row.tier)}
             <span class="champ"><ChampIcon id={row.champion.id} icon={row.champion.icon} name={row.champion.short} size={full ? 32 : 24} /><b>{row.champion.short}</b></span>
-            <span class="r num">{rate(row.winRate)}</span>
+            <span class="r num win-rate">{rate(row.winRate)}</span>
             <span class="r num">{rate(row.pickRate)}</span>
             {#if full}
-              <span class="r num wide">{rate(row.banRate)}</span>
-              <span class="counters wide" title={m.plugin_lol_tier_counters({ names: row.counters.map((c) => c.short).join(" · ") })}>
-                {#each row.counters as c (c.id)}<ChampIcon id={c.id} icon={c.icon} name={c.short} size={20} />{/each}
+              <span class="r num ban" data-label={m.plugin_lol_col_ban()}>{rate(row.banRate)}</span>
+              <span class="counters" data-label={m.plugin_lol_col_counters()} title={m.plugin_lol_tier_counters({ names: row.counters.map((c) => c.short).join(" · ") })}>
+                <span class="counter-icons">
+                  {#each row.counters as c (c.id)}<ChampIcon id={c.id} icon={c.icon} name={c.short} size={20} />{/each}
+                </span>
               </span>
             {/if}
           </div>
@@ -176,7 +178,7 @@
               {#if row.rankChange && row.rankChange > 0}<span class="good">↑{row.rankChange}</span>{:else if row.rankChange && row.rankChange < 0}<span class="bad">↓{-row.rankChange}</span>{/if}
             </span>
             <span class="champ"><ChampIcon id={row.champion.id} icon={row.champion.icon} name={row.champion.short} size={full ? 32 : 24} /><b>{row.champion.short}</b></span>
-            <span class="r num">{rate(row.winRate)}</span>
+            <span class="r num win-rate">{rate(row.winRate)}</span>
             <span class="r num">{rate(row.pickRate)}</span>
           </div>
         {/each}
@@ -203,22 +205,22 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px 16px;
-    margin-bottom: var(--lol-sp-5);
+    gap: var(--lol-sp-4) var(--lol-sp-7);
+    margin-block-end: var(--lol-sp-6);
   }
   .lanes {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: var(--lol-sp-2);
   }
   .lane {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    height: 26px;
-    padding: 0 8px;
-    border: 1px solid transparent;
-    border-radius: var(--lol-r-md);
+    min-height: 28px;
+    padding: var(--lol-sp-1) var(--lol-sp-4);
+    border: 0;
+    border-radius: var(--lol-r-sm);
     background: none;
     cursor: pointer;
     font-size: var(--lol-fs-xs);
@@ -226,20 +228,24 @@
   }
   .lane:hover {
     color: var(--lol-text);
+    background: var(--lol-hover);
   }
   .lane[aria-selected="true"] {
-    border-color: var(--lol-text);
+    background: var(--lol-bg-3);
     color: var(--lol-text);
     font-weight: var(--lol-fw-medium);
   }
-  .table {
-    overflow: hidden;
-    border: 1px solid var(--lol-line);
-    border-radius: var(--lol-r-lg);
+  .page .table:is(.rift, .mayhem) {
+    display: grid;
+    align-items: stretch;
+    column-gap: clamp(8px, 1.6cqi, 24px);
+    border-block-end: 1px solid var(--lol-line);
   }
-  .card .table {
-    border: 0;
-    border-radius: 0;
+  .page .rift {
+    grid-template-columns: calc(3ch + var(--lol-sp-5)) 3ch minmax(7em, 2fr) repeat(3, minmax(4em, 0.8fr)) minmax(calc(6em + var(--lol-sp-5)), 1.05fr);
+  }
+  .page .mayhem {
+    grid-template-columns: calc(3ch + var(--lol-sp-5)) minmax(4ch, max-content) minmax(7em, 2fr) repeat(2, minmax(4em, 1fr));
   }
   .row {
     display: grid;
@@ -248,10 +254,14 @@
     min-height: var(--lol-row-list);
     padding: 0 12px;
   }
-  .rift .row {
-    grid-template-columns: 2em 2.6em minmax(8em, 1fr) 4.6em 4.6em 4.6em 6.5em;
+  .page .table:is(.rift, .mayhem) .row {
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    column-gap: inherit;
+    padding-block: var(--lol-sp-2);
+    padding-inline: var(--lol-sp-5);
   }
-  .mayhem .row {
+  .card .mayhem .row {
     grid-template-columns: 2em 2.6em minmax(8em, 1fr) 4.6em 4.6em;
   }
   .card .rift .row {
@@ -263,8 +273,12 @@
   .table:not(.rift):not(.mayhem) .row {
     display: flex;
   }
-  .row + .row {
+  .card .row + .row {
     border-top: 1px solid var(--lol-line);
+  }
+  .page .mayhem .link + .link,
+  .page .row.group-start {
+    border-block-start: 1px solid var(--lol-line);
   }
   .row.link {
     cursor: pointer;
@@ -272,23 +286,43 @@
   .row.link:hover {
     background: var(--lol-hover);
   }
+  .page .row.link:focus-visible {
+    outline-offset: -2px;
+  }
   .row.head {
     min-height: 30px;
     background: var(--lol-bg-2);
     font-size: var(--lol-fs-xs);
     color: var(--lol-text-3);
   }
+  .page .row.head {
+    min-height: 34px;
+    line-height: var(--lol-lh-xs);
+    color: var(--lol-text-2);
+  }
   .card .row.head {
     min-height: 24px;
     background: transparent;
   }
   .r {
-    text-align: right;
+    text-align: end;
   }
   .c-rank {
     font-size: var(--lol-fs-xs);
     color: var(--lol-text-3);
-    text-align: right;
+    text-align: end;
+  }
+  .page .link .c-rank {
+    font-size: var(--lol-fs-md);
+    color: var(--lol-text-2);
+  }
+  .page .link .r {
+    color: var(--lol-text-2);
+  }
+  .page .link .win-rate {
+    font-weight: var(--lol-fw-strong);
+    font-size: var(--lol-fs-md);
+    color: var(--lol-text);
   }
   .champ {
     display: flex;
@@ -324,9 +358,25 @@
     border-color: var(--lol-text);
     color: var(--lol-text);
   }
-  .counters {
+  .page .tier {
+    border: 0;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .page .tier.t0 {
+    color: var(--lol-text);
+    font-size: var(--lol-fs-md);
+  }
+  .page .tier.t1 {
+    color: var(--lol-text-2);
+  }
+  .counters,
+  .counter-icons {
     display: flex;
-    gap: 2px;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lol-sp-1);
   }
   .change {
     font-size: var(--lol-fs-xs);
@@ -335,8 +385,41 @@
     .wide {
       display: none;
     }
-    .rift .row {
-      grid-template-columns: 1.6em 2.4em minmax(0, 1fr) 4.4em 4.4em;
+    .page .table:is(.rift, .mayhem) {
+      grid-template-columns: calc(3ch + var(--lol-sp-3)) minmax(3.5ch, max-content) minmax(0, 1fr) repeat(2, minmax(3.6em, max-content));
+      column-gap: var(--lol-sp-3);
+    }
+    .page .table:is(.rift, .mayhem) .row {
+      padding-inline: var(--lol-sp-3);
+    }
+    .lane {
+      padding-inline: var(--lol-sp-2);
+    }
+    .page .rift .link {
+      padding-block: var(--lol-sp-4);
+      row-gap: var(--lol-sp-3);
+    }
+    .page .rift .link + .link {
+      border-block-start: 1px solid var(--lol-line);
+    }
+    .page .rift .champ b, .page .mayhem .champ b {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .ban {
+      grid-column: 3;
+      text-align: start;
+    }
+    .counters {
+      grid-column: 4 / -1;
+      justify-content: end;
+    }
+    .ban::before,
+    .counters::before {
+      content: attr(data-label);
+      margin-inline-end: var(--lol-sp-2);
+      color: var(--lol-text-3);
+      font-size: var(--lol-fs-xs);
     }
   }
 </style>

@@ -133,6 +133,29 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
 
 /// 把一条消息交给主会话（当前对话）：没有在跑就开始一轮；正在跑就作为插话。
 pub fn send_message(app: &AppHandle, message: Message) -> Result<Value, String> {
+    drive_main(app, message, None)
+}
+
+/// 小窗明确显示的是哪段对话：不能把这条文字误送到后来切换的对话里。
+pub(super) fn send_text_to(app: &AppHandle, text: String, id: &str) -> Result<Value, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("消息为空".into());
+    }
+    drive_main(
+        app,
+        Message::User {
+            text: text.into(),
+            attachments: Vec::new(),
+            source: "chat".into(),
+            at_ms: now_ms(),
+            context: String::new(),
+        },
+        Some(id),
+    )
+}
+
+fn drive_main(app: &AppHandle, message: Message, target: Option<&str>) -> Result<Value, String> {
     let rt = runtime(app)?;
     let store = store(app)?;
     let Started {
@@ -140,13 +163,15 @@ pub fn send_message(app: &AppHandle, message: Message) -> Result<Value, String> 
         message,
         cancel,
         inbox,
-    } = match claim_main(&rt.inner, &store, message)? {
+    } = match claim_main(&rt.inner, &store, message, target)? {
         Claim::Steered(id) => return Ok(json!({"status": "steered", "conversationId": id})),
         Claim::Started(started) => *started,
     };
     // 已经认领了：这里出错也要跑这一轮（否则 `running` 一直占着，之后的话全成了没人收的插话）
-    if let Err(e) = store.set_current(Some(&conversation.id)) {
-        log::log(&format!("agent: set current failed: {e}"));
+    if target.is_none() {
+        if let Err(e) = store.set_current(Some(&conversation.id)) {
+            log::log(&format!("agent: set current failed: {e}"));
+        }
     }
     let id = conversation.id.clone();
     let app = app.clone();
@@ -179,14 +204,32 @@ fn claim_main(
     inner: &Mutex<Inner>,
     store: &ConversationStore,
     message: Message,
+    target: Option<&str>,
 ) -> Result<Claim, String> {
     if let Some(running) = &inner.lock().unwrap().running {
-        running.inbox.steer(message);
-        return Ok(Claim::Steered(running.conversation_id.clone()));
+        return steer(running, message, target);
     }
     // 先选好是哪段（读盘不占锁）
-    let picked = pick_conversation(store)?;
-    claim_picked(inner, store, picked, message)
+    let picked = if let Some(id) = target {
+        if store.current().as_deref() != Some(id) {
+            return Err("当前对话已切换，请在当前对话里发送".into());
+        }
+        store
+            .load(id)?
+            .filter(|c| c.parent.is_none())
+            .ok_or("找不到可以发送消息的这段对话")?
+    } else {
+        pick_conversation(store)?
+    };
+    claim_picked(inner, store, picked, message, target)
+}
+
+fn steer(running: &Running, message: Message, target: Option<&str>) -> Result<Claim, String> {
+    if target.is_some_and(|id| id != running.conversation_id) {
+        return Err("琴音正在另一段对话里回答，请等她说完".into());
+    }
+    running.inbox.steer(message);
+    Ok(Claim::Steered(running.conversation_id.clone()))
 }
 
 /// 这句话进哪段对话：当前对话。子会话的记录只能看：玩家选着它发消息时开一段新对话（子会话由父会话驱动，ADR 022）；
@@ -207,14 +250,14 @@ fn claim_picked(
     store: &ConversationStore,
     picked: Conversation,
     message: Message,
+    target: Option<&str>,
 ) -> Result<Claim, String> {
     let cancel = CancellationToken::default();
     let inbox = Arc::new(Inbox::default());
     {
         let mut inner = inner.lock().unwrap();
         if let Some(running) = &inner.running {
-            running.inbox.steer(message);
-            return Ok(Claim::Steered(running.conversation_id.clone()));
+            return steer(running, message, target);
         }
         inner.running = Some(Running {
             conversation_id: picked.id.clone(),
@@ -1030,6 +1073,28 @@ mod tests {
         kotone_agent::push::find(messages, "lol:opening:42").is_some()
     }
 
+    #[test]
+    fn targeted_input_does_not_send_to_another_conversation() {
+        let (_dir, store) = open_store();
+        let id = current(&store);
+        let mut other = store.create();
+        store.save(&mut other).unwrap();
+        let inner = Mutex::new(Inner::default());
+
+        assert!(claim_main(&inner, &store, Message::user("过期草稿"), Some(&other.id)).is_err());
+        let Claim::Started(started) =
+            claim_main(&inner, &store, Message::user("在吗"), Some(&id)).unwrap()
+        else {
+            panic!("当前对话应该开始一轮")
+        };
+        assert!(claim_main(&inner, &store, Message::user("不该插话"), Some(&other.id)).is_err());
+        assert!(started.inbox.next_follow_up().is_none());
+        assert!(matches!(
+            claim_main(&inner, &store, Message::user("补充"), Some(&id)).unwrap(),
+            Claim::Steered(steered) if steered == id
+        ));
+    }
+
     /// 审查 2026-11-25 的交错：玩家的话进来、主会话选好了对话（读了盘）还没认领，推送正好在这一下记进对话。
     /// 认领之后再读，这一轮拿到的是带卡片的对话；这一轮存盘（照 `turn` 的 on_event）以后卡片和那句话都还在。
     #[test]
@@ -1047,7 +1112,7 @@ mod tests {
             Appended::Saved
         );
         let Claim::Started(started) =
-            claim_picked(&inner, &store, picked, Message::user("对面谁最菜")).unwrap()
+            claim_picked(&inner, &store, picked, Message::user("对面谁最菜"), None).unwrap()
         else {
             panic!("没在跑，应该开始一轮")
         };
@@ -1075,7 +1140,8 @@ mod tests {
         let (_dir, store) = open_store();
         let id = current(&store);
         let inner = Mutex::new(Inner::default());
-        let Claim::Started(started) = claim_main(&inner, &store, Message::user("在吗")).unwrap()
+        let Claim::Started(started) =
+            claim_main(&inner, &store, Message::user("在吗"), None).unwrap()
         else {
             panic!()
         };
@@ -1099,7 +1165,7 @@ mod tests {
         assert_eq!(store.load(&id).unwrap().unwrap().messages.len(), before);
         // 再来一句：插话，不另开一轮
         assert!(matches!(
-            claim_main(&inner, &store, Message::user("还有")).unwrap(),
+            claim_main(&inner, &store, Message::user("还有"), None).unwrap(),
             Claim::Steered(steered) if steered == id
         ));
         // 别的对话不受影响
@@ -1138,7 +1204,8 @@ mod tests {
             append_locked(&inner, &store, &id, &card()).unwrap(),
             Appended::Saved
         );
-        let Claim::Started(started) = claim_main(&inner, &store, Message::user("在吗")).unwrap()
+        let Claim::Started(started) =
+            claim_main(&inner, &store, Message::user("在吗"), None).unwrap()
         else {
             panic!()
         };

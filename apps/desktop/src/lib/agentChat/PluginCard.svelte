@@ -4,15 +4,19 @@
   // 插件做成 MCP App 的页面（ADR 039 D5）：卡片里是同一个 App（inline，进入可视区才加载），点头上一行打开完整页面；
   // App 里能点，所以卡片本身不整块当按钮。
   // 悬浮窗的小窗里（ADR 043 D6）没有右侧栏：给了 `onOpen` 就交给它（打开 Kotone、定位到这张卡片）。
+  import { getContext } from "svelte";
   import { Maximize2 } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
+  import { PAGE_MATCH } from "$plugins/lol/ui/types";
   import type { ToolDisplay } from "../agent";
   import PluginView from "../components/plugins/PluginView.svelte";
-  import { viewOf } from "../pluginUi";
+  import { FLOATING_PLUGIN_APP, viewOf } from "../pluginUi";
   import { openPluginPage } from "../stores/pluginPages";
 
   let { display, onOpen }: { display: ToolDisplay; onOpen?: () => void } = $props();
+  const inFloating = getContext<boolean | undefined>(FLOATING_PLUGIN_APP);
   const uri = $derived(display.ui.uri);
+  const floatingMatch = $derived(inFloating && uri === PAGE_MATCH);
   const found = $derived(viewOf(uri));
   const params = $derived((display.ui.params ?? {}) as Record<string, unknown>);
 
@@ -23,7 +27,8 @@
 </script>
 
 {#if found?.view.app}
-  <div class="my-1.5 max-w-[34rem] overflow-hidden rounded-xl border border-hairline bg-card/60" data-testid="plugin-card" data-uri={uri} data-app="true">
+  <div class={`my-1.5 max-w-[34rem] overflow-hidden ${floatingMatch ? "" : "rounded-xl border border-hairline bg-card/60"}`}
+    class:floating-match={floatingMatch} data-testid="plugin-card" data-uri={uri} data-app="true">
     <button type="button" class="flex h-8 w-full items-center gap-2 border-b border-hairline px-3 text-left text-xs text-muted-foreground hover:text-foreground"
       data-testid="plugin-card-open" onclick={open}>
       <span class="min-w-0 flex-1 truncate font-medium text-foreground/85">{found.view.title()}</span>
@@ -51,3 +56,13 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .floating-match > button {
+    height: 28px;
+    padding-inline: 6px;
+    border-color: var(--floating-line, var(--hairline, var(--border)));
+  }
+  .floating-match > button:not(:hover) { color: var(--floating-muted, var(--muted-foreground)); }
+  .floating-match > button > span:first-child { color: var(--floating-ink, var(--foreground)); }
+</style>

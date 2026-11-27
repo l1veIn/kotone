@@ -11,10 +11,9 @@
 //!   `screen_corner.rs`）；拖过就照记下的位置（相对工作区，`assistant.bubble.position`，[`place`]）。窗口变大变小时贴着
 //!   的那个角不动。窗口跟着内容的大小走：界面量好内容报上来（[`floating_layout`]），这里按那块屏的缩放摆；从收着到显示，
 //!   等界面报了这一版的大小才显示，免得先用旧的大小闪一下（界面 1.5 秒还没报就照旧显示）。小窗最高是工作区高度的 40%。
-//! - **硬规矩：绝不抢焦点**：窗口不可聚焦（`focusable: false`，Windows 上是 `WS_EX_NOACTIVATE`）、建的时候不要焦点、
-//!   `SW_SHOWNA` 显示；点 ×、点卡片里的按钮都不激活它（消息提示真机验证过：不可聚焦照样点得到）。拖动是 Kotone 自己
-//!   跟着光标挪（[`floating_drag`]，`SetWindowPos` 不激活），照语音输入的 `drag_overlay`。点卡片上面那一行、“打开 Kotone”
-//!   才把主窗口拿到前面（`agent::auto_card_open`，玩家自己的动作）。
+//! - **显示时不抢焦点**：窗口平时不可聚焦（`focusable: false`，Windows 上是 `WS_EX_NOACTIVATE`），用 `SW_SHOWNA` 显示。
+//!   点 ×、卡片按钮、拖动仍不激活它。玩家点小窗的文字输入框时才临时把键盘焦点交给它（[`floating_input_focus`]）；输完、
+//!   失焦或收起时，前台如果还是小窗就交还。点“打开 Kotone”才把主窗口拿到前面（`agent::auto_card_open`）。
 //! - **不显示的时候**：游戏独占全屏、演示模式（`attention::floating_hidden`）；推送还要看 `attention::popup_blocked`
 //!   （Kotone 在前台、别的程序全屏时不弹，推送照样在聊天里）。设置里关了“显示悬浮窗”（`assistant.bubble.enabled`），
 //!   推送不弹；她那一行照旧由 `bubble.rs` 按同一个开关决定。
@@ -49,6 +48,8 @@ const MARGIN: f64 = 16.0;
 const MAX_HEIGHT_SHARE: f64 = 0.4;
 /// 界面一直没报大小时，过多久照旧显示。
 const LAYOUT_FALLBACK: Duration = Duration::from_millis(1_500);
+/// 收起先让界面把气泡 / 小窗折回头像；此期间保留原来的窗口大小和区域。
+const HIDE_GRACE: Duration = Duration::from_millis(350);
 /// 界面一直没报大小时用的大小（逻辑像素）。
 const FALLBACK_SIZE: (f64, f64) = (376.0, 112.0);
 
@@ -67,12 +68,21 @@ struct State {
     visible_since: u64,
     /// 上一次发给界面的样子是显示着的。
     visible: bool,
+    /// 正在播放哪一版退场。新内容出现时作废旧退场。
+    exiting: Option<u64>,
+    input_focus: Option<InputFocus>,
     /// 正在拖（拖完再摆）。
     dragging: bool,
     /// 倒计时的代数（新的倒计时作废旧的）。
     timer: u64,
     /// 窗口收拾过（关掉浏览器行为、不进截图）。
     prepared: bool,
+}
+
+struct InputFocus {
+    appearance: u64,
+    #[cfg(windows)]
+    previous: Option<(isize, u32)>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -131,20 +141,41 @@ fn announce(app: &AppHandle) {
 
 /// 状态变了：告诉界面，按新的样子显示 / 收起，排下一次到点。
 fn publish(app: &AppHandle) {
-    let (view, waiting) = {
+    let (view, waiting, exiting) = {
         let mut s = state().lock().unwrap();
         let view = s.model.view(now_ms());
         let visible = view.shown;
         let appearing = visible && !s.visible;
+        let exiting = (!visible && s.visible).then_some(view.revision);
         if appearing {
             s.visible_since = view.revision;
+            s.exiting = None;
+        } else if exiting.is_some() {
+            s.exiting = exiting;
         }
         s.visible = visible;
-        (view, appearing.then_some(s.visible_since))
+        (view, appearing.then_some(s.visible_since), exiting)
     };
     let _ = app.emit(EVENT, &compose(app, view));
     apply(app);
     schedule(app);
+    if let Some(revision) = exiting {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(HIDE_GRACE).await;
+            let finished = {
+                let mut s = state().lock().unwrap();
+                let finished = s.exiting == Some(revision) && !s.visible;
+                if finished {
+                    s.exiting = None;
+                }
+                finished
+            };
+            if finished {
+                apply(&app);
+            }
+        });
+    }
     if let Some(since) = waiting {
         // 界面一直没报大小（页面还没加载好、出错了）：照旧显示，不至于一直不出来
         let app = app.clone();
@@ -198,7 +229,7 @@ fn schedule(app: &AppHandle) {
 fn apply(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let (visible, ready, size, boxes, dragging) = {
+        let (visible, ready, size, boxes, dragging, exiting, stale_focus) = {
             let s = state().lock().unwrap();
             let boxes = s.boxes.clone();
             (
@@ -207,6 +238,10 @@ fn apply(app: &AppHandle) {
                 s.size,
                 boxes,
                 s.dragging,
+                s.exiting.is_some(),
+                s.input_focus
+                    .as_ref()
+                    .is_some_and(|focus| focus.appearance != s.visible_since),
             )
         };
         let window = match handle.get_webview_window(LABEL) {
@@ -218,8 +253,14 @@ fn apply(app: &AppHandle) {
             None => return,
         };
         prepare(&window);
-        if !visible || crate::attention::floating_hidden().is_some() {
-            crate::hide_window(&window);
+        let suppressed = crate::attention::floating_hidden().is_some();
+        if stale_focus || !visible || suppressed {
+            release_input_focus(&window);
+        }
+        if !visible || suppressed {
+            if suppressed || !exiting {
+                crate::hide_window(&window);
+            }
             return;
         }
         if !ready {
@@ -484,6 +525,7 @@ pub fn floating_current(app: AppHandle) -> Shown {
 /// 界面量好了内容的大小（逻辑像素；每画一版都报，内容变大变小时也报）：按它摆、该显示就显示。`mini`：头像旁边放的是
 /// 聊天小窗（false = 气泡；旧界面不报）——换了样子进度条从头走，小窗的一圈长一些。`boxes`：挡鼠标的那几块
 /// （`[x, y, 宽, 高]`，相对内容左上角，带着阴影那一圈；旧界面不报 = 整个窗口都挡），别的地方点得到下面的游戏。
+/// 没有任何内容（空数组）表示退场完成，立即收起这一版窗口。
 #[tauri::command]
 pub fn floating_layout(
     app: AppHandle,
@@ -495,12 +537,20 @@ pub fn floating_layout(
 ) {
     let reshaped = {
         let mut s = state().lock().unwrap();
-        if width.is_finite() && height.is_finite() {
-            s.size = Some((width.max(1.0), height.max(1.0)));
-            s.boxes = boxes;
+        if boxes.as_ref().is_some_and(Vec::is_empty) {
+            if s.visible || s.exiting != Some(revision) {
+                return;
+            }
+            s.exiting = None;
+            false
+        } else {
+            if width.is_finite() && height.is_finite() {
+                s.size = Some((width.max(1.0), height.max(1.0)));
+                s.boxes = boxes;
+            }
+            s.laid_out = s.laid_out.max(revision);
+            mini.is_some_and(|mini| s.model.shape(mini, revision, now_ms()))
         }
-        s.laid_out = s.laid_out.max(revision);
-        mini.is_some_and(|mini| s.model.shape(mini, revision, now_ms()))
     };
     if reshaped {
         announce(&app);
@@ -514,6 +564,119 @@ pub fn floating_hover(app: AppHandle, inside: bool) {
     let changed = state().lock().unwrap().model.hover(inside, now_ms());
     if changed {
         announce(&app);
+    }
+}
+
+/// 只在玩家主动编辑小窗的文字输入框时拿键盘焦点，输入结束后交还。
+#[tauri::command]
+pub async fn floating_input_focus(
+    window: tauri::WebviewWindow,
+    active: bool,
+) -> Result<(), String> {
+    if window.label() != LABEL {
+        return Err("只能在悬浮窗里使用快捷输入".into());
+    }
+    let app = window.app_handle().clone();
+    let (done, result) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let changed = if active {
+            request_input_focus(&window)
+        } else {
+            release_input_focus(&window);
+            Ok(())
+        };
+        let _ = done.send(changed);
+    })
+    .map_err(|e| e.to_string())?;
+    result.await.map_err(|e| e.to_string())?
+}
+
+fn request_input_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let appearance = {
+        let s = state().lock().unwrap();
+        s.visible.then_some(s.visible_since)
+    }
+    .filter(|_| crate::attention::floating_hidden().is_none())
+    .ok_or("悬浮窗现在无法接收输入")?;
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+        };
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+        // SAFETY: 只读取窗口状态，且只有玩家在小窗的输入框主动请求时才激活该窗口。
+        // 不走 tao 的 set_focus/set_focusable：SW_SHOWNA 显示后 tao 的可见性缓存还是 false。
+        // WS_EX_NOACTIVATE 不会阻止这一次明确的 SetForegroundWindow，普通卡片点击仍保持不激活。
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() {
+                return Err("悬浮窗还没显示".into());
+            }
+            let previous = GetForegroundWindow();
+            if previous != hwnd {
+                let mut pid = 0;
+                if !previous.0.is_null() {
+                    GetWindowThreadProcessId(previous, Some(&mut pid));
+                }
+                if !SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow() != hwnd {
+                    return Err("无法聚焦悬浮窗的输入框".into());
+                }
+                state().lock().unwrap().input_focus = Some(InputFocus {
+                    appearance,
+                    previous: (pid != 0).then_some((previous.0 as isize, pid)),
+                });
+            } else if let Some(focus) = state().lock().unwrap().input_focus.as_mut() {
+                focus.appearance = appearance;
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        window.set_focusable(true).map_err(|e| e.to_string())?;
+        state().lock().unwrap().input_focus = Some(InputFocus { appearance });
+        if let Err(e) = window.set_focus() {
+            release_input_focus(window);
+            return Err(e.to_string());
+        }
+    }
+    if let Err(e) = AsRef::<tauri::Webview>::as_ref(window).set_focus() {
+        release_input_focus(window);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+fn release_input_focus(window: &tauri::WebviewWindow) {
+    let Some(focus) = state().lock().unwrap().input_focus.take() else {
+        return;
+    };
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+            SetForegroundWindow,
+        };
+        let (Ok(hwnd), Some((handle, pid))) = (window.hwnd(), focus.previous) else {
+            return;
+        };
+        let previous = HWND(handle as _);
+        // SAFETY: 只在小窗还是前台、原窗口仍属同一进程且可见时，才把前台还回去。
+        unsafe {
+            let mut current_pid = 0;
+            if GetForegroundWindow() == hwnd
+                && IsWindowVisible(previous).as_bool()
+                && !IsIconic(previous).as_bool()
+                && GetWindowThreadProcessId(previous, Some(&mut current_pid)) != 0
+                && current_pid == pid
+            {
+                let _ = SetForegroundWindow(previous);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = focus;
+        let _ = window.set_focusable(false);
     }
 }
 

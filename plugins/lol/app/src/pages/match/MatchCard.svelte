@@ -4,7 +4,7 @@
   // - 窄（< 640 px，小窗大约 360 px）：两队上下排，对面在上；每人一行（CardRow），点一行在下面展开详情；
   // - 宽（≥ 640 px）：LeagueAkari 用户习惯的样子，每队一行、每人一列（TeamGrid），每列带最近 5 局。
   // 隐藏了身份的人照样一行（只有英雄，写“隐藏了身份”）；只写事实，不写谁是突破口（ADR 043 D2）。
-  // 选人阶段只有我方一块，标题写“这局 · 选人中”。最底下只有来源标签（客户端），没有风险提示（D8）。
+  // 选人阶段只有我方一块，标题写“这局 · 选人中”。来源标签（客户端）放在普通聊天卡片底下。
   import Footer from "../../components/Footer.svelte";
   import Icon from "../../components/Icon.svelte";
   import { duration } from "../../format";
@@ -14,7 +14,13 @@
   import { hiddenIn, partiesIn, partyOf, phaseOf, teamStats } from "./match";
   import TeamGrid from "./TeamGrid.svelte";
 
-  let { match, canOpen, onOpen, onLink }: { match: MatchData; canOpen: boolean; onOpen: () => void; onLink?: (url: string) => void } = $props();
+  let { match, canOpen, floating = false, onOpen, onLink }: {
+    match: MatchData;
+    canOpen: boolean;
+    floating?: boolean;
+    onOpen: () => void;
+    onLink?: (url: string) => void;
+  } = $props();
 
   /** 宽到能并排放 5 列（LeagueAkari 的排布）。 */
   const WIDE = 640;
@@ -48,12 +54,13 @@
     </div>
     {#each team as p, i (keyOf(p, ally, i))}
       {@const key = keyOf(p, ally, i)}
-      <CardRow {p} party={party(p)} mode={match.mode} {champSelect} expanded={open === key} onToggle={() => toggle(key)} />
+      <CardRow {p} party={party(p)} mode={match.mode} {champSelect} {floating} expanded={open === key} onToggle={() => toggle(key)} />
     {/each}
   </div>
 {/snippet}
 
-<div class="card" bind:clientWidth={width} data-testid="lol-match-card" data-phase={phase ?? ""} data-layout={wide ? "grid" : "rows"}>
+<div class="card" class:floating bind:clientWidth={width} data-testid="lol-match-card"
+  data-phase={phase ?? ""} data-layout={wide ? "grid" : "rows"} data-surface={floating ? "floating" : undefined}>
   <div class="card-head">
     <span class="t">{champSelect ? m.plugin_lol_card_title_select() : m.plugin_lol_card_title()}</span>
     <span class="sub">{sub}</span>
@@ -78,10 +85,34 @@
     {#if !champSelect}{@render rows(false, match.enemies)}{/if}
     {@render rows(true, match.allies)}
   {/if}
-  <Footer card sources={[{ id: "client" }]} extra={match.waiting > 0 ? m.plugin_lol_waiting_count({ count: match.waiting }) : ""} {onLink} />
+  {#if !floating || match.waiting > 0}
+    <Footer card sources={floating ? [] : [{ id: "client" }]}
+      extra={match.waiting > 0 ? m.plugin_lol_waiting_count({ count: match.waiting }) : ""} {onLink} />
+  {/if}
 </div>
 
 <style>
+  .floating {
+    --lol-bg-2: light-dark(#f3f6f0, #22251f);
+    --lol-bg-3: light-dark(#e8ede6, #30352d);
+    --lol-text: light-dark(#242a22, #eeefe6);
+    --lol-text-2: light-dark(#535c51, #acb0a6);
+    --lol-text-3: light-dark(#616a5f, #969d91);
+    --lol-line: light-dark(#dce3d9, #343832);
+    --lol-line-2: light-dark(#cdd6ca, #444a41);
+    --lol-ally: light-dark(#2f66d9, #8dbffe);
+    --lol-ally-soft: light-dark(#e8eee7, #263028);
+    --lol-enemy: light-dark(#b85208, #f2bb74);
+    --lol-win: light-dark(#13804e, #75dc9d);
+    --lol-loss: light-dark(#c8323f, #f49b99);
+    --lol-warn: light-dark(#946000, #f2bb74);
+    --lol-stripe: 0px;
+  }
+  .floating .card-head { padding-inline: 6px; }
+  .floating .card-head .t { font-size: var(--lol-fs-lg); }
+  .floating .chead { min-height: 26px; height: auto; padding: 4px 6px; }
+  .floating .chead .label { flex-wrap: wrap; gap: 2px 6px; overflow: visible; }
+  .floating .chead .warn { white-space: normal; }
   .chead {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 6.4em 2.4em 12px;

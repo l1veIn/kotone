@@ -41,6 +41,7 @@
   let now = $state(Date.now());
 
   const full = $derived(display !== "inline");
+  const floating = $derived(session.context?.kotoneSurface === "floating");
   const phase = $derived(match ? phaseOf(match) : null);
   const canOpen = $derived(!!session.context?.availableDisplayModes?.includes("fullscreen"));
 
@@ -174,7 +175,7 @@
 {:else}
   <div class="app" data-testid="lol-app-match" data-phase={phase ?? ""}>
     {#if match}
-      <MatchCard {match} {canOpen} onOpen={() => void session.requestDisplayMode("fullscreen")} onLink={session.openLink} />
+      <MatchCard {match} {canOpen} {floating} onOpen={() => void session.requestDisplayMode("fullscreen")} onLink={session.openLink} />
     {:else if error}
       <p class="card-line danger" role="alert">{m.plugin_lol_match_failed({ error })}</p>
     {:else if status}

@@ -13,7 +13,7 @@
   import { errText, settingsStore, toast } from "../stores/ui";
   import { wakePhrases } from "../wake";
 
-  let { size = "sm", ready = true, testid = "call-kotone", onSetCallKey }: {
+  let { size = "sm", ready = true, testid = "call-kotone", onSetCallKey, beforeCall, onBusyChange, onError }: {
     /** icon：输入框里发送键旁边的图标（悬停看快捷键）；sm：小按钮；lg：聊天页中间的大按钮。 */
     size?: "icon" | "sm" | "lg";
     /** AI 连接选好了没有。 */
@@ -21,6 +21,9 @@
     testid?: string;
     /** 没有呼叫键时，说明里给一个“设一个呼叫键 →”。 */
     onSetCallKey?: () => void;
+    beforeCall?: () => Promise<boolean>;
+    onBusyChange?: (busy: boolean) => void;
+    onError?: (error: unknown) => void;
   } = $props();
 
   const name = $derived($companionName);
@@ -34,11 +37,19 @@
   let calling = $state(false);
   /** 正在和她通话（ADR 033）：按钮变成“挂断”。 */
   let inCall = $state(false);
+  let disposed = false;
+  $effect(() => { onBusyChange?.(calling); });
   onMount(() => {
     let unlisten: (() => void) | undefined;
-    void callActive().then((active) => { inCall = active; }).catch(() => {});
-    void subscribeCall((active) => { inCall = active; }).then((u) => { unlisten = u; });
-    return () => unlisten?.();
+    void callActive().then((active) => { if (!disposed) inCall = active; }).catch(() => {});
+    void subscribeCall((active) => { if (!disposed) inCall = active; }).then((u) => {
+      if (disposed) u();
+      else unlisten = u;
+    }).catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   });
   const label = $derived(listening ? m.chat_call_listening_name({ name }) : inCall ? m.chat_call_hang_up() : calling && preparing ? m.chat_call_preparing() : m.chat_call_label({ name }));
   const hint = $derived(blocked
@@ -65,9 +76,14 @@
     try {
       // 语音识别没准备好：先启动（本地识别）或等它准备好（在线识别），再开始听。
       if (asr !== "local-running" && asr !== "online-ready") await startRuntime();
-      await callKotone();
+      if (disposed) return;
+      if (beforeCall && !await beforeCall()) return;
+      if (!disposed) await callKotone();
     } catch (error) {
-      toast(false, m.chat_call_failed({ error: errText(error) }));
+      if (!disposed) {
+        if (onError) onError(error);
+        else toast(false, m.chat_call_failed({ error: errText(error) }));
+      }
     } finally {
       calling = false;
     }

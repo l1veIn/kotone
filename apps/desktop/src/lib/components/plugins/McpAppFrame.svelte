@@ -23,7 +23,7 @@
   // - inline：进入可视区才加载（长对话里不一下子起一堆 iframe），高度跟 App 报的走（有上限）；
   // - 数据变了（推送同一个 key 再推一次，ADR 043 D5）：握手以后把新的结果再推给 App（MCP Apps 的 tool-result 通知可以来
   //   多次，App 照“宿主又推来一个结果”重画），iframe 不重新加载、App 里点到哪还在哪。
-  import { onMount } from "svelte";
+  import { getContext, onMount } from "svelte";
   import { get } from "svelte/store";
   import type { AppBridge, McpUiHostContext } from "@modelcontextprotocol/ext-apps/app-bridge";
   import { openExternal } from "$lib/ipc";
@@ -31,7 +31,8 @@
   import { currentLocale } from "$lib/locale";
   import { callAppTool, mcpToolName, openApp, parseAppLink, pluginInfo, readAppResource, toCallToolResult, type CallToolResult } from "$lib/mcpApps";
   import { pluginCall } from "$lib/plugins";
-  import { FROM_PAGE } from "$lib/pluginUi";
+  import { FLOATING_PLUGIN_APP, FROM_PAGE } from "$lib/pluginUi";
+  import { PAGE_MATCH } from "$plugins/lol/ui/types";
   import { m } from "$lib/paraglide/messages.js";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
@@ -55,6 +56,8 @@
     /** 聊天卡片里的 App 请求全屏：宿主在右侧栏打开完整页面。 */
     onRequestFullscreen?: () => void;
   } = $props();
+
+  const inFloating = getContext<boolean | undefined>(FLOATING_PLUGIN_APP);
 
   /** 高度范围（px）：卡片 120–520；完整页面至少 352（22rem），不设上限。 */
   const INLINE_MIN = 120;
@@ -158,6 +161,7 @@
         platform: "desktop",
         userAgent: `Kotone/${__APP_VERSION__}`,
         containerDimensions: dimensions(),
+        ...(inFloating && displayMode === "inline" && app.plugin === "lol" && uri === PAGE_MATCH ? { kotoneSurface: "floating" } : {}),
         ...(tool ? { toolInfo: { tool: { name: mcpToolName(tool), inputSchema: { type: "object" } } } } : {}),
       };
       const b = new AppBridge(

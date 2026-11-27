@@ -9,9 +9,8 @@
   //   （buildTurns）、同一套消息组件（ChatTurn 的紧凑样子）。原来只放推送的“推送流”去掉了。
   // - 显示不显示、进度条、摆在哪由后端 floating/mod.rs 定（kotone://floating）；这里画，量好大小报上去（floatingLayout，带上
   //   放的是不是小窗：后端按它定一圈多长；窗口跟着内容走，透明的地方不挡游戏）。
-  // - 不抢焦点（窗口不可聚焦，后端管）：点 ×、点卡片里的按钮都不激活窗口；按住头像、气泡、小窗上面那一行拖动，由后端跟着
-  //   光标挪（floatingDrag）。点推送的一行、卡片上面那一行、“打开 Kotone”才把主窗口拿到前面（玩家自己的动作）。
-  import { onMount, tick } from "svelte";
+  // - 通知、卡片和拖动不抢焦点。只有主动点快捷输入才把键盘交给小窗，离开输入时归还；编辑和录音时停住倒计时。
+  import { onMount, tick, untrack } from "svelte";
   import { X } from "@lucide/svelte";
   import { listen } from "@tauri-apps/api/event";
   import { m } from "$lib/paraglide/messages.js";
@@ -25,8 +24,9 @@
   import { pluginText } from "../../lib/plugins";
   import { settingsStore } from "../../lib/stores/ui";
   import { companionName } from "../../lib/stores/companion";
+  import { initRuntime } from "../../lib/stores/runtime";
   import {
-    floatingClose, floatingCurrent, floatingDrag, floatingHover, floatingLayout, floatingOpen, subscribeFloating,
+    floatingClose, floatingCurrent, floatingDrag, floatingHover, floatingInputFocus, floatingLayout, floatingOpen, subscribeFloating,
     type FloatingBox, type FloatingLine, type FloatingView,
   } from "../../lib/floating";
   import { appearancePreferences, initializeAppearancePreferences } from "../../lib/appearance/appearancePreferences";
@@ -55,26 +55,36 @@
   const chat = provideAgentChat(new AgentChat());
 
   let view = $state<FloatingView | null>(null);
+  let lastVisible = $state<FloatingView | null>(null);
   /** 她最新的快照。 */
   let her = $state<BubbleSnapshot | null>(null);
   /** 最后一个显示着的快照：她说完、bubble.rs 收起以后，后端还留着她那一行时接着画它。 */
   let last = $state<BubbleSnapshot | null>(null);
   let hovering = $state(false);
+  let composerActive = $state(false);
   /** 这一次出现里换成过聊天小窗。 */
   let stuck = $state(false);
   let root = $state<HTMLDivElement>();
+  let surface = $state<HTMLDivElement>();
+  let mounted = $state<FloatingShape | null>(null);
+  let unfolded = $state(false);
+  let bubble = $state<{ her: BubbleSnapshot | null; line: FloatingLine | null }>({ her: null, line: null });
+  let requested: FloatingShape | null = null;
+  let motionRevision = 0;
 
   const shown = $derived(!!view?.shown);
-  const corner = $derived(view?.corner ?? "bottom-right");
+  const displayView = $derived(view?.shown ? view : lastVisible);
+  const corner = $derived(displayView?.corner ?? view?.corner ?? "bottom-right");
   const right = $derived(corner.endsWith("right"));
   const bottom = $derived(corner.startsWith("bottom"));
-  const herShown = $derived(shown && view?.her ? last : null);
+  const herShown = $derived(displayView?.her ? last : null);
   const busy = $derived(!!herShown && !!her && BUSY.has(her.phase) && !view?.ring?.running);
-  const focus = $derived(view?.mini?.focus ?? null);
-  const turns = $derived<Turn[]>(shown
+  const paused = $derived(shown && (hovering || composerActive));
+  const focus = $derived(displayView?.mini?.focus ?? null);
+  const turns = $derived<Turn[]>(shown || mounted === "mini"
     ? buildTurns(chat.conversation?.messages ?? [], chat.runningHere ? chat.live : null, chat.runningHere)
     : []);
-  const fresh = $derived(shown ? freshTurns(turns, view?.since ?? 0, focus) : []);
+  const fresh = $derived(freshTurns(turns, displayView?.since ?? 0, focus));
   const computed = $derived<FloatingShape>(shown
     ? floatingShape({ popped: !!view?.mini, her: herShown, lines: view?.lines.length ?? 0, fresh })
     : "bubble");
@@ -97,13 +107,14 @@
   });
   const status = $derived(herShown && STATUS.has(herShown.phase) ? herShown : null);
   const line = $derived<FloatingLine | null>(view?.lines[view.lines.length - 1] ?? null);
-  const maxList = $derived(Math.max(MIN_LIST, (view?.maxHeight ?? 400) - CHROME));
+  const maxList = $derived(Math.max(MIN_LIST, (displayView?.maxHeight ?? 400) - CHROME));
 
   function accept(next: FloatingView) {
     if (view && next.revision < view.revision) return;
     if (!next.shown || next.since !== view?.since) stuck = false;
     // 收起了：鼠标停着的那一下不带到下一次（后端也清掉了）
-    if (!next.shown) hovering = false;
+    if (next.shown) lastVisible = next;
+    else { hovering = false; composerActive = false; }
     view = next;
     void relayout();
   }
@@ -122,13 +133,13 @@
     relayoutQueued = true;
     await tick();
     relayoutQueued = false;
-    report();
+    await report();
   }
 
-  function report() {
-    if (!view || !root) return;
+  async function report() {
+    if (!view || !root || view.shown !== (mounted !== null) || mounted !== requested) return;
     const box = root.getBoundingClientRect();
-    void floatingLayout(view.revision, Math.ceil(box.width), Math.ceil(box.height), shape === "mini", hitBoxes(root, box)).catch(() => {});
+    await floatingLayout(view.revision, Math.ceil(box.width), Math.ceil(box.height), mounted === "mini", hitBoxes(root, box)).catch(() => {});
   }
 
   /** 挡鼠标的几块：头像、旁边的气泡 / 聊天小窗（整块的直接子元素），相对整块的左上角，四周带上 HIT_PAD，裁到整块里。
@@ -147,8 +158,32 @@
     return out;
   }
 
-  // 换了样子（气泡 ↔ 小窗）：再量一次
-  $effect(() => { void shape; void relayout(); });
+  // 两种内容共用头像的圆心。气泡完全折回才替换 DOM，量好新一块再展开，原来的内容在退场期间留着。
+  async function present(next: FloatingShape | null, revision: number) {
+    if (mounted && mounted !== next) {
+      unfolded = false;
+      await tick();
+      const folding = surface?.getAnimations().filter((animation) => "transitionProperty" in animation) ?? [];
+      await Promise.allSettled(folding.map((animation) => animation.finished));
+      if (revision !== motionRevision) return;
+    }
+    mounted = next;
+    await tick();
+    if (revision !== motionRevision) return;
+    await report();
+    if (next && revision === motionRevision) unfolded = true;
+  }
+
+  $effect(() => {
+    const next = shown ? shape : null;
+    const incoming = next === "bubble" ? { her: herShown, line } : null;
+    untrack(() => {
+      if (incoming) bubble = incoming;
+      if (next === requested) return;
+      requested = next;
+      void present(next, ++motionRevision);
+    });
+  });
 
   // ---- 拖动和点 ----
   let pressAt: { x: number; y: number } | null = null;
@@ -180,10 +215,7 @@
     void floatingClose().catch(() => {});
   }
 
-  function hover(inside: boolean) {
-    hovering = inside;
-    void floatingHover(inside).catch(() => {});
-  }
+  $effect(() => { void floatingHover(paused).catch(() => {}); });
 
   /** 和 Kotone 主窗口一样的配色、亮暗、字体（外观偏好存在本机，窗口之间共用）；不跟缩放（窗口大小跟着内容）。 */
   function applyAppearance(settings: AppearanceSettings, prefersDark: boolean) {
@@ -220,6 +252,7 @@
     const apply = () => { if (current) applyAppearance(current, media?.matches ?? true); };
     const unsubscribe = appearancePreferences.subscribe((s) => { current = s; apply(); });
     media?.addEventListener("change", apply);
+    keep(initRuntime().catch(() => () => {}));
     void loadSettings();
     if (isTauri) keep(listen("kotone://settings-changed", () => void loadSettings()));
     keep(subscribeBubble(acceptHer));
@@ -229,6 +262,7 @@
     void floatingCurrent().then((v) => { if (v && !disposed) accept(v); }).catch(() => {});
     return () => {
       disposed = true;
+      motionRevision++;
       for (const u of unlisten) u();
       chat.dispose();
       unsubscribe();
@@ -240,34 +274,42 @@
 
 <div bind:this={root} class="root" class:right class:bottom data-testid="floating" data-mode={shown ? shape : "hidden"}
   data-revision={view?.revision ?? 0} role="region" aria-label={m.chat_floating_label()}
-  onpointerenter={() => hover(true)} onpointerleave={() => hover(false)}>
-  {#if shown}
-    <div class="corner" role="presentation" onpointerdown={drag}>
-      <Avatar ring={view?.ring ?? null} phase={herShown?.phase ?? null} {busy} paused={hovering} />
+  data-surface={mounted ?? "none"} data-unfolded={unfolded}
+  onpointerenter={() => { if (shown) hovering = true; }} onpointerleave={() => { hovering = false; }}>
+  {#if mounted}
+    <div class="corner" class:folding={!unfolded} role="presentation" onpointerdown={drag}>
+      <Avatar ring={view?.ring ?? displayView?.ring ?? null} phase={herShown?.phase ?? null} {busy} {paused} />
     </div>
-    {#if shape === "mini"}
-      <MiniChat turns={listed} {anchor} {target} pop={focus} {maxList} title={$companionName} {chat} {status}
-        onOpen={openHere} onOpenPush={openPush} onClose={close} onDrag={drag} onLayout={() => void relayout()} />
-    {:else if herShown || line}
-      <div class="side" role="presentation" onpointerdown={drag}>
-        <button type="button" class="close" aria-label={m.chat_floating_close()} title={m.chat_floating_close()} data-testid="floating-close"
-          onclick={close}><X class="size-3" /></button>
-        {#if herShown}
-          <div data-testid="floating-her"><HerLine snap={herShown} /></div>
-        {:else if line}
-          {@const plugin = pluginText(line.plugin, "name", line.pluginName)}
-          <!-- 一行推送：点它打开 Kotone、定位到这一条；按住拖动 -->
-          <div class="line" class:single={line.cells.length === 1} role="button" tabindex="-1" data-testid="floating-line" data-id={line.id}
-            aria-label={m.chat_floating_line_label({ plugin })} title={m.chat_floating_open()}
-            onclick={(e) => openLine(e, line)} onkeydown={() => {}}>
-            <PluginLogo id={line.plugin} name={plugin} size={16} />
-            {#each line.cells as cell, i (i)}
-              <span class="cell {cell.tone ? TONES[cell.tone] : ''}" data-testid="floating-cell" data-tone={cell.tone ?? ""}>{cell.text}</span>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    {/if}
+    {#key mounted}
+      {#if mounted === "mini"}
+        <div bind:this={surface} class="surface" class:unfolded inert={!unfolded}>
+          <MiniChat turns={listed} {anchor} {target} pop={focus} {maxList} title={$companionName} {chat} {status}
+            active={shown && unfolded} conversationId={displayView?.mini?.conversationId ?? chat.conversation?.id ?? null}
+            onOpen={openHere} onOpenPush={openPush} onClose={close} onDrag={drag} onLayout={() => void relayout()}
+            onInputFocus={floatingInputFocus} onComposerActive={(active) => { composerActive = active; }} />
+        </div>
+      {:else if bubble.her || bubble.line}
+        <div bind:this={surface} class="surface side" class:unfolded inert={!unfolded} role="presentation" onpointerdown={drag}>
+          <button type="button" class="close" aria-label={m.chat_floating_close()} title={m.chat_floating_close()} data-testid="floating-close"
+            onclick={close}><X class="size-3" /></button>
+          {#if bubble.her}
+            <div data-testid="floating-her"><HerLine snap={bubble.her} /></div>
+          {:else if bubble.line}
+            {@const line = bubble.line}
+            {@const plugin = pluginText(line.plugin, "name", line.pluginName)}
+            <!-- 一行推送：点它打开 Kotone、定位到这一条；按住拖动 -->
+            <div class="line" class:single={line.cells.length === 1} role="button" tabindex="-1" data-testid="floating-line" data-id={line.id}
+              aria-label={m.chat_floating_line_label({ plugin })} title={m.chat_floating_open()}
+              onclick={(e) => openLine(e, line)} onkeydown={() => {}}>
+              <PluginLogo id={line.plugin} name={plugin} size={16} />
+              {#each line.cells as cell, i (i)}
+                <span class="cell {cell.tone ? TONES[cell.tone] : ''}" data-testid="floating-cell" data-tone={cell.tone ?? ""}>{cell.text}</span>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    {/key}
   {/if}
 </div>
 
@@ -276,20 +318,42 @@
   /* 窗口跟着这一块的大小走（后端按报上去的大小摆），这一块贴着窗口贴着的那个角：头像在角上，旁边的往屏幕里长；
      四周 8 留给阴影。宽度是内容自己的宽度，不受窗口大小影响（窗口还是旧大小时也量得准）。 */
   .root {
-    position: fixed; display: flex; flex-direction: row; gap: 8px; box-sizing: border-box;
+    --floating-orb-overlap: -8px;
+    --hinge-gap: calc(28px - var(--floating-orb-overlap));
+    --hinge-x: calc(0px - var(--hinge-gap));
+    --fold-y: 78deg;
+    --fold-x: -14deg;
+    --floating-bubble: #1d201d;
+    --floating-bubble-border: #ffffff22;
+    --floating-bubble-ink: #eeefe6;
+    position: fixed; display: flex; flex-direction: row; box-sizing: border-box;
     width: max-content; max-width: 480px; padding: 8px; user-select: none;
     left: 0; top: 0; align-items: flex-start;
     font-family: var(--appearance-ui-font, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif);
   }
-  .root.right { left: auto; right: 0; flex-direction: row-reverse; }
-  .root.bottom { top: auto; bottom: 0; align-items: flex-end; }
-  .corner { flex: none; }
-  .side { position: relative; display: flex; flex-direction: column; margin-bottom: 4px; }
-  .root:not(.bottom) .side { margin: 4px 0 0; }
+  .root.right { left: auto; right: 0; flex-direction: row-reverse; --hinge-x: calc(100% + var(--hinge-gap)); --fold-y: -78deg; }
+  .root.bottom { top: auto; bottom: 0; align-items: flex-end; --fold-x: 14deg; --floating-orb-overlap: 18px; }
+  .root.bottom.right { --floating-compose-end: 17px; }
+  .root.bottom:not(.right) { --floating-compose-start: 17px; }
+  .corner { position: relative; z-index: 2; flex: none; transition: scale 235ms cubic-bezier(.22, .72, .17, 1); }
+  .corner.folding { scale: .955; }
+  .surface {
+    --surface-inset: 0px;
+    --hinge-y: calc(28px - var(--surface-inset));
+    position: relative; margin: var(--surface-inset) 0 0 calc(0px - var(--floating-orb-overlap)); flex: none;
+    transform-origin: var(--hinge-x) var(--hinge-y);
+    transform: perspective(720px) rotateY(var(--fold-y)) rotateX(var(--fold-x)) scale(.06);
+    opacity: 0;
+    transition: transform 260ms cubic-bezier(.32, .57, .28, 1), opacity 120ms ease 110ms;
+  }
+  .root.right .surface { margin-left: 0; margin-right: calc(0px - var(--floating-orb-overlap)); }
+  .root.bottom .surface { margin-top: 0; margin-bottom: var(--surface-inset); --hinge-y: calc(100% - 28px + var(--surface-inset)); }
+  .surface.unfolded { transform: none; opacity: 1; transition: transform 395ms cubic-bezier(.23, .65, .19, 1), opacity 145ms ease 18ms; }
+  .side { --surface-inset: 5px; display: flex; flex-direction: column; }
 
   .close {
     position: absolute; top: -6px; z-index: 1; display: flex; width: 18px; height: 18px; align-items: center; justify-content: center;
-    border: 1px solid rgba(255, 255, 255, .16); border-radius: 50%; background: rgba(22, 20, 34, .95); color: #d9d4ef;
+    border: 1px solid var(--floating-bubble-border); border-radius: 50%; background: var(--floating-bubble); color: var(--floating-bubble-ink);
     cursor: pointer; opacity: 0; transition: opacity 120ms ease;
   }
   .root.right .close { left: -6px; }
@@ -298,8 +362,8 @@
   .close:hover { color: #fff; }
   .line {
     display: flex; max-width: 360px; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 12px;
-    background: rgba(22, 20, 34, .92); color: #f4f2fb; border: 1px solid rgba(255, 255, 255, .12);
-    box-shadow: 0 6px 18px #0007; cursor: pointer; animation: rise .18s ease-out both;
+    background: var(--floating-bubble); color: var(--floating-bubble-ink); border: 1px solid var(--floating-bubble-border);
+    box-shadow: 0 6px 18px #0007; cursor: pointer;
   }
   .line:focus { outline: none; }
   .cell { border-radius: 6px; padding: 2px 8px; font-size: 13px; font-weight: 600; line-height: 18px; background: rgba(255, 255, 255, .1); white-space: nowrap; }
@@ -311,8 +375,7 @@
   .tone-ok { background: rgba(80, 160, 255, .22); color: #9fcbff; }
   .tone-bad { background: rgba(255, 176, 32, .22); color: #ffd27f; }
 
-  @keyframes rise { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
   @media (prefers-reduced-motion: reduce) {
-    .line { animation: none; }
+    .surface, .surface.unfolded, .corner { transition: none; }
   }
 </style>

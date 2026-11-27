@@ -44,6 +44,9 @@ export interface PluginBridge {
 /** 页面参数里的这一项表示数据是页面自己查的（不是她那一刻查的快照）。调工具前要去掉。 */
 export const FROM_PAGE = "_fromPage";
 
+/** 悬浮小窗给下方插件卡片的宿主标记。 */
+export const FLOATING_PLUGIN_APP = Symbol("kotone.floatingPluginApp");
+
 /** 一个页面拿到的东西：地址、参数、数据（structuredContent；null = 页面自己去读）、桥。 */
 export interface PluginViewProps {
   uri: string;

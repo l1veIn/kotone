@@ -1,5 +1,5 @@
 <script lang="ts">
-  // “这局”全屏的一个人（68 px，三行；照 LeagueAkari 的对局页排字段，形状是我们的）：
+  // “这局”全屏的一个人，三组信息随行宽换行：
   //   英雄头像 40（右下召唤师等级）+ 两个召唤师技能竖排 ·
   //   第一行：英雄名（选人时加分路）· 名字#编号 · 开黑字母 · 我 · 隐藏战绩 ……右边段位徽章 + 字
   //   第二行：近 20 局胜负 · 胜率 · KDA · 场均死 · 这个模式的局数、胜率、分均伤害
@@ -53,7 +53,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
-  class="p stripe"
+  class="p"
   class:me={p.me}
   class:clickable
   role={clickable ? "button" : undefined}
@@ -133,11 +133,12 @@
 
 <style>
   .p {
+    container-type: inline-size;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 10px;
-    min-height: var(--lol-row-player);
-    padding: 8px 12px 8px 14px;
+    gap: var(--lol-sp-2) var(--lol-sp-5);
+    align-content: center;
+    padding: var(--lol-sp-5);
   }
   .p.clickable {
     cursor: pointer;
@@ -145,12 +146,18 @@
   .p.clickable:hover {
     background: var(--lol-hover);
   }
+  .p.clickable:focus-visible {
+    outline: 2px solid var(--lol-ring);
+    outline-offset: -2px;
+  }
   .p.me {
     background: var(--lol-ally-soft);
   }
   .pics {
     display: flex;
-    gap: 2px;
+    grid-row: 1 / span 3;
+    align-self: start;
+    gap: var(--lol-sp-1);
   }
   .pics :global(.intent) {
     opacity: 0.5;
@@ -159,17 +166,21 @@
     outline-offset: -1px;
   }
   .body {
-    min-width: 0;
+    display: contents;
+  }
+  .l1, .l2, .l3 {
+    grid-column: 2;
+    min-inline-size: 0;
   }
   .l1 {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
-    min-width: 0;
-    height: 20px;
+    align-content: center;
+    gap: var(--lol-sp-1) var(--lol-sp-3);
   }
   .champ {
-    flex: none;
+    overflow-wrap: anywhere;
     font-size: var(--lol-fs-md);
     font-weight: var(--lol-fw-strong);
   }
@@ -203,15 +214,14 @@
   .end {
     display: inline-flex;
     flex: none;
-    margin-left: auto;
-    padding-left: 6px;
+    margin-inline-start: auto;
   }
   .l2 {
     display: flex;
-    gap: 10px;
-    height: 18px;
-    overflow: hidden;
-    white-space: nowrap;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0 var(--lol-sp-4);
+    overflow-wrap: anywhere;
     color: var(--lol-text-2);
   }
   .l2 .v {
@@ -219,15 +229,36 @@
   }
   .l3 {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    min-width: 0;
-    margin-top: 4px;
+    gap: var(--lol-sp-2) var(--lol-sp-4);
+  }
+  .l3 :global(.recent) {
+    flex-wrap: wrap;
+    max-inline-size: 100%;
   }
   .tags {
     display: flex;
-    gap: 4px;
-    min-width: 0;
-    overflow: hidden;
+    flex-wrap: wrap;
+    gap: var(--lol-sp-2);
+    min-inline-size: 0;
+  }
+  .tags :global(.chip) {
+    max-inline-size: 100%;
+    height: auto;
+    min-block-size: var(--lol-lh-sm);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  @container (max-width: 400px) {
+    .pics {
+      grid-row: 1;
+    }
+    .l2, .l3 {
+      grid-column: 1 / -1;
+    }
+    .l2 {
+      margin-block-start: var(--lol-sp-1);
+    }
   }
 </style>

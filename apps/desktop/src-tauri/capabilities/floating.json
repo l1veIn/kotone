@@ -1,6 +1,6 @@
 {
   "identifier": "floating",
-  "description": "悬浮窗（ADR 043 D6）：她的气泡、推送的一行和小窗。不获取输入焦点；能点（×、打开 Kotone、卡片里的按钮）、能拖（拖动走 Kotone 自己的 floating_drag，不激活窗口）",
+  "description": "悬浮窗（ADR 043 D6）：她的气泡、推送的一行和小窗。显示、点击卡片和拖动都不抢焦点；主动编辑快捷输入框时临时获取键盘焦点。",
   "windows": ["floating"],
   "permissions": ["core:event:default"]
 }
