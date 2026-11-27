@@ -2932,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-tauri"
-version = "0.2.0-rc.13"
+version = "0.2.0-rc.14"
 dependencies = [
  "bzip2",
  "dirs",
