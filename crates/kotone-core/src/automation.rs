@@ -1,10 +1,10 @@
-//! 自动化调度器（docs/adr/013-automation-domain-model.md）：一次执行 = 一条 [`Run`]，动作是
-//! “播报”（原提醒）或“程序”（沙盒 Luau，由宿主运行）。开始之前归调度器管（存盘、重启恢复、
-//! 取消、错过不补），开始之后归执行方：播报经 [`ReminderDelivery`] 投递，程序经
-//! [`ProgramLauncher`] 交给宿主，结束时宿主调用 [`AutomationScheduler::finish_program`]。
+//! 自动化调度器（docs/adr/013-automation-domain-model.md、ADR 045）：一次执行 = 一条 [`Run`]，动作只有
+//! “程序”（沙盒 Luau，由宿主运行）。提醒是“晚一会儿开始、只说一句”的程序（[`reminder_source`]）。
+//! 开始之前归调度器管（存盘、重启恢复、取消、错过不补），开始之后归宿主：经 [`ProgramLauncher`] 交给
+//! 宿主，结束时宿主调用 [`AutomationScheduler::finish_program`]。
 //!
 //! 语义（与云函数相反之处）：最多执行一次、绝不自动重试；到期超过 [`MISSED_GRACE_MS`] 就标为
-//! 错过；崩溃时“运行中”的记录恢复为失败；到期时程序名额已满则这次失败，不排队。
+//! 错过；崩溃时“运行中”的记录恢复为失败；到期时绑了游戏窗口的名额已满则这次失败，不排队。
 //! core 不执行模型代码，也不依赖脚本引擎。
 
 use std::{
@@ -14,19 +14,22 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, RwLock,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use serde_json::{Map, Value};
 
 use crate::assistant::LEGACY_REMINDER_SESSION_PREFIX;
 use crate::cancel::CancellationToken;
+use crate::games::GameEvent;
 use crate::reminders::{
-    validate_content, DeliveryKind, LegacyReminderStore, Reminder, ReminderDelivery,
-    ReminderIntent, ReminderStatus, MISSED_GRACE_MS,
+    validate_content, DeliveryKind, LegacyReminderStore, Reminder, ReminderIntent, ReminderStatus,
+    MISSED_GRACE_MS,
 };
 
 pub use crate::reminders::now_ms;
 
-/// 同时运行的程序上限（播报不占名额）。
+/// 同时运行、绑了游戏窗口的执行上限（ADR 045 D5）；不用窗口的（提醒、只说话的）不占名额。
 pub const MAX_RUNNING_PROGRAMS: usize = 3;
 /// 程序源码上限（字符）。
 pub const MAX_SOURCE_CHARS: usize = 8_000;
@@ -37,12 +40,11 @@ const MAX_BATCH: usize = 8;
 const MAX_HISTORY: usize = 1_000;
 pub(crate) const MAX_NAME_CHARS: usize = 40;
 const MAX_ARGS_BYTES: usize = 4_096;
+/// 触发它的游戏事件随执行记录保存（`ask()` 附上）；太大的只留信封、去掉 `data`，执行记录文件不会撑爆。
+const MAX_EVENT_BYTES: usize = 8_192;
 const MAX_LOG_LINES: usize = 50;
 const MAX_MESSAGE_CHARS: usize = 1_000;
 const STORE_VERSION: u32 = 1;
-// A desktop delivery may wait for a preview (60s), microphone (30s), speech
-// (60s), then its visual fallback (60s). The timeout must cover valid settings.
-const DELIVERY_TIMEOUT: Duration = Duration::from_secs(240);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,25 +63,55 @@ impl RunStatus {
     }
 }
 
-/// 播报：今天的提醒。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// 旧写法（rc.13 及以前）的“播报”：只为读旧定义、旧执行记录，读进来就转成程序（ADR 045 D1、D3），不再写。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SpeakAction {
+pub(crate) struct SpeakAction {
     pub text: String,
     pub delivery: Vec<DeliveryKind>,
 }
 
-/// 旧版（rc.13 及以前）替玩家打进游戏聊天框的一句话也记一条执行记录（ADR 014 §3）。**只为读旧记录，不再写**：
-/// 那不是自动化，她发了什么在那段聊天里看（2026-11-27 玩家）；[`AutomationScheduler::open`] 读到就去掉并存盘。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatAction {
-    pub text: String,
-    /// 是否按了发送键（否则只打进聊天框）。
-    pub sent: bool,
-    /// 用的是哪个游戏配置。
-    #[serde(default)]
-    pub profile: String,
+/// 提醒的三段固定程序（ADR 045 D3）：只要语音、只要弹幕、两者都要。她的提醒工具、0.1 升级上来的旧助手、
+/// 0.1 提醒导入、旧执行记录里的播报都生成这三段之一，`args.text` 是要说的话；[`Run::as_reminder`] 按它认提醒。
+const REMIND_VOICE: &str = "say(args.text)";
+const REMIND_DANMAKU: &str = "toast(args.text)";
+const REMIND_BOTH: &str = "say(args.text, { toast = true })";
+
+/// 按回答方式选提醒的程序（空的当语音）。
+pub fn reminder_source(delivery: &[DeliveryKind]) -> &'static str {
+    match (
+        delivery.contains(&DeliveryKind::Voice),
+        delivery.contains(&DeliveryKind::Danmaku),
+    ) {
+        (true, true) => REMIND_BOTH,
+        (false, true) => REMIND_DANMAKU,
+        _ => REMIND_VOICE,
+    }
+}
+
+/// 反过来：是提醒的三段程序之一就给出回答方式。
+fn reminder_delivery(source: &str) -> Option<Vec<DeliveryKind>> {
+    match source.trim() {
+        REMIND_VOICE => Some(vec![DeliveryKind::Voice]),
+        REMIND_DANMAKU => Some(vec![DeliveryKind::Danmaku]),
+        REMIND_BOTH => Some(vec![DeliveryKind::Voice, DeliveryKind::Danmaku]),
+        _ => None,
+    }
+}
+
+/// 一条提醒的程序（不绑窗口；名字取正文前几个字）。
+fn reminder_action(text: &str, delivery: &[DeliveryKind]) -> ProgramAction {
+    let text = text.trim();
+    let mut args = Map::new();
+    args.insert("text".into(), Value::from(text));
+    ProgramAction {
+        name: text.chars().take(MAX_NAME_CHARS).collect(),
+        source: reminder_source(delivery).into(),
+        automation_id: None,
+        args,
+        target: None,
+        event: None,
+    }
 }
 
 /// 程序要作用的游戏窗口：在**下指令时**记录，到期时窗口已关闭则失败，不改投当时的前台窗口。
@@ -104,9 +136,14 @@ pub struct ProgramAction {
     #[serde(default)]
     pub automation_id: Option<String>,
     #[serde(default)]
-    pub args: serde_json::Map<String, serde_json::Value>,
+    pub args: Map<String, Value>,
+    /// 绑定的游戏窗口：程序里用到游戏窗口（[`library::ProgramUses`]）才有；None = 不看前台、不占名额（ADR 045 D4）。
     #[serde(default)]
     pub target: Option<RunTarget>,
+    /// 触发它的游戏事件（按事件触发的才有，ADR 045 D8）：`ask()` 交给她时附上；对外只露 `type` 和 `game`。
+    /// rc.13 读到这个字段会忽略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<GameEvent>,
 }
 
 impl ProgramAction {
@@ -124,15 +161,62 @@ impl ProgramAction {
         }
         Ok(())
     }
+
+    /// 从触发事件填进入参的文字值：（参数名，值）。填法和 [`library::event_args`] 一样（参数名和事件 `data`
+    /// 字段同名，或 camelCase 字段对 snake_case 参数）。
+    pub fn event_filled_texts(&self) -> Vec<(&str, &str)> {
+        let Some(event) = &self.event else {
+            return Vec::new();
+        };
+        self.args
+            .iter()
+            .filter_map(|(name, value)| {
+                let text = value.as_str().filter(|s| !s.trim().is_empty())?;
+                let from_event = event
+                    .data
+                    .iter()
+                    .any(|(k, v)| (k == name || library::snake(k) == *name) && v == value);
+                from_event.then_some((name.as_str(), text))
+            })
+            .collect()
+    }
+
+    /// `ask()` 的两道护栏（ADR 045 D2）。宿主（桌面端 `DesktopHost::ask`）把话交给她**之前**调用，报错就原样
+    /// 交回脚本（脚本引擎只查长度）：
+    /// - 只在保存的自动化里能用：临时程序（`automation_id = None`）没人看过，不能花 AI 调用、不能指使她；
+    /// - 话里不能带从游戏事件填进来的入参值（别人起的名字不能进指令的位置）。
+    pub fn check_ask(&self, text: &str) -> Result<(), String> {
+        if self.automation_id.is_none() {
+            return Err("ask() 只能在保存的自动化里用：先把这段程序保存成自动化".into());
+        }
+        if let Some((name, _)) = self
+            .event_filled_texts()
+            .into_iter()
+            .find(|(_, value)| text.contains(value))
+        {
+            return Err(format!(
+                "ask() 的话里带了游戏事件填进来的参数 {name}：别人起的名字不能进交给她的话里，\
+                 触发它的事件会一起交给她"
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RunAction {
-    Speak(SpeakAction),
     Program(ProgramAction),
-    /// 只为读旧记录（`kind: "chat"`），不再写；`open` 时去掉，[`AutomationScheduler::runs`] 里不会有。
-    Chat(ChatAction),
+}
+
+/// 旧执行记录里的动作（只为读，[`AutomationScheduler::open`] 读到就换掉并存盘）：播报换成提醒的程序；
+/// rc.13 及以前替玩家发到游戏聊天的一句话（`kind: "chat"`，那不是自动化，2026-11-27 玩家）去掉。
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum StoredAction {
+    Speak(SpeakAction),
+    Program(Box<ProgramAction>),
+    Chat(serde::de::IgnoredAny),
 }
 
 /// 程序执行的结果摘要。
@@ -169,30 +253,90 @@ pub struct Run {
     pub report: Option<ProgramReport>,
 }
 
+/// 存盘时的执行记录：和 [`Run`] 一样，只是动作还可能是旧写法。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredRun {
+    id: String,
+    session_id: String,
+    action: StoredAction,
+    created_at_ms: u64,
+    due_at_ms: u64,
+    status: RunStatus,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    started_at_ms: Option<u64>,
+    #[serde(default)]
+    finished_at_ms: Option<u64>,
+    #[serde(default)]
+    report: Option<ProgramReport>,
+}
+
+impl StoredRun {
+    /// 换成现在的样子；旧的发到游戏聊天去掉（None）。第二项：是不是换过。
+    fn upgrade(self) -> (Option<Run>, bool) {
+        let (action, changed) = match self.action {
+            StoredAction::Program(program) => (*program, false),
+            StoredAction::Speak(speak) => (reminder_action(&speak.text, &speak.delivery), true),
+            StoredAction::Chat(_) => return (None, true),
+        };
+        let run = Run {
+            id: self.id,
+            session_id: self.session_id,
+            action: RunAction::Program(action),
+            created_at_ms: self.created_at_ms,
+            due_at_ms: self.due_at_ms,
+            status: self.status,
+            message: self.message,
+            started_at_ms: self.started_at_ms,
+            finished_at_ms: self.finished_at_ms,
+            report: self.report,
+        };
+        (Some(run), changed)
+    }
+}
+
 impl Run {
-    pub fn is_program(&self) -> bool {
-        matches!(self.action, RunAction::Program(_))
+    pub fn program(&self) -> &ProgramAction {
+        let RunAction::Program(program) = &self.action;
+        program
     }
 
-    /// 展示名：播报取正文，程序取名字。
+    /// 绑了游戏窗口（占名额、停下时连等待中的一起取消，ADR 045 D5、D6）。
+    pub fn bound_to_window(&self) -> bool {
+        self.program().target.is_some()
+    }
+
+    /// 展示名：提醒取正文，别的取名字。
     pub fn title(&self) -> &str {
-        match &self.action {
-            RunAction::Speak(s) => &s.text,
-            RunAction::Program(p) => &p.name,
-            RunAction::Chat(c) => &c.text,
+        let program = self.program();
+        match self.reminder_text() {
+            Some(text) => text,
+            None => &program.name,
         }
     }
 
-    /// 提醒界面与助手接口沿用的视图（只对播报有意义）。
+    /// 提醒形状的程序（三段固定源码之一，`args.text` 是文字）的正文和回答方式。
+    fn reminder_parts(&self) -> Option<(&str, Vec<DeliveryKind>)> {
+        let program = self.program();
+        let delivery = reminder_delivery(&program.source)?;
+        let text = program.args.get("text")?.as_str()?;
+        Some((text, delivery))
+    }
+
+    fn reminder_text(&self) -> Option<&str> {
+        self.reminder_parts().map(|(text, _)| text)
+    }
+
+    /// 提醒界面与旧助手接口沿用的视图（只对提醒形状的程序有意义）。
     pub fn as_reminder(&self) -> Option<Reminder> {
-        let RunAction::Speak(speak) = &self.action else {
-            return None;
-        };
+        let (text, delivery) = self.reminder_parts()?;
         Some(Reminder {
             id: self.id.clone(),
             session_id: self.session_id.clone(),
-            text: speak.text.clone(),
-            delivery: speak.delivery.clone(),
+            text: text.to_string(),
+            delivery,
             created_at_ms: self.created_at_ms,
             due_at_ms: self.due_at_ms,
             status: match self.status {
@@ -208,11 +352,7 @@ impl Run {
     }
 
     fn validate(&self) -> Result<(), String> {
-        match &self.action {
-            RunAction::Speak(s) => validate_content(&s.text, &s.delivery),
-            RunAction::Program(p) => p.validate(),
-            RunAction::Chat(_) => Err("发到游戏聊天不再记进执行记录".into()),
-        }
+        self.program().validate()
     }
 }
 
@@ -224,15 +364,25 @@ pub trait ProgramLauncher: Send + Sync {
     fn stop(&self, run_id: &str, reason: &str);
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredRuns {
     version: u32,
     next_id: u64,
     /// 旧 `reminders.json` 是否已导入（只导入一次，旧文件不改）。
-    #[serde(default)]
     imported_reminders: bool,
     runs: Vec<Run>,
+}
+
+/// 存盘文件（读）：执行记录可能还是旧写法。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredRunsFile {
+    version: u32,
+    next_id: u64,
+    #[serde(default)]
+    imported_reminders: bool,
+    runs: Vec<StoredRun>,
 }
 
 impl Default for StoredRuns {
@@ -257,10 +407,11 @@ impl StoredRuns {
         self.runs.iter().filter(|r| r.status.is_open()).count()
     }
 
+    /// 运行中、绑了游戏窗口的执行（名额只数这些）。
     fn running_programs(&self) -> usize {
         self.runs
             .iter()
-            .filter(|r| r.is_program() && r.status == RunStatus::Running)
+            .filter(|r| r.bound_to_window() && r.status == RunStatus::Running)
             .count()
     }
 
@@ -279,8 +430,6 @@ impl StoredRuns {
 
 struct State {
     stored: StoredRuns,
-    /// 正在投递的播报。
-    active: Option<(String, CancellationToken)>,
 }
 
 type RunObserver = Arc<dyn Fn(&Run) + Send + Sync>;
@@ -288,13 +437,10 @@ type RunObserver = Arc<dyn Fn(&Run) + Send + Sync>;
 pub struct AutomationScheduler {
     path: PathBuf,
     state: Mutex<State>,
-    delivery: Arc<dyn ReminderDelivery>,
     launcher: RwLock<Option<Arc<dyn ProgramLauncher>>>,
     on_changed: RwLock<Option<Arc<dyn Fn() + Send + Sync>>>,
     on_finished: RwLock<Option<RunObserver>>,
-    speak_changed: tokio::sync::Notify,
     program_changed: tokio::sync::Notify,
-    delivering: tokio::sync::Mutex<()>,
     shutdown: CancellationToken,
     started: AtomicBool,
 }
@@ -304,72 +450,65 @@ fn clip(message: impl Into<String>) -> String {
 }
 
 impl AutomationScheduler {
-    pub fn open(path: PathBuf, delivery: Arc<dyn ReminderDelivery>) -> Result<Arc<Self>, String> {
-        let mut dropped_chat = false;
+    /// 打开执行记录。旧写法（播报、发到游戏聊天）在这里换掉并存盘（ADR 045 D3）：播报全部换成提醒的程序
+    /// （不绑窗口，到期时间不变；已结束的作为历史），发到游戏聊天的去掉。
+    pub fn open(path: PathBuf) -> Result<Arc<Self>, String> {
+        let mut upgraded = false;
         let mut stored = match std::fs::read(&path) {
             Ok(bytes) => {
                 if bytes.len() > 8 * 1024 * 1024 {
                     return Err("自动化记录文件超过大小上限".into());
                 }
-                let mut stored: StoredRuns = serde_json::from_slice(&bytes)
+                let file: StoredRunsFile = serde_json::from_slice(&bytes)
                     .map_err(|e| format!("自动化记录无法读取，已保留原文件：{e}"))?;
-                if stored.version != STORE_VERSION {
+                if file.version != STORE_VERSION {
                     return Err("自动化记录版本暂不支持，已保留原文件".into());
                 }
-                // 旧版替玩家发到游戏聊天也记了一条（`kind: "chat"`）：不是自动化，去掉、下面存盘（旧版读去掉以后的文件照旧）
-                let before = stored.runs.len();
-                stored
-                    .runs
-                    .retain(|run| !matches!(run.action, RunAction::Chat(_)));
-                dropped_chat = stored.runs.len() != before;
-                if stored.runs.len() > MAX_HISTORY {
+                let mut runs = Vec::with_capacity(file.runs.len());
+                for run in file.runs {
+                    let (run, changed) = run.upgrade();
+                    upgraded |= changed;
+                    runs.extend(run);
+                }
+                if runs.len() > MAX_HISTORY {
                     return Err("自动化记录超过上限".into());
                 }
-                for run in &stored.runs {
+                for run in &runs {
                     run.validate()?;
                 }
-                stored
+                StoredRuns {
+                    version: file.version,
+                    next_id: file.next_id,
+                    imported_reminders: file.imported_reminders,
+                    runs,
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => StoredRuns::default(),
             Err(e) => return Err(format!("读取自动化记录失败：{e}")),
         };
         let now = now_ms();
-        let mut recovered = dropped_chat;
+        let mut recovered = upgraded;
         for run in &mut stored.runs {
             if run.status == RunStatus::Running {
                 run.status = RunStatus::Failed;
-                run.message = Some(if run.is_program() {
-                    "Kotone 退出时自动化仍在运行，已停止，不会自动重新运行".into()
-                } else {
-                    "上次投递中应用退出，完成情况未知，未自动重播".into()
-                });
+                run.message = Some("Kotone 退出时自动化仍在运行，已停止，不会自动重新运行".into());
                 run.finished_at_ms.get_or_insert(now);
                 recovered = true;
             } else if run.status == RunStatus::Pending
                 && now.saturating_sub(run.due_at_ms) > MISSED_GRACE_MS
             {
                 run.status = RunStatus::Missed;
-                run.message = Some(if run.is_program() {
-                    "Kotone 关闭或休眠期间已错过启动时间，未补运行".into()
-                } else {
-                    "应用关闭或休眠期间已错过提醒，未补播".into()
-                });
+                run.message = Some("Kotone 关闭或休眠期间已错过启动时间，未补运行".into());
                 recovered = true;
             }
         }
         let scheduler = Arc::new(Self {
             path,
-            state: Mutex::new(State {
-                stored,
-                active: None,
-            }),
-            delivery,
+            state: Mutex::new(State { stored }),
             launcher: RwLock::new(None),
             on_changed: RwLock::new(None),
             on_finished: RwLock::new(None),
-            speak_changed: tokio::sync::Notify::new(),
             program_changed: tokio::sync::Notify::new(),
-            delivering: tokio::sync::Mutex::new(()),
             shutdown: CancellationToken::default(),
             started: AtomicBool::new(false),
         });
@@ -438,10 +577,7 @@ impl AutomationScheduler {
             next.runs.push(Run {
                 id: reminder.id,
                 session_id: format!("{LEGACY_REMINDER_SESSION_PREFIX}{}", reminder.session_id),
-                action: RunAction::Speak(SpeakAction {
-                    text: reminder.text,
-                    delivery: reminder.delivery,
-                }),
+                action: RunAction::Program(reminder_action(&reminder.text, &reminder.delivery)),
                 created_at_ms: reminder.created_at_ms,
                 due_at_ms: reminder.due_at_ms,
                 status,
@@ -482,7 +618,6 @@ impl AutomationScheduler {
     }
 
     fn notify_changed(&self) {
-        self.speak_changed.notify_one();
         self.program_changed.notify_one();
         let observer = self.on_changed.read().unwrap().clone();
         if let Some(observer) = observer {
@@ -499,7 +634,7 @@ impl AutomationScheduler {
         }
     }
 
-    /// 提醒视图：只含播报，按到期时间排序。
+    /// 提醒视图：只含提醒形状的程序，按到期时间排序。
     pub fn list(&self) -> Vec<Reminder> {
         let mut reminders: Vec<Reminder> = self
             .state
@@ -538,12 +673,13 @@ impl AutomationScheduler {
             .cloned()
     }
 
-    /// 运行中的程序数。
+    /// 运行中、绑了游戏窗口的执行数（名额只数这些）。
     pub fn running_programs(&self) -> usize {
         self.state.lock().unwrap().stored.running_programs()
     }
 
     /// 整批验证、整批落盘；调用方可在 CancellationToken::run_if_active 中调用。
+    /// 每条都是一段提醒的程序（不绑窗口），返回的仍是提醒视图。
     pub fn schedule_batch(
         &self,
         session_id: &str,
@@ -589,10 +725,7 @@ impl AutomationScheduler {
             let run = Run {
                 id: next.allocate_id()?,
                 session_id: session_id.into(),
-                action: RunAction::Speak(SpeakAction {
-                    text: intent.text.trim().into(),
-                    delivery: intent.delivery.clone(),
-                }),
+                action: RunAction::Program(reminder_action(&intent.text, &intent.delivery)),
                 created_at_ms: created,
                 due_at_ms: due,
                 status: RunStatus::Pending,
@@ -610,51 +743,20 @@ impl AutomationScheduler {
         Ok(added)
     }
 
-    /// 安排一次播报（运行已保存的播报类自动化）。`due_at_ms` 不晚于现在就尽快投递。
-    pub fn schedule_speak(
+    /// 安排一条提醒（“晚一会儿开始、只说一句”的程序，不绑窗口，ADR 045 D3）。`due_at_ms` 不晚于现在就
+    /// 立即启动（同 [`AutomationScheduler::schedule_program`]）。
+    pub fn schedule_reminder(
         &self,
         session_id: &str,
-        mut action: SpeakAction,
+        text: &str,
+        delivery: &[DeliveryKind],
         due_at_ms: u64,
     ) -> Result<Run, String> {
-        action.text = action.text.trim().to_string();
-        validate_content(&action.text, &action.delivery)?;
-        let now = now_ms();
-        if due_at_ms > now.saturating_add(MAX_DELAY_SECONDS * 1_000) {
-            return Err("最多只能安排在 7 天之内".into());
-        }
-        let run = self
-            .shutdown
-            .run_if_active(|| -> Result<Run, String> {
-                let mut state = self.state.lock().unwrap();
-                if state.stored.open_count() >= MAX_PENDING {
-                    return Err("等待中与运行中的自动化最多 100 条，请先取消一些".into());
-                }
-                let mut next = state.stored.clone();
-                let run = Run {
-                    id: next.allocate_id()?,
-                    session_id: session_id.into(),
-                    action: RunAction::Speak(action),
-                    created_at_ms: now,
-                    due_at_ms: due_at_ms.max(now),
-                    status: RunStatus::Pending,
-                    message: None,
-                    started_at_ms: None,
-                    finished_at_ms: None,
-                    report: None,
-                };
-                next.runs.push(run.clone());
-                next.trim_history()?;
-                self.persist(&next)?;
-                state.stored = next;
-                Ok(run)
-            })
-            .ok_or_else(|| "自动化调度已关闭".to_string())??;
-        self.notify_changed();
-        Ok(run)
+        validate_content(text, delivery)?;
+        self.schedule_program(session_id, reminder_action(text, delivery), due_at_ms)
     }
 
-    /// 安排一次程序执行。`due_at_ms` 不晚于现在就立即启动：名额已满、执行器不可用或宿主拒绝
+    /// 安排一次程序执行。`due_at_ms` 不晚于现在就立即启动：绑窗口的名额已满、执行器不可用或宿主拒绝
     /// 启动时返回错误且**不留记录**；晚于现在则存为等待中。
     pub fn schedule_program(
         &self,
@@ -665,6 +767,12 @@ impl AutomationScheduler {
         action.name = action.name.trim().chars().take(MAX_NAME_CHARS).collect();
         action.source = action.source.trim().to_string();
         action.validate()?;
+        if let Some(event) = &mut action.event {
+            let size = serde_json::to_vec(&*event).map_or(usize::MAX, |b| b.len());
+            if size > MAX_EVENT_BYTES {
+                event.data.clear();
+            }
+        }
         let now = now_ms();
         if due_at_ms > now.saturating_add(MAX_DELAY_SECONDS * 1_000) {
             return Err("自动化最多只能安排在 7 天之内".into());
@@ -682,9 +790,12 @@ impl AutomationScheduler {
                 if state.stored.open_count() >= MAX_PENDING {
                     return Err("等待中与运行中的自动化最多 100 条，请先取消一些".into());
                 }
-                if immediate && state.stored.running_programs() >= MAX_RUNNING_PROGRAMS {
+                if immediate
+                    && action.target.is_some()
+                    && state.stored.running_programs() >= MAX_RUNNING_PROGRAMS
+                {
                     return Err(format!(
-                        "最多同时运行 {MAX_RUNNING_PROGRAMS} 个自动化，请先停止一个"
+                        "最多同时运行 {MAX_RUNNING_PROGRAMS} 个操作游戏的自动化，请先停止一个"
                     ));
                 }
                 let mut next = state.stored.clone();
@@ -730,7 +841,7 @@ impl AutomationScheduler {
         Ok(())
     }
 
-    /// 程序结束（宿主回报）。只接受“运行中”的程序记录。
+    /// 程序结束（宿主回报）。只接受“运行中”的记录。
     pub fn finish_program(
         &self,
         id: &str,
@@ -747,7 +858,7 @@ impl AutomationScheduler {
             let Some(run) = next
                 .runs
                 .iter_mut()
-                .find(|r| r.id == id && r.is_program() && r.status == RunStatus::Running)
+                .find(|r| r.id == id && r.status == RunStatus::Running)
             else {
                 return Ok(());
             };
@@ -784,7 +895,7 @@ impl AutomationScheduler {
         else {
             return Ok(false);
         };
-        if run.is_program() && run.status == RunStatus::Running {
+        if run.status == RunStatus::Running {
             drop(state);
             match self.launcher() {
                 Some(launcher) => launcher.stop(id, reason),
@@ -795,27 +906,20 @@ impl AutomationScheduler {
         let mut next = state.stored.clone();
         let record = next.runs.iter_mut().find(|r| r.id == id).unwrap();
         record.status = RunStatus::Cancelled;
-        record.message = record.is_program().then(|| clip(reason));
+        record.message = Some(clip(reason));
         record.finished_at_ms = Some(now_ms());
         let cancelled = record.clone();
         self.persist(&next)?;
         state.stored = next;
-        let active = state
-            .active
-            .as_ref()
-            .filter(|(active_id, _)| active_id == id)
-            .map(|(_, token)| token.clone());
         drop(state);
-        if let Some(token) = active {
-            token.cancel();
-        }
         self.notify_changed();
         self.notify_finished(&[cancelled]);
         Ok(true)
     }
 
-    /// 停止全部运行中的程序并取消全部等待中的程序；等待中的播报（提醒）不受影响。
-    /// 返回涉及的条数。停止热键、托盘与不带 id 的 `automation.stop` 用它。
+    /// 停下（ADR 045 D6，行为和以前一样）：停掉全部运行中的执行；取消等待中、**绑了游戏窗口**的执行；
+    /// 等待中的提醒（不绑窗口的）留着，单条在「自动化」页取消。“停下”不只是停止热键：玩家说“停下”打断她、
+    /// 按 Esc 停她操作游戏也走这里，不能顺带悄悄取消“5 分钟后提醒我买眼”。返回涉及的条数。
     pub fn stop_programs(&self, reason: &str) -> Result<usize, String> {
         let (cancelled, running) = {
             let mut state = self.state.lock().unwrap();
@@ -823,9 +927,9 @@ impl AutomationScheduler {
             let now = now_ms();
             let mut cancelled = vec![];
             let mut running = vec![];
-            for run in next.runs.iter_mut().filter(|r| r.is_program()) {
+            for run in next.runs.iter_mut() {
                 match run.status {
-                    RunStatus::Pending => {
+                    RunStatus::Pending if run.bound_to_window() => {
                         run.status = RunStatus::Cancelled;
                         run.message = Some(clip(reason));
                         run.finished_at_ms = Some(now);
@@ -859,31 +963,14 @@ impl AutomationScheduler {
         if already_started {
             return tokio::spawn(async {});
         }
-        let speak = self.clone();
-        let speak = tokio::spawn(async move {
-            loop {
-                if speak.shutdown.is_cancelled() {
-                    return;
-                }
-                if let Err(error) = speak.run_due(now_ms()).await {
-                    crate::log::log(&format!("automation scheduler (speak): {error}"));
-                }
-                tokio::select! {
-                    _ = speak.shutdown.cancelled() => return,
-                    _ = speak.speak_changed.notified() => {},
-                    _ = tokio::time::sleep(Duration::from_secs(1)) => {},
-                }
-            }
-        });
-        // 程序到点要准时，不能排在一条长播报后面：单独一个循环。
         let programs = self.clone();
-        let programs = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 if programs.shutdown.is_cancelled() {
                     return;
                 }
                 if let Err(error) = programs.dispatch_programs(now_ms()) {
-                    crate::log::log(&format!("automation scheduler (program): {error}"));
+                    crate::log::log(&format!("automation scheduler: {error}"));
                 }
                 tokio::select! {
                     _ = programs.shutdown.cancelled() => return,
@@ -891,20 +978,15 @@ impl AutomationScheduler {
                     _ = tokio::time::sleep(Duration::from_millis(250)) => {},
                 }
             }
-        });
-        tokio::spawn(async move {
-            let _ = tokio::join!(speak, programs);
         })
     }
 
     pub fn shutdown(&self) {
         self.shutdown.cancel();
-        if let Some((_, token)) = &self.state.lock().unwrap().active {
-            token.cancel();
-        }
     }
 
-    /// 启动到点的程序（显式时钟，便于测试）。错过的标为错过；名额已满的这次失败。
+    /// 启动到点的程序（显式时钟，便于测试）。错过的标为错过；绑窗口的名额已满的这次失败
+    /// （不绑窗口的照样启动）。
     pub fn dispatch_programs(&self, at_ms: u64) -> Result<(), String> {
         loop {
             if self.shutdown.is_cancelled() {
@@ -921,9 +1003,7 @@ impl AutomationScheduler {
                     .runs
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| {
-                        r.is_program() && r.status == RunStatus::Pending && r.due_at_ms <= at_ms
-                    })
+                    .filter(|(_, r)| r.status == RunStatus::Pending && r.due_at_ms <= at_ms)
                     .min_by_key(|(_, r)| r.due_at_ms)
                     .map(|(i, _)| i)
                 else {
@@ -934,10 +1014,10 @@ impl AutomationScheduler {
                     run.status = RunStatus::Missed;
                     run.message = Some("已错过启动时间，未补运行".into());
                     false
-                } else if running >= MAX_RUNNING_PROGRAMS {
+                } else if run.bound_to_window() && running >= MAX_RUNNING_PROGRAMS {
                     run.status = RunStatus::Failed;
                     run.message = Some(format!(
-                        "到点时已有 {MAX_RUNNING_PROGRAMS} 个自动化在运行，这次没有启动"
+                        "到点时已有 {MAX_RUNNING_PROGRAMS} 个操作游戏的自动化在运行，这次没有启动"
                     ));
                     run.finished_at_ms = Some(now_ms());
                     false
@@ -960,121 +1040,6 @@ impl AutomationScheduler {
                 self.finish_program(&run.id, RunStatus::Failed, Some(error), None)?;
             }
         }
-    }
-
-    /// 投递到点的播报（显式时钟，便于确定性测试）；并发调用仍只允许一条投递管道。
-    pub async fn run_due(&self, at_ms: u64) -> Result<(), String> {
-        let _delivery = self.delivering.lock().await;
-        let started = Instant::now();
-        loop {
-            if self.shutdown.is_cancelled() {
-                return Ok(());
-            }
-            let claim = {
-                let current_ms = at_ms.saturating_add(started.elapsed().as_millis() as u64);
-                let mut state = self.state.lock().unwrap();
-                let mut next = state.stored.clone();
-                let Some(index) = next
-                    .runs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, r)| {
-                        !r.is_program()
-                            && r.status == RunStatus::Pending
-                            && r.due_at_ms <= current_ms
-                    })
-                    .min_by_key(|(_, r)| r.due_at_ms)
-                    .map(|(i, _)| i)
-                else {
-                    return Ok(());
-                };
-                let run = &mut next.runs[index];
-                let missed = current_ms.saturating_sub(run.due_at_ms) > MISSED_GRACE_MS;
-                if missed {
-                    run.status = RunStatus::Missed;
-                    run.message = Some("已错过提醒，未补播".into());
-                } else {
-                    run.status = RunStatus::Running;
-                    run.started_at_ms = Some(now_ms());
-                }
-                let run = run.clone();
-                self.persist(&next)?;
-                state.stored = next;
-                let token = CancellationToken::default();
-                if !missed {
-                    state.active = Some((run.id.clone(), token.clone()));
-                }
-                (run, token, missed)
-            };
-            self.notify_changed();
-            let (run, token, missed) = claim;
-            if missed {
-                self.notify_finished(&[run]);
-                continue;
-            }
-            let reminder = run.as_reminder().expect("speak run");
-            if self.shutdown.is_cancelled() {
-                token.cancel();
-            }
-            let result = if token.is_cancelled() {
-                Err("提醒已取消".to_string())
-            } else {
-                let delivery = self.delivery.deliver(&reminder, token.clone());
-                tokio::pin!(delivery);
-                let interrupted = tokio::select! {
-                    biased;
-                    _ = token.cancelled() => "提醒已取消",
-                    result = tokio::time::timeout(DELIVERY_TIMEOUT, &mut delivery) => {
-                        match result {
-                            Ok(result) => {
-                                self.finish_delivery(&run.id, result)?;
-                                continue;
-                            }
-                            Err(_) => "提醒投递超时",
-                        }
-                    },
-                };
-                token.cancel();
-                // 不在收到取消的同一轮直接丢弃 delivery：壳需要继续 poll 才能
-                // 清理已发出的语音/弹幕。收尾仍有界，壳另以 Drop guard 作兜底。
-                let _ = tokio::time::timeout(Duration::from_secs(5), &mut delivery).await;
-                Err(interrupted.to_string())
-            };
-            self.finish_delivery(&run.id, result)?;
-        }
-    }
-
-    fn finish_delivery(&self, id: &str, result: Result<(), String>) -> Result<(), String> {
-        let finished = {
-            let mut state = self.state.lock().unwrap();
-            state.active = None;
-            let mut next = state.stored.clone();
-            match next
-                .runs
-                .iter_mut()
-                .find(|r| r.id == id && r.status == RunStatus::Running)
-            {
-                Some(record) => {
-                    record.status = if result.is_ok() {
-                        RunStatus::Finished
-                    } else {
-                        RunStatus::Failed
-                    };
-                    record.message = result.err().map(clip);
-                    record.finished_at_ms = Some(now_ms());
-                    let record = record.clone();
-                    self.persist(&next)?;
-                    state.stored = next;
-                    Some(record)
-                }
-                None => None,
-            }
-        };
-        self.notify_changed();
-        if let Some(run) = finished {
-            self.notify_finished(&[run]);
-        }
-        Ok(())
     }
 
     fn persist(&self, stored: &StoredRuns) -> Result<(), String> {

@@ -83,11 +83,11 @@ impl DesktopHost {
         self.session.screen_point(x, y)
     }
 
-    fn deliver(&self, text: &str, kind: DeliveryKind, wait: bool) -> Result<(), String> {
+    fn deliver(&self, text: &str, kinds: Vec<DeliveryKind>, wait: bool) -> Result<(), String> {
         let app = self.app.clone();
         let text = text.to_string();
         let task = async move {
-            crate::assistant::deliver_text(&app, text, vec![kind])
+            crate::assistant::deliver_text(&app, text, kinds)
                 .await
                 .map(|_| ())
         };
@@ -274,13 +274,34 @@ impl ScriptHost for DesktopHost {
             .collect())
     }
 
-    fn say(&self, text: &str) -> Result<(), String> {
-        self.deliver(text, DeliveryKind::Voice, true)
+    // TODO(ADR 045 B): `say()` 外面包 240 秒超时；停下时桥接到投递的取消 token、等壳收尾（最多 5 秒）；
+    // 0.1 的提醒用旧语音引擎（legacy_voice）。
+    fn say(&self, text: &str, toast: bool) -> Result<(), String> {
+        let kinds = if toast {
+            vec![DeliveryKind::Voice, DeliveryKind::Danmaku]
+        } else {
+            vec![DeliveryKind::Voice]
+        };
+        self.deliver(text, kinds, true)
     }
 
     fn toast(&self, text: &str) -> Result<(), String> {
-        self.deliver(text, DeliveryKind::Danmaku, false)
+        self.deliver(text, vec![DeliveryKind::Danmaku], false)
     }
+
+    // TODO(ADR 045 B): 接插件推送同一条路（`post_automation_push`），附一条不叫模型的说明。
+    fn push(&self, _text: &str) -> Result<(), String> {
+        Err("push() 还没接上".into())
+    }
+
+    // TODO(ADR 045 B): 先 `ProgramAction::check_ask`（临时程序、事件填进来的值），按事件触发的再
+    // `Triggers::take_ask`，然后等她空下来（最多 2 分钟）交给主会话、附上触发它的事件。
+    fn ask(&self, _text: &str) -> Result<bool, String> {
+        Err("ask() 还没接上".into())
+    }
+
+    // TODO(ADR 045 B): 窗口懒绑定：没绑游戏窗口的执行（`target = None`）这里返回 Err。现在所有执行都绑了窗口，
+    // 用默认实现（Ok）。
 }
 
 #[cfg(test)]

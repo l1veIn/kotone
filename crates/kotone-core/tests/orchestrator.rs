@@ -2613,17 +2613,6 @@ async fn suspended_runtime_rejects_queued_hotkey_and_direct_send() {
     orch.cancel().await;
 }
 
-struct ReminderTestDelivery;
-impl kotone_core::reminders::ReminderDelivery for ReminderTestDelivery {
-    fn deliver<'a>(
-        &'a self,
-        _: &'a kotone_core::reminders::Reminder,
-        _: kotone_core::cancel::CancellationToken,
-    ) -> kotone_core::reminders::DeliveryFuture<'a> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
 struct AssistantTestHandler {
     entered: Arc<tokio::sync::Notify>,
     release: Option<Arc<tokio::sync::Notify>>,
@@ -2710,7 +2699,6 @@ async fn history_disabled_cancel_does_not_leak_into_failed_assistant_capture() {
     let history_dir = directory.path().join("history");
     let reminders = kotone_core::automation::AutomationScheduler::open(
         directory.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
     )
     .unwrap();
     let capture_fails = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2787,11 +2775,9 @@ async fn history_disabled_cancel_does_not_leak_into_failed_assistant_capture() {
 #[tokio::test]
 async fn assistant_recognition_schedules_without_postprocessing_or_injecting() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let handler = Arc::new(AssistantTestHandler {
         entered: Arc::new(tokio::sync::Notify::new()),
@@ -2838,11 +2824,9 @@ async fn assistant_recognition_schedules_without_postprocessing_or_injecting() {
 #[tokio::test]
 async fn assistant_hold_release_is_independent_and_repress_preserves_the_sentence() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let sent = Arc::new(Mutex::new(Vec::new()));
     let mut builder = assistant_orchestrator_builder(
@@ -2885,11 +2869,9 @@ async fn assistant_hold_release_is_independent_and_repress_preserves_the_sentenc
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assistant_short_hold_release_waits_for_capture_to_start() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let entered = Arc::new(tokio::sync::Notify::new());
     let capture_entered = entered.clone();
     let (release, can_open) = std::sync::mpsc::sync_channel(1);
@@ -2943,11 +2925,9 @@ async fn assistant_short_hold_release_waits_for_capture_to_start() {
 #[tokio::test]
 async fn assistant_dictation_preview_confirms_to_ai_with_original_timer_origin() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let sent = Arc::new(Mutex::new(Vec::new()));
     let emitter = Arc::new(VecEmitter::default());
@@ -2990,11 +2970,9 @@ async fn assistant_one_shot_finishes_without_resuming() {
     use kotone_core::assistant::AssistantInteractionMode;
     let mode = AssistantInteractionMode::OneShot;
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let sent = Arc::new(Mutex::new(Vec::new()));
     let emitter = Arc::new(VecEmitter::default());
@@ -3054,11 +3032,9 @@ async fn assistant_one_shot_finishes_without_resuming() {
 #[tokio::test]
 async fn assistant_one_shot_without_vad_can_finish_manually_without_resuming() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let sent = Arc::new(Mutex::new(Vec::new()));
     let orch = assistant_orchestrator(
         Arc::new(AssistantTestHandler {
@@ -3084,11 +3060,9 @@ async fn assistant_one_shot_without_vad_can_finish_manually_without_resuming() {
 #[tokio::test]
 async fn assistant_mode_change_during_processing_does_not_start_another_capture() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let emitter = Arc::new(VecEmitter::default());
@@ -3144,11 +3118,9 @@ async fn assistant_mode_change_during_processing_does_not_start_another_capture(
 #[tokio::test]
 async fn assistant_old_input_waiting_for_configuration_cannot_start_or_affect_new_capture() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let orch = assistant_orchestrator(
         Arc::new(AssistantTestHandler {
             entered: Arc::new(tokio::sync::Notify::new()),
@@ -3189,11 +3161,9 @@ async fn assistant_old_input_waiting_for_configuration_cannot_start_or_affect_ne
 #[tokio::test]
 async fn cancelled_assistant_cannot_commit_or_change_a_new_session() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let handler = Arc::new(AssistantTestHandler {
@@ -3903,7 +3873,6 @@ async fn assistant_voice_button_uses_each_supported_policy_without_injection() {
         let dir = tempfile::tempdir().unwrap();
         let queue = kotone_core::automation::AutomationScheduler::open(
             dir.path().join("automation-runs.json"),
-            Arc::new(ReminderTestDelivery),
         )
         .unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -3987,11 +3956,9 @@ async fn assistant_voice_button_uses_each_supported_policy_without_injection() {
 #[tokio::test]
 async fn assistant_voice_stale_commands_and_hotkey_release_cannot_touch_new_capture() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let orch = assistant_orchestrator(
         Arc::new(AssistantTestHandler {
             entered: Arc::new(tokio::sync::Notify::new()),
@@ -4058,11 +4025,9 @@ async fn assistant_voice_stale_commands_and_hotkey_release_cannot_touch_new_capt
 #[tokio::test]
 async fn assistant_voice_cancel_interrupts_ai_but_cannot_claim_a_hotkey_session() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -4119,11 +4084,9 @@ async fn assistant_voice_cancel_interrupts_ai_but_cannot_claim_a_hotkey_session(
 #[tokio::test]
 async fn assistant_voice_start_rejects_a_ticket_invalidated_while_waiting_for_admission() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let orch = assistant_orchestrator(
         Arc::new(AssistantTestHandler {
             entered: Arc::new(tokio::sync::Notify::new()),
@@ -4156,11 +4119,9 @@ async fn assistant_voice_start_rejects_a_ticket_invalidated_while_waiting_for_ad
 #[tokio::test]
 async fn assistant_legacy_solo_configuration_records_only_on_press_and_release() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let emitter = Arc::new(VecEmitter::default());
     let mut builder = assistant_orchestrator_builder(
         Arc::new(AssistantTestHandler {
@@ -4219,11 +4180,9 @@ type WakeFixture = (
 
 fn wake_builder(vad: fn() -> ScriptVad) -> WakeFixture {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::automation::AutomationScheduler::open(
-        dir.path().join("automation-runs.json"),
-        Arc::new(ReminderTestDelivery),
-    )
-    .unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let emitter = Arc::new(VecEmitter::default());
     let mut builder = assistant_orchestrator_builder(

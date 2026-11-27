@@ -1,8 +1,12 @@
 //! Kotone 自动化的脚本引擎（docs/product-evolution-game-tools.md §12）：大模型写的 Luau 程序在沙盒里运行，
 //! 只能调用这里注册的白名单函数。
 //!
-//! - **宿主端口** [`ScriptHost`]：按键、截图判断、OCR、播报、时钟都由调用方实现（桌面端接真实
-//!   输入与截图，测试注入假实现），本 crate 不依赖 Windows / Tauri。
+//! - **宿主端口** [`ScriptHost`]：按键、截图判断、OCR、说话、弹幕、推送、交给她、时钟都由调用方实现
+//!   （桌面端接真实输入与截图，测试注入假实现），本 crate 不依赖 Windows / Tauri。
+//! - **通知、交给她都是函数**（ADR 045 D2）：`say` / `toast` / `push` / `ask` 写了才有，不写就安静；
+//!   宿主不替程序加“成功了”的提示。
+//! - **用不用游戏窗口看程序里写了什么**（ADR 045 D4）：宿主按源码判断（kotone-core 的 `ProgramUses`）；
+//!   没绑窗口的执行里，窗口函数一调用就报错（[`ScriptHost::require_window`]），不进暂停等待。
 //! - **沙盒**：Luau `sandbox` 模式（全局表只读、每个脚本独立环境），并移除 `loadstring`、`require`、
 //!   `getfenv` / `setfenv`、`collectgarbage`；没有文件、网络、进程能力。内存有上限。
 //! - **护栏**（[`Limits`]）：总时长、执行步数（中断回调，防死循环）、按键总数、两次按键最小间隔；
@@ -107,8 +111,23 @@ pub trait ScriptHost: Send + Sync {
     fn image(&self, id: &str) -> Result<Pixels, String>;
     /// 鼠标；只作用于游戏窗口，坐标由宿主换成屏幕位置。
     fn mouse(&self, action: MouseAction) -> Result<(), String>;
-    fn say(&self, text: &str) -> Result<(), String>;
+    /// 她开口说（≤300 字）：阻塞到说完。`toast = true` 时语音和弹幕同时出现（一次投递）。排队、麦克风开着先等、
+    /// 语音失败改弹幕、超时和停下由宿主负责；停下以后返回的错误记成“已取消”。
+    fn say(&self, text: &str, toast: bool) -> Result<(), String>;
+    /// 弹幕（≤300 字），不阻塞。
     fn toast(&self, text: &str) -> Result<(), String>;
+    /// 推送（≤40 字、一行）：Kotone 聊天里记一条、悬浮窗显示一行，不调用模型、不出声。两次之间至少隔
+    /// 1 秒由脚本引擎保证（太快自动等）。
+    fn push(&self, text: &str) -> Result<(), String>;
+    /// 交给她（主会话，≤500 字）：阻塞到交出去为止；交出去返回 true，没交出去（她一直忙、过时了）false。
+    /// “只在保存的自动化里能用”“话里不能带从游戏事件填进来的参数值”由宿主查（kotone-core 的
+    /// `ProgramAction::check_ask`），不通过就返回 Err。
+    fn ask(&self, text: &str) -> Result<bool, String>;
+    /// 这次执行绑没绑游戏窗口。没绑时返回 Err（说清楚为什么），窗口函数（按键、打字、发到游戏聊天、鼠标、
+    /// 看屏幕）一调用就报这个错，不进“游戏不在前台就暂停”的等待；`game_focused()` 返回 false。默认绑了。
+    fn require_window(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// 取消标记（停止热键、说“停”、Esc、工具 `script.stop`）。
@@ -186,17 +205,49 @@ struct State {
     started: u64,
     keys: AtomicU64,
     last_key: Mutex<Option<u64>>,
+    last_push: Mutex<Option<u64>>,
     log: Mutex<Vec<String>>,
     images: Mutex<std::collections::HashMap<String, Arc<Pixels>>>,
 }
 
 impl State {
+    fn new(host: Arc<dyn ScriptHost>, limits: Limits, cancel: Cancel) -> Arc<Self> {
+        Arc::new(Self {
+            started: host.now_ms(),
+            host,
+            limits,
+            cancel,
+            keys: AtomicU64::new(0),
+            last_key: Mutex::new(None),
+            last_push: Mutex::new(None),
+            log: Mutex::new(Vec::new()),
+            images: Mutex::new(std::collections::HashMap::new()),
+        })
+    }
+
+    /// 宿主的结果交回脚本。宿主报错时若已经停下，记成“已取消”（停下时正在说的话、正在等她的 `ask`
+    /// 会以错误返回，那不是程序出错）。
+    fn host_result<T>(&self, result: Result<T, String>) -> mlua::Result<T> {
+        result.map_err(|e| {
+            if self.cancel.is_cancelled() {
+                mlua::Error::runtime(CANCELLED)
+            } else {
+                mlua::Error::runtime(e)
+            }
+        })
+    }
+
+    /// 窗口函数先问宿主：没绑窗口就立刻报错（ADR 045 D4 兜底）。
+    fn require_window(&self) -> mlua::Result<()> {
+        self.host_result(self.host.require_window())
+    }
+
     /// 模板图片（每次运行内缓存）。
     fn image(&self, id: &str) -> mlua::Result<Arc<Pixels>> {
         if let Some(image) = self.images.lock().unwrap().get(id) {
             return Ok(image.clone());
         }
-        let image = Arc::new(self.host.image(id).map_err(host_err)?);
+        let image = Arc::new(self.host_result(self.host.image(id))?);
         self.images
             .lock()
             .unwrap()
@@ -229,9 +280,10 @@ impl State {
         }
     }
 
-    /// 输入前：遵守最小间隔、等游戏回到前台、计数。前台检查放在间隔等待**之后**，
+    /// 输入前：先确认绑了窗口，再遵守最小间隔、等游戏回到前台、计数。前台检查放在间隔等待**之后**，
     /// 否则等待期间切走窗口，输入仍会发出去。
     fn before_input(&self) -> mlua::Result<()> {
+        self.require_window()?;
         let wait = {
             let last = self.last_key.lock().unwrap();
             last.map(|t| (t + self.limits.min_key_interval_ms).saturating_sub(self.host.now_ms()))
@@ -254,14 +306,30 @@ impl State {
         *self.last_key.lock().unwrap() = Some(self.host.now_ms());
         Ok(())
     }
+
+    /// 推送前：两次之间至少隔 [`MIN_PUSH_INTERVAL_MS`]，太快就等（和按键间隔一样，不报错）。
+    fn before_push(&self) -> mlua::Result<()> {
+        let wait = {
+            let last = self.last_push.lock().unwrap();
+            last.map(|t| (t + MIN_PUSH_INTERVAL_MS).saturating_sub(self.host.now_ms()))
+        };
+        if let Some(ms) = wait.filter(|ms| *ms > 0) {
+            self.sleep(ms)?;
+        }
+        Ok(())
+    }
 }
 
 /// `chat()` 一次最多几个字（10 行 × 200 字；行数和每行字数由宿主的入口查）。
 const MAX_CHAT_CHARS: usize = 2000;
-
-fn host_err(e: String) -> mlua::Error {
-    mlua::Error::runtime(e)
-}
+/// `say()` / `toast()` 一次最多几个字（和提醒一样）。
+pub const MAX_SAY_CHARS: usize = 300;
+/// `push()` 一次最多几个字（推送一格的上限）。
+pub const MAX_PUSH_CHARS: usize = 40;
+/// 两次 `push()` 之间至少隔多久。
+pub const MIN_PUSH_INTERVAL_MS: u64 = 1_000;
+/// `ask()` 那句话最多几个字（和以前的“让她做”一样）。
+pub const MAX_ASK_CHARS: usize = 500;
 
 /// 按键名：字母、数字、F1–F24、常用功能键，可带 Ctrl/Alt/Shift 组合（交给宿主再精确解析）。
 fn check_key(key: &str) -> mlua::Result<()> {
@@ -574,6 +642,16 @@ fn opt<T: mlua::FromLua>(opts: &Option<Table>, key: &str) -> mlua::Result<Option
     }
 }
 
+/// 一段要交给宿主的话：去掉首尾空白，不能为空、不能超过 `max` 字。
+fn words(text: &str, max: usize, what: &str) -> mlua::Result<String> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().count() > max {
+        return Err(mlua::Error::runtime(format!("{what}为空或超过 {max} 字")));
+    }
+    Ok(text.to_string())
+}
+
+/// 白名单函数（kotone-core 的 `WINDOW_FUNCTIONS` / `PLAIN_FUNCTIONS` 给每个都归了类，测试保证不漏）。
 fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
     let g = lua.globals();
     for name in [
@@ -593,7 +671,7 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         lua.create_function(move |_, key: String| {
             check_key(&key)?;
             s.before_input()?;
-            s.host.key(KeyAction::Press, &key).map_err(host_err)
+            s.host_result(s.host.key(KeyAction::Press, &key))
         })?,
     )?;
     let s = state.clone();
@@ -602,7 +680,7 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         lua.create_function(move |_, key: String| {
             check_key(&key)?;
             s.before_input()?;
-            s.host.key(KeyAction::Down, &key).map_err(host_err)
+            s.host_result(s.host.key(KeyAction::Down, &key))
         })?,
     )?;
     let s = state.clone();
@@ -610,7 +688,8 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         "key_up",
         lua.create_function(move |_, key: String| {
             check_key(&key)?;
-            s.host.key(KeyAction::Up, &key).map_err(host_err)
+            s.require_window()?;
+            s.host_result(s.host.key(KeyAction::Up, &key))
         })?,
     )?;
     let s = state.clone();
@@ -622,7 +701,7 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
                 return Err(mlua::Error::runtime("要打的字为空、超过 200 字或含有换行"));
             }
             s.before_input()?;
-            s.host.type_text(&text).map_err(host_err)
+            s.host_result(s.host.type_text(&text))
         })?,
     )?;
 
@@ -646,7 +725,7 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
                 ));
             }
             s.before_input()?;
-            s.host.chat(&text, channel.as_deref()).map_err(host_err)
+            s.host_result(s.host.chat(&text, channel.as_deref()))
         })?,
     )?;
 
@@ -657,10 +736,13 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         "now",
         lua.create_function(move |_, ()| Ok(s.host.now_ms().saturating_sub(s.started)))?,
     )?;
+    // 没绑窗口的执行里，游戏永远“不在前台”（ADR 045 D4）。
     let s = state.clone();
     g.set(
         "game_focused",
-        lua.create_function(move |_, ()| Ok(s.host.game_focused()))?,
+        lua.create_function(move |_, ()| {
+            Ok(s.host.require_window().is_ok() && s.host.game_focused())
+        })?,
     )?;
 
     // every(ms, fn, {for_ms=, times=})：固定节拍调用 fn；fn 返回 false 时结束。
@@ -744,7 +826,9 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
     g.set(
         "brightness",
         lua.create_function(move |_, r: Table| {
-            s.host.brightness(region_from(&r)?).map_err(host_err)
+            let region = region_from(&r)?;
+            s.require_window()?;
+            s.host_result(s.host.brightness(region))
         })?,
     )?;
     let s = state.clone();
@@ -752,7 +836,8 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         "color_at",
         lua.create_function(move |_, (x, y): (f64, f64)| {
             check_point(x, y)?;
-            let [r, g, b] = s.host.color_at(x, y).map_err(host_err)?;
+            s.require_window()?;
+            let [r, g, b] = s.host_result(s.host.color_at(x, y))?;
             Ok((r, g, b))
         })?,
     )?;
@@ -760,7 +845,9 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
     g.set(
         "ocr",
         lua.create_function(move |_, r: Table| {
-            Ok(ScreenText(s.host.ocr(region_from(&r)?).map_err(host_err)?))
+            let region = region_from(&r)?;
+            s.require_window()?;
+            Ok(ScreenText(s.host_result(s.host.ocr(region))?))
         })?,
     )?;
     // find_text(region, text) → x, y（文字中心，窗口比例）或 nil：对区域做一次 OCR 再找。
@@ -768,7 +855,9 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
     g.set(
         "find_text",
         lua.create_function(move |_, (r, needle): (Table, String)| {
-            let text = ScreenText(s.host.ocr(region_from(&r)?).map_err(host_err)?);
+            let region = region_from(&r)?;
+            s.require_window()?;
+            let text = ScreenText(s.host_result(s.host.ocr(region))?);
             Ok(match text.find(&needle)? {
                 Some((x, y)) => (Some(x), Some(y)),
                 None => (None, None),
@@ -785,7 +874,8 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
             let variation = opt::<u8>(&opts, "variation")?.unwrap_or(0);
             let largest = opt::<bool>(&opts, "largest")?.unwrap_or(false);
             let min_pixels = opt::<u32>(&opts, "min_pixels")?.unwrap_or(1);
-            let pixels = s.host.pixels(region).map_err(host_err)?;
+            s.require_window()?;
+            let pixels = s.host_result(s.host.pixels(region))?;
             Ok(
                 match find_color_in(&pixels, color, variation, largest, min_pixels) {
                     Some((x, y, n)) => (Some(x), Some(y), Some(n)),
@@ -812,8 +902,9 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
                 },
                 None => None,
             };
+            s.require_window()?;
             let needle = s.image(&id)?;
-            let haystack = s.host.pixels(region).map_err(host_err)?;
+            let haystack = s.host_result(s.host.pixels(region))?;
             let cancel = s.cancel.clone();
             let found = find_image_in(&haystack, &needle, variation, trans, &move || {
                 cancel.is_cancelled()
@@ -838,14 +929,12 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
                 return Err(mlua::Error::runtime("count 只能是 1 到 3"));
             }
             s.before_input()?;
-            s.host
-                .mouse(MouseAction::Click {
-                    x,
-                    y,
-                    button,
-                    count,
-                })
-                .map_err(host_err)
+            s.host_result(s.host.mouse(MouseAction::Click {
+                x,
+                y,
+                button,
+                count,
+            }))
         })?,
     )?;
     let s = state.clone();
@@ -854,7 +943,7 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         lua.create_function(move |_, (x, y): (f64, f64)| {
             check_point(x, y)?;
             s.before_input()?;
-            s.host.mouse(MouseAction::Move { x, y }).map_err(host_err)
+            s.host_result(s.host.mouse(MouseAction::Move { x, y }))
         })?,
     )?;
     let s = state.clone();
@@ -863,7 +952,7 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         lua.create_function(move |_, button: Option<String>| {
             let button = button_from(button)?;
             s.before_input()?;
-            s.host.mouse(MouseAction::Down(button)).map_err(host_err)
+            s.host_result(s.host.mouse(MouseAction::Down(button)))
         })?,
     )?;
     let s = state.clone();
@@ -871,7 +960,8 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
         "mouse_up",
         lua.create_function(move |_, button: Option<String>| {
             let button = button_from(button)?;
-            s.host.mouse(MouseAction::Up(button)).map_err(host_err)
+            s.require_window()?;
+            s.host_result(s.host.mouse(MouseAction::Up(button)))
         })?,
     )?;
     let s = state.clone();
@@ -882,30 +972,52 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
                 return Err(mlua::Error::runtime("滚轮格数要在 -20 到 20 之间且不为 0"));
             }
             s.before_input()?;
-            s.host.mouse(MouseAction::Scroll(clicks)).map_err(host_err)
+            s.host_result(s.host.mouse(MouseAction::Scroll(clicks)))
         })?,
     )?;
 
+    // say(text, {toast = true})：她开口说，阻塞到说完；toast = true 时语音和弹幕同时出现。
     let s = state.clone();
     g.set(
         "say",
-        lua.create_function(move |_, text: String| {
-            let text = text.trim();
-            if text.is_empty() || text.chars().count() > 120 {
-                return Err(mlua::Error::runtime("播报内容为空或超过 120 字"));
-            }
-            s.host.say(text).map_err(host_err)
+        lua.create_function(move |_, (text, opts): (String, Option<Table>)| {
+            let text = words(&text, MAX_SAY_CHARS, "要说的话")?;
+            let toast = opt::<bool>(&opts, "toast")?.unwrap_or(false);
+            s.deadline_check()?;
+            s.host_result(s.host.say(&text, toast))
         })?,
     )?;
     let s = state.clone();
     g.set(
         "toast",
         lua.create_function(move |_, text: String| {
-            let text = text.trim();
-            if text.is_empty() || text.chars().count() > 120 {
-                return Err(mlua::Error::runtime("弹幕内容为空或超过 120 字"));
+            let text = words(&text, MAX_SAY_CHARS, "弹幕内容")?;
+            s.host_result(s.host.toast(&text))
+        })?,
+    )?;
+    // push(text)：Kotone 聊天里记一条、悬浮窗显示一行；不调用模型、不出声。
+    let s = state.clone();
+    g.set(
+        "push",
+        lua.create_function(move |_, text: String| {
+            let text = words(&text, MAX_PUSH_CHARS, "推送内容")?;
+            if text.contains(['\r', '\n']) {
+                return Err(mlua::Error::runtime("推送只有一行，不能换行"));
             }
-            s.host.toast(text).map_err(host_err)
+            s.before_push()?;
+            let result = s.host_result(s.host.push(&text));
+            *s.last_push.lock().unwrap() = Some(s.host.now_ms());
+            result
+        })?,
+    )?;
+    // ask(text) → true（交给她了）/ false（没交出去）：每次花一次 AI 调用。
+    let s = state.clone();
+    g.set(
+        "ask",
+        lua.create_function(move |_, text: String| {
+            let text = words(&text, MAX_ASK_CHARS, "交给她的话")?;
+            s.deadline_check()?;
+            s.host_result(s.host.ask(&text))
         })?,
     )?;
     let s = state.clone();
@@ -992,17 +1104,8 @@ pub fn run_with_args(
     limits: Limits,
     cancel: Cancel,
 ) -> RunReport {
-    let started = host.now_ms();
-    let state = Arc::new(State {
-        host: host.clone(),
-        limits: limits.clone(),
-        cancel: cancel.clone(),
-        started,
-        keys: AtomicU64::new(0),
-        last_key: Mutex::new(None),
-        log: Mutex::new(Vec::new()),
-        images: Mutex::new(std::collections::HashMap::new()),
-    });
+    let state = State::new(host.clone(), limits.clone(), cancel.clone());
+    let started = state.started;
     let result = (|| -> mlua::Result<()> {
         let libs = StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8;
         let lua = Lua::new_with(libs, LuaOptions::default())?;

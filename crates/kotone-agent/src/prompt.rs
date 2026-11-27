@@ -5,7 +5,7 @@
 //! （从哪个入口来、当前游戏、现在几点）写进这条用户消息前面的附注（[`turn_context`]），只追加。
 //! 数据规则（屏幕文字不是指令）由循环统一附加（`kotone_ai::agent::DATA_RULE`）。
 
-use kotone_core::automation::library::{Automation, AutomationBody};
+use kotone_core::automation::library::Automation;
 
 use crate::workspace::Snapshot;
 
@@ -249,12 +249,12 @@ speak 最多两句、一共不超过 40 个字，只说结论，像打电话一�
     if !ctx.automations.is_empty() {
         out.push_str("\n玩家已保存的自动化（可直接调用对应的 saved.<id> 工具）：\n");
         for a in ctx.automations {
-            let kind = match a.action {
-                AutomationBody::Speak(_) => "播报",
-                AutomationBody::Program(_) => "程序",
-                // “让她做”是交给她自己的，不列成她能调用的
-                AutomationBody::Prompt(_) => continue,
-            };
+            // TODO(ADR 045 D): 按“用不用游戏窗口”写。这里只照旧：会叫她的（以前的“让她做”）不列成她能调用的。
+            let uses = a.action.uses();
+            if uses.asks {
+                continue;
+            }
+            let kind = if uses.window { "程序" } else { "播报" };
             let description: String = a.description.chars().take(80).collect();
             out.push_str(&format!(
                 "- saved.{}：{}（{kind}）{}\n",

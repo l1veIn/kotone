@@ -1,5 +1,5 @@
 //! 游戏状态和事件（ADR 036）：所有游戏共用的阶段、状态、事件信封；把适配器的观察变成事件的 [`Hub`]；
-//! 自动化的事件触发（`on`）、它的校验和匹配；`for` / 每局次数 / 冷却的记账（[`Triggers`]）。
+//! 自动化的事件触发（`on`）、它的校验和匹配；`for` / 每局次数 / 冷却 / 每局叫她几次的记账（[`Triggers`]）。
 //!
 //! 这里只有纯数据和纯函数，谁来看进程、读接口（适配器）、谁来分发（游戏中心）在桌面端。
 //! 照搬的做法：状态和事件分开（Overwolf GEP）；`from` / `to` / `for`（Home Assistant）；
@@ -501,13 +501,11 @@ pub fn trigger_matches(trigger: &EventTrigger, event: &GameEvent) -> bool {
             .all(|(k, want)| value_matches(want, event.data.get(k)))
 }
 
-/// 一个自动化的事件触发，加上桌面端定的每局上限（例如“让她做”默认每局 3 次）。
+/// 一个自动化的事件触发。每局叫她几次不挂在这里，看程序里的 `ask()`（[`Triggers::take_ask`]，ADR 045 D2）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Armed<'a> {
     pub id: &'a str,
     pub trigger: &'a EventTrigger,
-    /// 每局最多几次（`oncePerMatch` 时是 1）；None = 不限。
-    pub per_match: Option<u32>,
 }
 
 /// 该运行了：哪个自动化、因为哪件事。
@@ -524,23 +522,23 @@ struct Waiting {
     due: u64,
 }
 
-/// `for` 的等待、每局次数、冷却的记账。一局结束（或游戏退出）时这个游戏的次数清零。
+/// 按游戏事件触发的执行里，每个自动化每局最多叫她几次（`ask()`，每次花一次 AI 调用，ADR 045 D2）。
+pub const ASKS_PER_MATCH: u32 = 3;
+
+/// `for` 的等待、每局次数、冷却、每局叫她几次的记账。一局结束（或游戏退出）时这个游戏的次数清零。
 #[derive(Debug, Default)]
 pub struct Triggers {
     waiting: Vec<Waiting>,
     /// （自动化，游戏）→ 这一局触发了几次。
     counts: HashMap<(String, String), u32>,
+    /// （自动化，游戏）→ 这一局按事件触发的执行里叫了她几次。
+    asks: HashMap<(String, String), u32>,
     /// 自动化 → 上次触发的时间（毫秒）。
     last: HashMap<String, u64>,
 }
 
 impl Triggers {
     fn allowed(&self, armed: &Armed, game: &str, now: u64) -> bool {
-        let limit = if armed.trigger.once_per_match {
-            Some(armed.per_match.unwrap_or(1).min(1))
-        } else {
-            armed.per_match
-        };
         let used = self
             .counts
             .get(&(armed.id.to_string(), game.to_string()))
@@ -549,7 +547,21 @@ impl Triggers {
         let cooled = self.last.get(armed.id).map_or(true, |t| {
             now.saturating_sub(*t) >= u64::from(armed.trigger.cooldown_seconds) * 1000
         });
-        limit.map_or(true, |l| used < l) && cooled
+        (!armed.trigger.once_per_match || used < 1) && cooled
+    }
+
+    /// 按游戏事件触发的执行要叫她一次（`ask()`）：这一局这个自动化在这个游戏上还没到 `limit` 次就记一次、
+    /// 返回 true；到了返回 false（这次不交给她）。手动、热键、定时运行的不走这里（不限）。和触发次数同处清零。
+    pub fn take_ask(&mut self, automation: &str, game: &str, limit: u32) -> bool {
+        let used = self
+            .asks
+            .entry((automation.to_string(), game.to_string()))
+            .or_default();
+        if *used >= limit {
+            return false;
+        }
+        *used += 1;
+        true
     }
 
     fn fired(&mut self, automation: &str, event: &GameEvent, now: u64) -> Fire {
@@ -587,6 +599,7 @@ impl Triggers {
         }
         if matches!(event.kind.as_str(), "game.match_ended" | "game.stopped") {
             self.counts.retain(|(_, game), _| *game != event.game);
+            self.asks.retain(|(_, game), _| *game != event.game);
         }
         out
     }

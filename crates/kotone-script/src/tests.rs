@@ -7,7 +7,16 @@ struct Fake {
     typed: Mutex<Vec<String>>,
     /// `chat()`：(时刻, 文字, 频道)
     chatted: Mutex<Vec<(u64, String, Option<String>)>>,
-    said: Mutex<Vec<String>>,
+    /// `say()`：(文字, 同时弹幕)
+    said: Mutex<Vec<(String, bool)>>,
+    toasted: Mutex<Vec<String>>,
+    /// `push()`：(时刻, 文字)
+    pushed: Mutex<Vec<(u64, String)>>,
+    asked: Mutex<Vec<String>>,
+    /// 这次执行绑没绑游戏窗口（ADR 045 D4）。
+    window: bool,
+    /// 说话时被停下：先取消再报错（模拟宿主在停下时以错误返回）。
+    interrupt: Option<Cancel>,
     /// 从这个时刻起左上角变黑。
     dark_from: u64,
     /// 在这段时间内游戏不在前台。
@@ -82,6 +91,11 @@ impl Fake {
             typed: Mutex::default(),
             chatted: Mutex::default(),
             said: Mutex::default(),
+            toasted: Mutex::default(),
+            pushed: Mutex::default(),
+            asked: Mutex::default(),
+            window: true,
+            interrupt: None,
             dark_from: u64::MAX,
             unfocused: (0, 0),
             screen_text: vec![],
@@ -168,12 +182,35 @@ impl ScriptHost for Fake {
         self.mouse.lock().unwrap().push((self.now_ms(), action));
         Ok(())
     }
-    fn say(&self, text: &str) -> Result<(), String> {
-        self.said.lock().unwrap().push(text.into());
+    fn say(&self, text: &str, toast: bool) -> Result<(), String> {
+        if let Some(cancel) = &self.interrupt {
+            cancel.cancel();
+            return Err("说到一半停下了".into());
+        }
+        self.said.lock().unwrap().push((text.into(), toast));
         Ok(())
     }
-    fn toast(&self, _: &str) -> Result<(), String> {
+    fn toast(&self, text: &str) -> Result<(), String> {
+        self.toasted.lock().unwrap().push(text.into());
         Ok(())
+    }
+    fn push(&self, text: &str) -> Result<(), String> {
+        self.pushed
+            .lock()
+            .unwrap()
+            .push((self.now_ms(), text.into()));
+        Ok(())
+    }
+    fn ask(&self, text: &str) -> Result<bool, String> {
+        self.asked.lock().unwrap().push(text.into());
+        Ok(true)
+    }
+    fn require_window(&self) -> Result<(), String> {
+        if self.window {
+            Ok(())
+        } else {
+            Err("这段程序没有绑定游戏窗口".into())
+        }
     }
 }
 
@@ -343,7 +380,10 @@ fn screen_text_can_only_be_tested_not_copied_into_input() {
         &host,
     );
     assert!(matches!(report.outcome, Outcome::Error(_)), "{report:?}");
-    assert_eq!(*host.said.lock().unwrap(), vec!["找到对局了".to_string()]);
+    assert_eq!(
+        *host.said.lock().unwrap(),
+        vec![("找到对局了".to_string(), false)]
+    );
     assert!(host.typed.lock().unwrap().is_empty());
     for leak in [
         "return tostring(ocr(region(0,0,1,1)))",
@@ -652,24 +692,25 @@ fn bad_arguments_and_stop_are_reported_truthfully() {
 
 // ---------- 内置的常用按键程序（kotone-core 自动化库，ADR 013） ----------
 
-fn builtin(id: &str) -> (String, serde_json::Map<String, serde_json::Value>) {
-    use kotone_core::automation::library::{validate_args, AutomationBody, AutomationLibrary};
+/// 内置自动化的源码，和按声明校验过的入参（`given` 之外的用缺省值）。
+fn builtin(
+    id: &str,
+    given: &serde_json::Map<String, serde_json::Value>,
+) -> (String, serde_json::Map<String, serde_json::Value>) {
+    use kotone_core::automation::library::{validate_args, AutomationLibrary};
     let a = AutomationLibrary::builtin_programs_preview()
         .into_iter()
         .find(|a| a.id == id)
         .unwrap();
-    let AutomationBody::Program(p) = a.action else {
-        panic!("{id} 不是程序")
-    };
-    let args = validate_args(&a.params, &serde_json::Map::new()).unwrap();
-    (p.source, args)
+    let args = validate_args(&a.params, given).unwrap();
+    (a.action.source().to_string(), args)
 }
 
 fn go_builtin(id: &str, host: &Arc<Fake>, overrides: serde_json::Value) -> RunReport {
-    let (source, mut args) = builtin(id);
-    if let serde_json::Value::Object(o) = overrides {
-        args.extend(o);
-    }
+    let serde_json::Value::Object(given) = overrides else {
+        panic!("overrides 要是对象")
+    };
+    let (source, args) = builtin(id, &given);
     run_with_args(
         &source,
         &args,
@@ -682,10 +723,7 @@ fn go_builtin(id: &str, host: &Arc<Fake>, overrides: serde_json::Value) -> RunRe
 #[test]
 fn every_builtin_program_compiles() {
     for a in kotone_core::automation::library::AutomationLibrary::builtin_programs_preview() {
-        let kotone_core::automation::library::AutomationBody::Program(p) = &a.action else {
-            continue;
-        };
-        check_syntax(&p.source).unwrap_or_else(|e| panic!("{}: {e}", a.id));
+        check_syntax(a.action.source()).unwrap_or_else(|e| panic!("{}: {e}", a.id));
     }
 }
 
@@ -828,4 +866,279 @@ fn builtin_text_and_color_watchers() {
         serde_json::json!({"area": {"x": 0.5, "y": 0.3, "w": 0.4, "h": 0.4}, "color": {"r": 200, "g": 30, "b": 30}, "minutes": 1, "variation": 10}),
     );
     assert!(host.keys().is_empty());
+}
+
+// ---------- ADR 045：通知、交给她都是函数；用不用游戏窗口看程序里写了什么 ----------
+
+/// 一个装好白名单函数的虚拟机里，多出来的全局名字。
+fn whitelist() -> Vec<String> {
+    let libs = StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8;
+    let names = |lua: &Lua| -> Vec<String> {
+        lua.globals()
+            .pairs::<String, Value>()
+            .filter_map(|pair| pair.ok())
+            .filter(|(_, v)| matches!(v, Value::Function(_)))
+            .map(|(k, _)| k)
+            .collect()
+    };
+    let bare = Lua::new_with(libs, LuaOptions::default()).unwrap();
+    let before = names(&bare);
+    let lua = Lua::new_with(libs, LuaOptions::default()).unwrap();
+    let host: Arc<dyn ScriptHost> = Fake::new();
+    install(&lua, State::new(host, Limits::default(), Cancel::default())).unwrap();
+    let mut added: Vec<String> = names(&lua)
+        .into_iter()
+        .filter(|n| !before.contains(n))
+        .collect();
+    added.sort();
+    added
+}
+
+/// 白名单里每个函数都被 core 的两张表归了类（用不用游戏窗口），表里也没有多出来的名字。
+#[test]
+fn every_whitelisted_function_is_classified_by_core() {
+    use kotone_core::automation::library::{PLAIN_FUNCTIONS, WINDOW_FUNCTIONS};
+    let installed = whitelist();
+    assert!(installed.len() > 20, "{installed:?}");
+    for name in &installed {
+        let window = WINDOW_FUNCTIONS.contains(&name.as_str());
+        let plain = PLAIN_FUNCTIONS.contains(&name.as_str());
+        assert!(
+            window ^ plain,
+            "{name} 要在 WINDOW_FUNCTIONS / PLAIN_FUNCTIONS 之一里"
+        );
+    }
+    for name in WINDOW_FUNCTIONS.iter().chain(PLAIN_FUNCTIONS) {
+        assert!(installed.iter().any(|n| n == name), "{name} 不在白名单里");
+    }
+}
+
+/// 没绑窗口：窗口函数一调用就报错，不进“游戏不在前台就暂停”的等待；`game_focused()` 是 false；说话照常。
+#[test]
+fn without_a_window_window_functions_fail_at_once() {
+    let unbound = || {
+        Fake::with(|f| {
+            f.window = false;
+            // 真进了暂停循环就会一直等到总时长上限
+            f.unfocused = (0, u64::MAX);
+        })
+    };
+    for source in [
+        "key('Q')",
+        "key_up('Q')",
+        "type_text('gg')",
+        "chat('gg')",
+        "click(0.5, 0.5)",
+        "mouse_up()",
+        "scroll(1)",
+        "brightness(region(0, 0, 1, 1))",
+        "color_at(0.5, 0.5)",
+        "ocr(region(0, 0, 1, 1))",
+        "find_text(region(0, 0, 1, 1), 'x')",
+        "find_color(region(0, 0, 1, 1), {r = 1, g = 2, b = 3})",
+        "find_image(region(0, 0, 1, 1), { image = 'red-corner' })",
+    ] {
+        let host = unbound();
+        let report = go(source, &host);
+        assert!(
+            matches!(&report.outcome, Outcome::Error(m) if m.contains("没有绑定游戏窗口")),
+            "{source}: {report:?}"
+        );
+        assert!(report.duration_ms < 1_000, "{source}: 不等");
+        assert!(host.keys().is_empty() && host.mouse.lock().unwrap().is_empty());
+        assert!(!report.log.iter().any(|l| l.contains("暂停")), "{source}");
+    }
+    let host = unbound();
+    let report = go(
+        "if not game_focused() then say('不在前台') end toast('好') push('记一下')",
+        &host,
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(
+        *host.said.lock().unwrap(),
+        vec![("不在前台".to_string(), false)]
+    );
+    assert_eq!(*host.toasted.lock().unwrap(), vec!["好".to_string()]);
+    // 绑了窗口时照旧
+    let report = go("if game_focused() then log('在') end", &Fake::new());
+    assert_eq!(report.log, vec!["在".to_string()]);
+}
+
+#[test]
+fn say_toast_push_and_ask_check_their_text() {
+    let host = Fake::new();
+    let report = go(
+        r#"
+        say("  该买眼了 ")
+        say("小龙要刷了", { toast = true })
+        toast("弹一下")
+        push("买了真眼")
+        if ask("看看对面谁是突破口") then log("交出去了") end
+        "#,
+        &host,
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(
+        *host.said.lock().unwrap(),
+        vec![
+            ("该买眼了".to_string(), false),
+            ("小龙要刷了".to_string(), true)
+        ]
+    );
+    assert_eq!(*host.toasted.lock().unwrap(), vec!["弹一下".to_string()]);
+    assert_eq!(host.pushed.lock().unwrap()[0].1, "买了真眼");
+    assert_eq!(
+        *host.asked.lock().unwrap(),
+        vec!["看看对面谁是突破口".to_string()]
+    );
+    assert_eq!(report.log, vec!["交出去了".to_string()]);
+    let ok = |source: String| go(&source, &Fake::new()).outcome == Outcome::Finished;
+    assert!(ok(format!("say('{}')", "说".repeat(MAX_SAY_CHARS))));
+    assert!(!ok(format!("say('{}')", "说".repeat(MAX_SAY_CHARS + 1))));
+    assert!(ok(format!("toast('{}')", "弹".repeat(MAX_SAY_CHARS))));
+    assert!(!ok(format!("toast('{}')", "弹".repeat(MAX_SAY_CHARS + 1))));
+    assert!(ok(format!("push('{}')", "推".repeat(MAX_PUSH_CHARS))));
+    assert!(!ok(format!("push('{}')", "推".repeat(MAX_PUSH_CHARS + 1))));
+    assert!(ok(format!("ask('{}')", "问".repeat(MAX_ASK_CHARS))));
+    assert!(!ok(format!("ask('{}')", "问".repeat(MAX_ASK_CHARS + 1))));
+    for bad in [
+        "say('')",
+        "toast('  ')",
+        "push('a\\nb')",
+        "ask('')",
+        "say(ocr(region(0, 0, 1, 1)))",
+    ] {
+        assert!(!ok(bad.to_string()), "{bad}");
+    }
+}
+
+/// 两次推送至少隔 1 秒：太快就等，不报错。
+#[test]
+fn pushes_are_spaced_at_least_a_second_apart() {
+    let host = Fake::new();
+    let report = go("for i = 1, 3 do push('第' .. i .. '条') end", &host);
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let pushed = host.pushed.lock().unwrap().clone();
+    assert_eq!(pushed.len(), 3);
+    assert!(
+        pushed
+            .windows(2)
+            .all(|w| w[1].0 - w[0].0 >= MIN_PUSH_INTERVAL_MS),
+        "{pushed:?}"
+    );
+}
+
+/// 停下时宿主以错误返回（正在说的话被打断）：记成“已取消”，不是程序出错。
+#[test]
+fn a_host_error_after_cancel_is_a_cancel() {
+    let cancel = Cancel::default();
+    let host = Fake::with(|f| f.interrupt = Some(cancel.clone()));
+    let report = run("say('说一句')", host, Limits::default(), cancel);
+    assert_eq!(report.outcome, Outcome::Cancelled, "{report:?}");
+    // 没停下时宿主报错照旧是错误
+    let report = go(
+        "find_image(region(0,0,1,1), { image = 'missing' })",
+        &Fake::new(),
+    );
+    assert!(matches!(report.outcome, Outcome::Error(ref m) if m.contains("missing")));
+}
+
+/// 新建时选的四个模板（kotone-core）：能编译，只填缺省值就能跑。
+#[test]
+fn every_template_compiles_and_runs_with_its_defaults() {
+    use kotone_core::automation::library::{templates, validate_args};
+    for t in templates() {
+        check_syntax(&t.source).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        let args = validate_args(&t.params, &serde_json::Map::new())
+            .unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        // 模板都不用游戏窗口：没绑窗口也要能跑
+        let host = Fake::with(|f| f.window = false);
+        let report = run_with_args(
+            &t.source,
+            &args,
+            host.clone(),
+            Limits::default(),
+            Cancel::default(),
+        );
+        assert_eq!(report.outcome, Outcome::Finished, "{}: {report:?}", t.id);
+        let did = (
+            host.said.lock().unwrap().len(),
+            host.pushed.lock().unwrap().len(),
+            host.asked.lock().unwrap().len(),
+        );
+        let want = match t.id.as_str() {
+            "say" => (1, 0, 0),
+            "push" => (0, 1, 0),
+            "ask" => (0, 0, 1),
+            _ => (0, 0, 0),
+        };
+        assert_eq!(did, want, "{}", t.id);
+    }
+}
+
+/// 内置的“X 秒之后提醒我”和突破口新装时就是程序（ADR 045 D1）：不用窗口也能跑。
+#[test]
+fn builtin_reminder_and_scout_run_without_a_window() {
+    let host = Fake::with(|f| f.window = false);
+    let report = go_builtin(
+        "builtin-remind-later",
+        &host,
+        serde_json::json!({"text": "打小龙"}),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(
+        *host.said.lock().unwrap(),
+        vec![("打小龙".to_string(), true)],
+        "语音和弹幕一次投递"
+    );
+    let host = Fake::with(|f| f.window = false);
+    let report = go_builtin("builtin-lol-scout-on-loading", &host, serde_json::json!({}));
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert!(host.asked.lock().unwrap()[0].contains("lol.scout"));
+}
+
+/// 旧写法转出来的程序（kotone-core）真的说出和以前一样的话；“让她做”的引号、反斜杠、换行原样交给她。
+#[test]
+fn converted_old_actions_say_the_same_words() {
+    use kotone_core::automation::library::{validate_args, AutomationDraft};
+    let convert = |value: serde_json::Value| {
+        let draft: AutomationDraft = serde_json::from_value(value).unwrap();
+        let args = validate_args(&draft.params, &serde_json::Map::new()).unwrap();
+        (draft.action.source().to_string(), args)
+    };
+    let (source, args) = convert(serde_json::json!({
+        "name": "提醒", "params": [
+            {"name": "text", "type": "text", "default": "打小龙"},
+            {"name": "n", "type": "number", "default": 3},
+            {"name": "half", "type": "number", "default": 1.5},
+            {"name": "loud", "type": "boolean", "default": false}],
+        "action": {"kind": "speak", "text": "该{text}了，{n} 个，{half} 秒，{loud}", "delivery": ["danmaku"]}
+    }));
+    let host = Fake::new();
+    let report = run_with_args(
+        &source,
+        &args,
+        host.clone(),
+        Limits::default(),
+        Cancel::default(),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{source}: {report:?}");
+    assert_eq!(
+        *host.toasted.lock().unwrap(),
+        vec!["该打小龙了，3 个，1.5 秒，否".to_string()]
+    );
+    let said = "看看\"对面\"谁是突破口\\不贴标签\n说'一句'";
+    let (source, args) = convert(serde_json::json!({
+        "name": "突破口", "action": {"kind": "prompt", "text": said}
+    }));
+    let host = Fake::new();
+    let report = run_with_args(
+        &source,
+        &args,
+        host.clone(),
+        Limits::default(),
+        Cancel::default(),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{source}: {report:?}");
+    assert_eq!(*host.asked.lock().unwrap(), vec![said.to_string()]);
 }

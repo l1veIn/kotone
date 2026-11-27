@@ -172,10 +172,11 @@ fn transcript(app: &AppHandle, name: &str, start: u64, end: u64) -> Vec<(u64, St
                 if !(start..=end).contains(&run.created_at_ms) {
                     continue;
                 }
-                let kind = match &run.action {
-                    kotone_core::automation::RunAction::Speak(_) => "提醒",
-                    kotone_core::automation::RunAction::Program(_) => "自动化",
-                    kotone_core::automation::RunAction::Chat(_) => "发到游戏聊天",
+                // TODO(ADR 045 B): 类别标签。这里只照旧：提醒形状的程序叫“提醒”。
+                let kind = if run.as_reminder().is_some() {
+                    "提醒"
+                } else {
+                    "自动化"
                 };
                 lines.push((
                     run.created_at_ms,

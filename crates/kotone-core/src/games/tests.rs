@@ -359,25 +359,22 @@ fn matching_is_a_subset_with_arrays_as_or() {
 }
 
 #[test]
-fn once_per_match_cap_and_cooldown() {
+fn once_per_match_and_cooldown() {
     let once = trigger(json!({"event": ["demo.boss_down"], "oncePerMatch": true}));
-    let capped = trigger(json!({"event": ["demo.boss_down"]}));
+    let every = trigger(json!({"event": ["demo.boss_down"]}));
     let cooled = trigger(json!({"event": ["demo.boss_down"], "cooldownSeconds": 60}));
     let armed = [
         Armed {
             id: "once",
             trigger: &once,
-            per_match: None,
         },
         Armed {
-            id: "capped",
-            trigger: &capped,
-            per_match: Some(3),
+            id: "every",
+            trigger: &every,
         },
         Armed {
             id: "cooled",
             trigger: &cooled,
-            per_match: None,
         },
     ];
     let boss = event("demo.boss_down", "demo", json!({}));
@@ -389,7 +386,7 @@ fn once_per_match_cap_and_cooldown() {
         }
     }
     assert_eq!(fired["once"], 1);
-    assert_eq!(fired["capped"], 3);
+    assert_eq!(fired["every"], 5, "触发本身不限次数（每局叫她几次看 ask）");
     // 0 秒、40 秒都在 60 秒冷却里只算第一次；（0、10、20、30、40 秒）
     assert_eq!(fired["cooled"], 1);
 
@@ -404,7 +401,34 @@ fn once_per_match_cap_and_cooldown() {
         .into_iter()
         .map(|f| f.automation)
         .collect();
-    assert_eq!(again, ["once", "capped", "cooled"]);
+    assert_eq!(again, ["once", "every", "cooled"]);
+}
+
+/// ADR 045 D2：按游戏事件触发时每个自动化每局最多叫她 3 次，按（自动化，游戏）记；一局结束、游戏退出清零。
+#[test]
+fn asks_are_capped_per_automation_game_and_match() {
+    let mut t = Triggers::default();
+    let take = |t: &mut Triggers, a: &str, g: &str| t.take_ask(a, g, ASKS_PER_MATCH);
+    for _ in 0..ASKS_PER_MATCH {
+        assert!(take(&mut t, "scout", "lol"));
+    }
+    assert!(!take(&mut t, "scout", "lol"), "第 4 次不交给她");
+    assert!(take(&mut t, "scout", "cs2"), "别的游戏另算");
+    assert!(take(&mut t, "other", "lol"), "别的自动化另算");
+    // 一局结束：这个游戏的清零，别的游戏不动
+    t.on_event(&[], &event("game.match_ended", "lol", json!({})), 1);
+    assert!(take(&mut t, "scout", "lol"));
+    assert!(take(&mut t, "scout", "cs2"));
+    assert!(take(&mut t, "scout", "cs2"));
+    assert!(!take(&mut t, "scout", "cs2"));
+    // 游戏退出也清零
+    t.on_event(&[], &event("game.stopped", "cs2", json!({})), 2);
+    assert!(take(&mut t, "scout", "cs2"));
+    // 别的事不清零
+    t.on_event(&[], &event("game.phase_changed", "lol", json!({})), 3);
+    assert!(take(&mut t, "scout", "lol"));
+    assert!(take(&mut t, "scout", "lol"));
+    assert!(!take(&mut t, "scout", "lol"));
 }
 
 #[test]
@@ -414,7 +438,6 @@ fn for_waits_until_the_phase_has_held() {
     let armed = [Armed {
         id: "ward",
         trigger: &t60,
-        per_match: None,
     }];
     let to_match = event(
         "game.phase_changed",
@@ -446,7 +469,6 @@ fn for_waits_until_the_phase_has_held() {
     let disabled = [Armed {
         id: "ward",
         trigger: &off,
-        per_match: None,
     }];
     assert!(t.tick(&disabled, 460_000).is_empty());
 }
@@ -517,7 +539,6 @@ fn private_fields_reach_automations_but_not_her() {
         &[Armed {
             id: "a",
             trigger: &on,
-            per_match: None,
         }],
         &event,
         2,

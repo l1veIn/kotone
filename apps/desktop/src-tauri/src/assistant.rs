@@ -11,7 +11,7 @@ use kotone_core::assistant::{
 };
 use kotone_core::automation::AutomationScheduler;
 use kotone_core::cancel::CancellationToken;
-use kotone_core::reminders::{DeliveryFuture, DeliveryKind, Reminder, ReminderDelivery};
+use kotone_core::reminders::{DeliveryKind, Reminder};
 use kotone_core::settings::Settings;
 use kotone_core::speech::{SpeechOutput, SpeechRequest, SpeechVoice};
 use kotone_platform_windows::output_volume::OutputVolumeLease;
@@ -299,10 +299,9 @@ pub fn initialize(
     let speaker = kotone_platform_windows::speech::WindowsSpeechOutput::new()
         .map(|speaker| Arc::new(speaker) as Arc<dyn SpeechOutput>);
     // 提醒与程序共用自动化调度器（ADR 013）；旧 reminders.json 只读导入一次，不改不删。
-    let scheduler = AutomationScheduler::open(
-        kotone_core::settings::kotone_dir().join("automation-runs.json"),
-        Arc::new(DesktopDelivery { app: app.clone() }),
-    );
+    // ADR 045：调度器只剩程序循环，提醒由程序里的 `say()` / `toast()` 投递（经 `deliver_text`）。
+    let scheduler =
+        AutomationScheduler::open(kotone_core::settings::kotone_dir().join("automation-runs.json"));
     if let Ok(scheduler) = &scheduler {
         match scheduler
             .import_legacy_reminders(&kotone_core::settings::kotone_dir().join("reminders.json"))
@@ -862,7 +861,12 @@ impl Drop for OutputGuard {
     }
 }
 
-impl ReminderDelivery for DesktopDelivery {
+/// 一次投递的 future（以前 core 的 `ReminderDelivery` 端口，ADR 045 起只有 [`deliver_text`] 用）。
+type DeliveryFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>;
+
+// TODO(ADR 045 B): `deliver_text` 接收取消 token 和 legacy_voice 标记（程序里的 `say()` 用）。
+impl DesktopDelivery {
     fn deliver<'a>(
         &'a self,
         reminder: &'a Reminder,

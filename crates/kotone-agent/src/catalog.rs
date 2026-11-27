@@ -23,7 +23,7 @@
 //! 这一项，和 [`UNTRUSTED_RESULTS`] 一样在这里标）。主会话里慢了也不卡：超过 3 秒没回来就转到后台
 //! （[`crate::background`]）。
 
-use kotone_core::automation::library::{Automation, AutomationBody, ParamKind};
+use kotone_core::automation::library::{Automation, ParamKind};
 use serde_json::{json, Map, Value};
 
 pub const TOOL_FIND: &str = "tools.find";
@@ -807,11 +807,16 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
         "delaySeconds".into(),
         json!({"type": "integer", "minimum": 0, "maximum": 604800, "description": "几秒后开始；缺省立即"}),
     );
-    let kind = match automation.action {
-        AutomationBody::Speak(_) => "播报",
-        AutomationBody::Program(_) => "程序，对当前前台的游戏窗口执行",
-        // “让她做”是交给她自己的一句话（游戏事件触发时用），不再当工具给她
-        AutomationBody::Prompt(_) => return None,
+    // TODO(ADR 045 D): 种类说明按“用不用游戏窗口”写。这里只照旧：会叫她的（以前的“让她做”）不当工具给她，
+    // 不用窗口的（以前的播报）仍叫“播报”。
+    let uses = automation.action.uses();
+    if uses.asks {
+        return None;
+    }
+    let kind = if uses.window {
+        "程序，对当前前台的游戏窗口执行"
+    } else {
+        "播报"
     };
     let mut description = format!("运行已保存的自动化「{}」（{kind}）", automation.name);
     if !automation.description.is_empty() {

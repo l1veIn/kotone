@@ -266,7 +266,6 @@ fn old_automations_with_lol_triggers_still_load_and_fire() {
         .map(|a| Armed {
             id: &a.id,
             trigger: a.on.as_ref().unwrap(),
-            per_match: None,
         })
         .collect();
     assert!(armed.iter().all(|a| trigger_matches(a.trigger, &event)));

@@ -134,9 +134,12 @@ fn prompt_skipped_notice(name: &str) -> Message {
 }
 
 /// 自动化“让她做”（ADR 036 D8）：等主会话空下来，放一条系统消息进当前对话，让她跑一轮。
+///
+/// TODO(ADR 045 B): “让她做”成了程序里的 `ask()`，暂时没人调用；`ask_from_automation` 接上以后去掉 allow。
 /// 来源是 `automation`：界面当系统消息显示；算游戏里的入口（开口说）；不是玩家亲口说的，
 /// 这一轮不能交给后台（ADR 030 第 2 节）。触发它的游戏事件按数据附上。等过 [`PROMPT_WAIT`] 还不空就不做了
 /// （事件已经过去了），但在聊天里留一句（照 `when_free.rs` 排着，不悄悄丢；共享资源评估第二节第 9 条）。
+#[allow(dead_code)]
 pub fn run_prompt(
     app: &AppHandle,
     name: &str,

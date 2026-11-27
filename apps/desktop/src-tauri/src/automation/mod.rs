@@ -22,8 +22,8 @@ use kotone_core::automation::library::{
     ParamKind,
 };
 use kotone_core::automation::{
-    AutomationScheduler, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction, RunStatus,
-    RunTarget, SpeakAction, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
+    AutomationScheduler, ProgramAction, ProgramLauncher, ProgramReport, Run, RunStatus, RunTarget,
+    MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
 };
 use kotone_core::reminders::DeliveryKind;
 use kotone_core::tools::{WindowIdentity, WindowInfo, WindowObserver};
@@ -186,7 +186,7 @@ pub fn list(app: &AppHandle) -> Result<Value, String> {
     let runs = scheduler(app)?.runs();
     let running = runs
         .iter()
-        .filter(|r| r.is_program() && r.status == RunStatus::Running)
+        .filter(|r| r.bound_to_window() && r.status == RunStatus::Running)
         .count();
     let pending = runs
         .iter()
@@ -264,6 +264,8 @@ pub fn start(
             automation_id: request.automation_id,
             args: request.args,
             target: Some(target),
+            // TODO(ADR 045 B): 按游戏事件触发的执行带上触发它的事件（`ask()` 附上）。
+            event: None,
         },
         due_at_ms,
     )?;
@@ -285,33 +287,20 @@ pub fn run_saved(
         &automation.params,
         &store_arg_images(&automation.params, args)?,
     )?;
-    match &automation.action {
-        AutomationBody::Program(program) => start(
-            app,
-            session,
-            ProgramRequest {
-                name: &automation.name,
-                source: &program.source,
-                automation_id: Some(automation.id.clone()),
-                args,
-            },
-            due_at_ms,
-        ),
-        AutomationBody::Speak(speak) => {
-            // `{参数名}` 换成这次的值；`delay_seconds` = 几秒后再说。
-            let (text, delay_ms) = kotone_core::automation::library::render_speak(speak, &args);
-            let speak = kotone_core::automation::SpeakAction {
-                text,
-                delivery: speak.delivery.clone(),
-            };
-            let run = scheduler(app)?.schedule_speak(session, speak, due_at_ms + delay_ms)?;
-            Ok(scheduled_json(&run, None))
-        }
-        AutomationBody::Prompt(prompt) => {
-            crate::agent::run_prompt(app, &automation.name, &prompt.text, None);
-            Ok(json!({"status": "sent"}))
-        }
-    }
+    // TODO(ADR 045 B): 只剩一条路：校验参数 → 算延迟（`library::delay_ms`）→ 扫描源码（`ProgramUses`），
+    // 用到游戏窗口的才绑前台窗口 → `start`。现在所有程序都照旧绑前台窗口。
+    let AutomationBody::Program(program) = &automation.action;
+    start(
+        app,
+        session,
+        ProgramRequest {
+            name: &automation.name,
+            source: &program.source,
+            automation_id: Some(automation.id.clone()),
+            args,
+        },
+        due_at_ms,
+    )
 }
 
 /// `elapsedSeconds` → `elapsed_seconds`（参数名只能是小写字母、数字、下划线）。
@@ -357,10 +346,8 @@ pub fn run_on_event(app: &AppHandle, fire: &kotone_core::games::Fire) {
         "automation {id}: 游戏事件 {} 触发（{}）",
         fire.event.kind, fire.event.game
     ));
-    if let AutomationBody::Prompt(prompt) = &automation.action {
-        crate::agent::run_prompt(app, &automation.name, &prompt.text, Some(&fire.event));
-        return;
-    }
+    // TODO(ADR 045 B): 以前的“让她做”现在是程序里的 `ask()`（事件随执行记录保存、每局 3 次用
+    // `Triggers::take_ask`）；`mode` 只对用到游戏窗口的程序生效。
     let args: serde_json::Map<String, Value> = automation
         .params
         .iter()
@@ -487,7 +474,7 @@ pub fn schedule_reminder(
         delivery
     };
     let due = kotone_core::automation::now_ms() + delay_seconds.saturating_mul(1_000);
-    let run = scheduler(app)?.schedule_speak(session, SpeakAction { text, delivery }, due)?;
+    let run = scheduler(app)?.schedule_reminder(session, &text, &delivery, due)?;
     Ok(scheduled_json(&run, None))
 }
 
@@ -510,9 +497,8 @@ pub fn automation_json(automation: &Automation, with_source: bool) -> Value {
 /// 保存（新建或按 id 覆盖）；程序先检查语法。游戏事件触发按合并后的事件目录校验（插件登记的也认得）；
 /// 触发里的事现在不会发生时（例如英雄联盟插件关着）照常保存，结果里多一项 `triggerNotes` 说清楚（原则 21）。
 pub fn save(app: &AppHandle, mut draft: AutomationDraft, by: CreatedBy) -> Result<Value, String> {
-    if let AutomationBody::Program(program) = &mut draft.action {
-        program.source = check_source(&program.source)?.to_string();
-    }
+    let AutomationBody::Program(program) = &mut draft.action;
+    program.source = check_source(&program.source)?.to_string();
     store_draft_images(&mut draft)?;
     let events = {
         let settings = app
@@ -585,9 +571,8 @@ pub fn program_running(app: &AppHandle) -> bool {
 
 /// 调度器到点（或立即）调用：确认目标窗口还在，然后在新线程里运行程序。
 fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
-    let RunAction::Program(program) = &run.action else {
-        return Err("不是程序".into());
-    };
+    // TODO(ADR 045 B): 不用游戏窗口的执行（`target = None`）不看前台、不绑窗口、不查 busy。
+    let program = run.program();
     if crate::computer_use::busy(app) {
         return Err("正在替你操作游戏，自动化没有启动（不能同时按键）".into());
     }
@@ -796,12 +781,7 @@ pub fn automation_run_saved(
         .ok_or_else(|| format!("找不到自动化 {id}"))?;
     let stored = store_arg_images(&automation.params, &args)?;
     validate_args(&automation.params, &stored)?;
-    if matches!(
-        automation.action,
-        AutomationBody::Speak(_) | AutomationBody::Prompt(_)
-    ) {
-        return run_saved(&app, "ui", &id, &stored, kotone_core::automation::now_ms());
-    }
+    // TODO(ADR 045 B): 不用游戏窗口的（`ProgramUses::of(..).window == false`）不倒数，直接排上。
     let seconds = switch_seconds.clamp(1, 30);
     std::thread::Builder::new()
         .name("kotone-automation-countdown".into())

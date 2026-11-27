@@ -1,13 +1,17 @@
-//! 已保存的自动化（定义，ADR 013 §2）：名字、说明、入参声明、动作、创建者。存在
+//! 已保存的自动化（定义，ADR 013 §2）：名字、说明、入参声明、程序、创建者。存在
 //! `~/.kotone/automations.json`。运行时先按声明校验入参（[`validate_args`]），再由调度器生成
 //! 执行记录；执行记录保存源码快照，之后修改或删除定义不影响已安排的执行。
+//!
+//! 动作只有程序（ADR 045 D1）：说一句、弹幕、推送、交给她都是程序里的函数。旧写法（“播报”“让她做”）
+//! 由私有类型读进来、转成等价的程序（[`AutomationLibrary::open`] 转完存盘；工具 `automation.save`
+//! 收到的旧写法在解析 [`AutomationDraft`] 时就转好）。
 
 use std::{path::PathBuf, sync::Mutex};
 
 use serde_json::{Map, Value};
 
-use super::{now_ms, write_atomic, SpeakAction, MAX_NAME_CHARS, MAX_SOURCE_CHARS};
-use crate::games::{validate_trigger, EventCatalog, EventTrigger};
+use super::{now_ms, reminder_source, write_atomic, SpeakAction, MAX_NAME_CHARS, MAX_SOURCE_CHARS};
+use crate::games::{validate_trigger, EventCatalog, EventTrigger, GameEvent};
 use crate::reminders::{validate_content, DeliveryKind};
 
 pub const MAX_AUTOMATIONS: usize = 200;
@@ -17,8 +21,8 @@ const MAX_LABEL_CHARS: usize = 40;
 const MAX_TEXT_PARAM_CHARS: u32 = 200;
 const MAX_CHOICES: usize = 16;
 const STORE_VERSION: u32 = 1;
-/// “让她做”那句话最多多少字。
-pub const MAX_PROMPT_CHARS: usize = 500;
+/// 旧写法“让她做”那句话最多多少字（和脚本引擎里 `ask()` 的上限一样）。
+const MAX_PROMPT_CHARS: usize = 500;
 
 /// 入参类型。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -84,26 +88,160 @@ pub struct ParamSpec {
     pub default: Option<Value>,
 }
 
-/// 定义里的动作（不含执行时才有的目标窗口与入参）。
+/// 定义里的动作（不含执行时才有的目标窗口与入参）：只有程序（ADR 045 D1）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum AutomationBody {
-    Speak(SpeakAction),
     Program(ProgramBody),
-    /// 让她做（ADR 036 D8）：一句交给她的话，触发时放进主会话让她跑一轮（每次花一次 AI 调用）。
-    Prompt(PromptBody),
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptBody {
-    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgramBody {
     pub source: String,
+}
+
+impl AutomationBody {
+    pub fn source(&self) -> &str {
+        let AutomationBody::Program(program) = self;
+        &program.source
+    }
+
+    /// 程序里用到了什么（用不用游戏窗口、会不会叫她）。
+    pub fn uses(&self) -> ProgramUses {
+        ProgramUses::of(self.source())
+    }
+}
+
+/// 旧写法（rc.13 及以前）的“让她做”（ADR 036 D8）：只为读进来转成 `ask("…")`。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PromptBody {
+    text: String,
+}
+
+/// 读进来的动作：现在的程序，或旧写法（转成程序，ADR 045 D1）。
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum StoredBody {
+    Program(ProgramBody),
+    Speak(SpeakAction),
+    Prompt(PromptBody),
+}
+
+impl StoredBody {
+    /// 工具 / 界面交来的旧写法先照旧规矩查一遍（话不能为空、回答方式不能重复、`{参数}` 要有对应的参数），
+    /// 免得转出一段跑不起来的程序。存盘里的旧定义当初查过，不再查。
+    fn check(&self, params: &[ParamSpec]) -> Result<(), String> {
+        match self {
+            StoredBody::Program(_) => Ok(()),
+            StoredBody::Speak(speak) => {
+                validate_content(&speak.text, &speak.delivery)?;
+                for name in placeholders(&speak.text) {
+                    if !params.iter().any(|p| p.name == name) {
+                        return Err(format!("播报里的 {{{name}}} 没有对应的参数"));
+                    }
+                }
+                Ok(())
+            }
+            StoredBody::Prompt(prompt) => {
+                let chars = prompt.text.trim().chars().count();
+                if chars == 0 || chars > MAX_PROMPT_CHARS {
+                    return Err(format!(
+                        "“让她做”的那句话不能为空，最多 {MAX_PROMPT_CHARS} 字"
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// 转成程序；第二项：是不是旧写法。
+    fn upgrade(self, params: &[ParamSpec]) -> (AutomationBody, bool) {
+        let source = match self {
+            StoredBody::Program(program) => return (AutomationBody::Program(program), false),
+            StoredBody::Speak(speak) => speak_source(params, speak.text.trim(), &speak.delivery),
+            StoredBody::Prompt(prompt) => format!("ask({})", lua_string(prompt.text.trim())),
+        };
+        (AutomationBody::Program(ProgramBody { source }), true)
+    }
+}
+
+/// Luau 字符串字面量（双引号；反斜杠、引号、换行和控制字符转义）。
+pub(crate) fn lua_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// 旧播报文字里的 `{参数名}`。
+fn placeholders(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else { break };
+        let name = &after[..end];
+        if is_identifier(name) {
+            out.push(name.to_string());
+        }
+        rest = &after[end + 1..];
+    }
+    out
+}
+
+/// 旧播报 → 一句 `say` / `toast`（ADR 045 D1）：`"该{text}了"` → `say("该" .. args.text .. "了")`。
+/// 显示和以前的 `{参数}` 替换一样：文字原样，数字 `tostring`，开关“是 / 否”。只要语音 `say(X)`，只要弹幕
+/// `toast(X)`，两者都要 `say(X, { toast = true })`（一次投递，语音和弹幕同时出现）。
+fn speak_source(params: &[ParamSpec], text: &str, delivery: &[DeliveryKind]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut literal = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('{') {
+        literal.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let param = after.find('}').and_then(|end| {
+            let name = &after[..end];
+            params.iter().find(|p| p.name == name).map(|p| (p, end))
+        });
+        match param {
+            Some((spec, end)) => {
+                if !literal.is_empty() {
+                    parts.push(lua_string(&std::mem::take(&mut literal)));
+                }
+                let arg = format!("args.{}", spec.name);
+                parts.push(match spec.kind {
+                    ParamKind::Text { .. } | ParamKind::Choice { .. } | ParamKind::Key => arg,
+                    ParamKind::Boolean => format!("({arg} and \"是\" or \"否\")"),
+                    _ => format!("tostring({arg})"),
+                });
+                rest = &after[end + 1..];
+            }
+            None => {
+                literal.push('{');
+                rest = after;
+            }
+        }
+    }
+    literal.push_str(rest);
+    if !literal.is_empty() || parts.is_empty() {
+        parts.push(lua_string(&literal));
+    }
+    let said = parts.join(" .. ");
+    // 和提醒同一个规矩：选的是哪段固定程序，就照它的样子写（`args.text` 换成这里拼出来的话）。
+    reminder_source(delivery).replace("args.text", &said)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -133,12 +271,12 @@ fn enabled_by_default() -> bool {
 
 /// 内置的“X 秒之后提醒我 xxx”（第一次打开时装上；玩家删了不再装回）。
 pub const BUILTIN_REMIND_ID: &str = "builtin-remind-later";
-/// 播报类自动化里表示“几秒后再说”的参数名。
+/// 表示“几秒后再开始”的参数名（ADR 045 D7：任何自动化声明了这个数字参数都生效，见 [`delay_ms`]）。
 pub const DELAY_PARAM: &str = "delay_seconds";
 
 /// 已保存的自动化。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "StoredAutomation")]
 pub struct Automation {
     pub id: String,
     pub name: String,
@@ -158,9 +296,56 @@ pub struct Automation {
     pub on: Option<EventTrigger>,
 }
 
-/// 新建或覆盖时提交的内容（`id` 为空 = 新建）。
+/// 存盘里的自动化：和 [`Automation`] 一样，只是动作还可能是旧写法。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredAutomation {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    params: Vec<ParamSpec>,
+    action: StoredBody,
+    created_by: CreatedBy,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+    #[serde(default)]
+    schedule: Option<Schedule>,
+    #[serde(default)]
+    on: Option<EventTrigger>,
+}
+
+impl StoredAutomation {
+    /// 第二项：动作是不是旧写法（转过了要存盘）。
+    fn upgrade(self) -> (Automation, bool) {
+        let (action, upgraded) = self.action.upgrade(&self.params);
+        let automation = Automation {
+            id: self.id,
+            name: self.name,
+            description: self.description,
+            params: self.params,
+            action,
+            created_by: self.created_by,
+            created_at_ms: self.created_at_ms,
+            updated_at_ms: self.updated_at_ms,
+            schedule: self.schedule,
+            on: self.on,
+        };
+        (automation, upgraded)
+    }
+}
+
+impl From<StoredAutomation> for Automation {
+    fn from(stored: StoredAutomation) -> Self {
+        stored.upgrade().0
+    }
+}
+
+/// 新建或覆盖时提交的内容（`id` 为空 = 新建）。`action` 收旧写法（工具 `automation.save` 已发布的
+/// `speak` / `prompt`），解析时就转成等价的程序（ADR 045 D1）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "DraftFields")]
 pub struct AutomationDraft {
     #[serde(default)]
     pub id: Option<String>,
@@ -174,6 +359,42 @@ pub struct AutomationDraft {
     pub schedule: Option<Schedule>,
     #[serde(default)]
     pub on: Option<EventTrigger>,
+}
+
+/// 提交上来的样子（不认识的字段直接拒，打错字不会悄悄失效）。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DraftFields {
+    #[serde(default)]
+    id: Option<String>,
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    params: Vec<ParamSpec>,
+    action: StoredBody,
+    #[serde(default)]
+    schedule: Option<Schedule>,
+    #[serde(default)]
+    on: Option<EventTrigger>,
+}
+
+impl TryFrom<DraftFields> for AutomationDraft {
+    type Error = String;
+
+    fn try_from(fields: DraftFields) -> Result<Self, String> {
+        fields.action.check(&fields.params)?;
+        let (action, _) = fields.action.upgrade(&fields.params);
+        Ok(Self {
+            id: fields.id,
+            name: fields.name,
+            description: fields.description,
+            params: fields.params,
+            action,
+            schedule: fields.schedule,
+            on: fields.on,
+        })
+    }
 }
 
 fn is_identifier(name: &str) -> bool {
@@ -312,47 +533,356 @@ pub fn validate_args(
     Ok(out)
 }
 
-/// 播报文字里的 `{参数名}`。
-fn placeholders(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find('{') {
-        let after = &rest[start + 1..];
-        let Some(end) = after.find('}') else { break };
-        let name = &after[..end];
-        if is_identifier(name) || name == DELAY_PARAM {
-            out.push(name.to_string());
+/// 几秒后再开始（ADR 045 D7，毫秒）：声明了数字参数 `delay_seconds` 的自动化，运行时就晚这么多秒开始
+/// （以前只对播报有效）。和工具的 `delaySeconds` 相加，合计不超过 7 天由调度器查。
+pub fn delay_ms(params: &[ParamSpec], args: &Map<String, Value>) -> u64 {
+    let declared = params
+        .iter()
+        .any(|p| p.name == DELAY_PARAM && matches!(p.kind, ParamKind::Number { .. }));
+    if !declared {
+        return 0;
+    }
+    args.get(DELAY_PARAM)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| (v * 1000.0) as u64)
+        .unwrap_or(0)
+}
+
+/// `elapsedSeconds` → `elapsed_seconds`（参数名只能是小写字母、数字、下划线）。
+pub(crate) fn snake(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_uppercase() {
+            out.push('_');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
         }
-        rest = &after[end + 1..];
     }
     out
 }
 
-/// 按入参生成这一次的播报：`{参数名}` 换成值；`delaySeconds` 给出几秒后再说（毫秒）。
-pub fn render_speak(speak: &SpeakAction, args: &Map<String, Value>) -> (String, u64) {
-    let mut text = speak.text.clone();
-    for (name, value) in args {
-        let shown = match value {
-            Value::String(s) => s.clone(),
-            Value::Bool(b) => {
-                if *b {
-                    "是".into()
-                } else {
-                    "否".into()
+/// 游戏事件触发时的入参（ADR 036 D6，事件是函数的输入）：和事件 `data` 字段同名的参数自动填上
+/// （camelCase 字段对 snake_case 参数）。[`super::ProgramAction::check_ask`] 按同一个规矩认“从事件填进来的值”。
+pub fn event_args(params: &[ParamSpec], event: &GameEvent) -> Map<String, Value> {
+    params
+        .iter()
+        .filter_map(|p| {
+            event
+                .data
+                .iter()
+                .find(|(k, _)| **k == p.name || snake(k) == p.name)
+                .map(|(_, v)| (p.name.clone(), v.clone()))
+        })
+        .collect()
+}
+
+// ---------- 程序里用到了什么（ADR 045 D4） ----------
+
+/// 用到游戏窗口的函数：按键、打字、发到游戏聊天、鼠标、看屏幕、`game_focused`。程序里出现其中之一就绑窗口：
+/// 安排时前台要是允许自动化输入的游戏、游戏不在前台就暂停、窗口关了就结束、占名额、挡她操作游戏。
+pub const WINDOW_FUNCTIONS: &[&str] = &[
+    "key",
+    "key_down",
+    "key_up",
+    "type_text",
+    "chat",
+    "click",
+    "mouse_move",
+    "mouse_down",
+    "mouse_up",
+    "scroll",
+    "brightness",
+    "color_at",
+    "ocr",
+    "find_text",
+    "find_color",
+    "find_image",
+    "game_focused",
+];
+
+/// 不用游戏窗口的函数：时钟、等待、说话、弹幕、推送、交给她、日志。脚本引擎的测试保证白名单里每个函数都在
+/// 这两张表之一里。
+pub const PLAIN_FUNCTIONS: &[&str] = &[
+    "wait",
+    "now",
+    "every",
+    "wait_until",
+    "region",
+    "say",
+    "toast",
+    "push",
+    "ask",
+    "log",
+    "stop",
+];
+
+/// 程序里用到了什么：按源码保守判断，宁可多算（注释和字符串里的不算；`args.key`、`t:find`、`{ key = 1 }`
+/// 不算；反引号字符串里出现的名字都算）。算漏了也不出事：窗口函数在没绑窗口的执行里一调用就报错。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramUses {
+    /// 用到游戏窗口（[`WINDOW_FUNCTIONS`]）。
+    pub window: bool,
+    /// 会叫她（`ask`）：每次花一次 AI 调用；会叫她的自动化不当 `saved.*` 工具给她。
+    pub asks: bool,
+}
+
+impl ProgramUses {
+    pub fn of(source: &str) -> Self {
+        let mut uses = Self::default();
+        for name in used_names(source) {
+            uses.window |= WINDOW_FUNCTIONS.contains(&name);
+            uses.asks |= name == "ask";
+        }
+        uses
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Token<'a> {
+    Name(&'a str),
+    /// 反引号字符串里的名字（插值 `{…}` 是代码）：一律算用到。
+    Quoted(&'a str),
+    /// 单个 `.`（不是 `..`、`...`）。
+    Dot,
+    /// 单个 `:`（不是 `::`）。
+    Colon,
+    /// 单个 `=`（不是 `==`、`~=`、`<=`、`>=`）。
+    Assign,
+    Other,
+}
+
+fn ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_'
+}
+
+fn ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// `[` 开始的长括号（`[[`、`[==[`）的等号个数；不是长括号为 None。
+fn long_bracket(b: &[u8], at: usize) -> Option<usize> {
+    let mut i = at + 1;
+    while b.get(i) == Some(&b'=') {
+        i += 1;
+    }
+    (b.get(i) == Some(&b'[')).then_some(i - at - 1)
+}
+
+/// 跳过长括号的内容，返回结束后的位置（没结束就到末尾）。
+fn skip_long(b: &[u8], at: usize, level: usize) -> usize {
+    let mut i = at + level + 2;
+    while i < b.len() {
+        if b[i] == b']' {
+            let mut j = i + 1;
+            while j < b.len() && b[j] == b'=' {
+                j += 1;
+            }
+            if j - i - 1 == level && b.get(j) == Some(&b']') {
+                return j + 1;
+            }
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// 粗切成记号：跳过注释、字符串、数字。
+fn tokens(source: &str) -> Vec<Token<'_>> {
+    let b = source.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_whitespace() {
+            i += 1;
+        } else if c == b'-' && b.get(i + 1) == Some(&b'-') {
+            i += 2;
+            match (b.get(i) == Some(&b'['))
+                .then(|| long_bracket(b, i))
+                .flatten()
+            {
+                Some(level) => i = skip_long(b, i, level),
+                None => {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
                 }
             }
-            Value::Number(n) => n.to_string(),
-            other => other.to_string(),
-        };
-        text = text.replace(&format!("{{{name}}}"), &shown);
+        } else if c == b'"' || c == b'\'' {
+            i += 1;
+            while i < b.len() && b[i] != c && b[i] != b'\n' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+            out.push(Token::Other);
+        } else if c == b'`' {
+            let start = i + 1;
+            i += 1;
+            while i < b.len() && b[i] != b'`' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            let end = i.min(b.len());
+            let mut j = start;
+            while j < end {
+                if ident_start(b[j]) && (j == start || !ident_char(b[j - 1])) {
+                    let k = (j..end).find(|&k| !ident_char(b[k])).unwrap_or(end);
+                    out.push(Token::Quoted(&source[j..k]));
+                    j = k;
+                } else {
+                    j += 1;
+                }
+            }
+            i += 1;
+            out.push(Token::Other);
+        } else if c == b'[' && long_bracket(b, i).is_some() {
+            i = skip_long(b, i, long_bracket(b, i).unwrap_or(0));
+            out.push(Token::Other);
+        } else if ident_start(c) {
+            let start = i;
+            while i < b.len() && ident_char(b[i]) {
+                i += 1;
+            }
+            out.push(Token::Name(&source[start..i]));
+        } else if c.is_ascii_digit() {
+            while i < b.len() && (ident_char(b[i]) || b[i] == b'.') {
+                let exponent = matches!(b[i], b'e' | b'E');
+                i += 1;
+                if exponent && matches!(b.get(i), Some(b'+' | b'-')) {
+                    i += 1;
+                }
+            }
+            out.push(Token::Other);
+        } else {
+            let next = b.get(i + 1).copied();
+            let token = match c {
+                b'.' if next == Some(b'.') => {
+                    while i < b.len() && b[i] == b'.' {
+                        i += 1;
+                    }
+                    out.push(Token::Other);
+                    continue;
+                }
+                b'.' => Token::Dot,
+                b':' if next == Some(b':') => {
+                    i += 1;
+                    Token::Other
+                }
+                b':' => Token::Colon,
+                b'=' if next == Some(b'=') => {
+                    i += 1;
+                    Token::Other
+                }
+                b'=' => Token::Assign,
+                b'~' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'^'
+                    if next == Some(b'=') =>
+                {
+                    i += 1;
+                    Token::Other
+                }
+                _ => Token::Other,
+            };
+            i += 1;
+            out.push(token);
+        }
     }
-    let delay = args
-        .get(DELAY_PARAM)
-        .and_then(Value::as_f64)
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .map(|v| (v * 1000.0) as u64)
-        .unwrap_or(0);
-    (text, delay)
+    out
+}
+
+/// 程序里当全局名字用到的名字（保守：字段 `a.b`、方法 `a:b`、表键 / 赋值目标 `b = …` 不算，`_G.b` 算）。
+fn used_names(source: &str) -> Vec<&str> {
+    let tokens = tokens(source);
+    let mut out = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let name = match *token {
+            Token::Quoted(name) => {
+                out.push(name);
+                continue;
+            }
+            Token::Name(name) => name,
+            _ => continue,
+        };
+        let before = |n: usize| i.checked_sub(n).map(|j| tokens[j]);
+        let field = match before(1) {
+            Some(Token::Dot) => before(2) != Some(Token::Name("_G")),
+            Some(Token::Colon) => true,
+            _ => false,
+        };
+        let assigned = tokens.get(i + 1) == Some(&Token::Assign);
+        if !field && !assigned {
+            out.push(name);
+        }
+    }
+    out
+}
+
+// ---------- 模板（ADR 045 D9） ----------
+
+/// 新建自动化时选的模板。和内置程序一样由测试保证能编译、只填缺省值就能跑；界面按 `id` 取文案。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub params: Vec<ParamSpec>,
+    pub source: String,
+}
+
+/// 四个模板：说一句、推送一条、让她做、空白程序（按键类复制内置程序）。“说一句”用 `args.text`，
+/// 不再支持 `{参数}` 写法；要用事件里的字，让她写或改程序。
+pub fn templates() -> Vec<Template> {
+    let text = |name: &str, label: &str, max_length: u32, default: &str| ParamSpec {
+        name: name.into(),
+        label: label.into(),
+        description: String::new(),
+        kind: ParamKind::Text { max_length },
+        default: Some(Value::from(default)),
+    };
+    let template = |id: &str, name: &str, description: &str, params, source: &str| Template {
+        id: id.into(),
+        name: name.into(),
+        description: description.into(),
+        params,
+        source: source.trim().to_string() + "\n",
+    };
+    vec![
+        template(
+            "say",
+            "说一句",
+            "她开口说一句话。想同时弹幕就写 say(args.text, { toast = true })。",
+            vec![text("text", "说什么", 200, "该看小地图了")],
+            "say(args.text)",
+        ),
+        template(
+            "push",
+            "推送一条",
+            "在 Kotone 聊天里记一条、悬浮窗显示一行；不出声，不调用 AI。最多 40 字。",
+            vec![text("text", "推送什么", 40, "记得买真眼")],
+            "push(args.text)",
+        ),
+        template(
+            "ask",
+            "让她做",
+            "把一句话交给她，她看着办（查战绩、说话、调工具都行）。每次花一次 AI 调用；按游戏事件触发时每局最多 3 次。",
+            vec![text(
+                "request",
+                "让她做什么",
+                200,
+                "看看现在的情况，用一句话告诉我该注意什么",
+            )],
+            "ask(args.request)",
+        ),
+        template(
+            "blank",
+            "空白程序",
+            "自己写一段程序。要通知就写 say / toast / push，不写就安静；按键类可以复制内置的程序。",
+            vec![],
+            "-- 在这里写程序，例如：\n-- say(\"该买眼了\")",
+        ),
+    ]
 }
 
 fn validate_params(params: &mut [ParamSpec]) -> Result<(), String> {
@@ -422,6 +952,7 @@ fn validate_params(params: &mut [ParamSpec]) -> Result<(), String> {
 
 impl AutomationDraft {
     /// 检查并整理。游戏事件触发按合并后的事件目录 `events` 认名字（本体的 `game.*` 加插件登记的）。
+    /// 旧写法在解析时已经转成程序；程序的语法由桌面端（脚本引擎）查。
     fn normalized(mut self, events: &EventCatalog) -> Result<Self, String> {
         self.name = self.name.trim().to_string();
         self.description = self.description.trim().to_string();
@@ -440,70 +971,38 @@ impl AutomationDraft {
         if let Some(on) = &self.on {
             self.on = Some(validate_trigger(on, events)?);
         }
-        match &mut self.action {
-            AutomationBody::Speak(speak) => {
-                speak.text = speak.text.trim().to_string();
-                validate_content(&speak.text, &speak.delivery)?;
-                for spec in &self.params {
-                    let simple = matches!(
-                        spec.kind,
-                        ParamKind::Number { .. }
-                            | ParamKind::Text { .. }
-                            | ParamKind::Boolean
-                            | ParamKind::Choice { .. }
-                    );
-                    if !simple {
-                        return Err(format!(
-                            "播报类自动化的参数 {} 只能是数字、文字、开关或选项",
-                            spec.name
-                        ));
-                    }
-                    if spec.name == DELAY_PARAM && !matches!(spec.kind, ParamKind::Number { .. }) {
-                        return Err(format!("{DELAY_PARAM}（几秒后再说）要是数字"));
-                    }
-                }
-                for name in placeholders(&speak.text) {
-                    if !self.params.iter().any(|p| p.name == name) {
-                        return Err(format!("播报里的 {{{name}}} 没有对应的参数"));
-                    }
-                }
-            }
-            AutomationBody::Program(program) => {
-                program.source = program.source.trim().to_string();
-                let chars = program.source.chars().count();
-                if chars == 0 || chars > MAX_SOURCE_CHARS {
-                    return Err(format!("自动化内容为空或超过 {MAX_SOURCE_CHARS} 字"));
-                }
-            }
-            AutomationBody::Prompt(prompt) => {
-                prompt.text = prompt.text.trim().to_string();
-                let chars = prompt.text.chars().count();
-                if chars == 0 || chars > MAX_PROMPT_CHARS {
-                    return Err(format!(
-                        "“让她做”的那句话不能为空，最多 {MAX_PROMPT_CHARS} 字"
-                    ));
-                }
-                if !self.params.is_empty() {
-                    return Err("“让她做”不用参数：触发它的游戏事件会一起交给她".into());
-                }
-            }
+        let AutomationBody::Program(program) = &mut self.action;
+        program.source = program.source.trim().to_string();
+        let chars = program.source.chars().count();
+        if chars == 0 || chars > MAX_SOURCE_CHARS {
+            return Err(format!("自动化内容为空或超过 {MAX_SOURCE_CHARS} 字"));
         }
         Ok(self)
     }
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredAutomations {
     version: u32,
     next_id: u64,
     automations: Vec<Automation>,
     /// 已经装过的内置自动化（删了也记着，不再装回）。
+    builtin: Vec<String>,
+}
+
+/// 存盘文件（读）：自动化可能还是旧写法。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredAutomationsFile {
+    version: u32,
+    next_id: u64,
+    automations: Vec<StoredAutomation>,
     #[serde(default)]
     builtin: Vec<String>,
 }
 
-/// “X 秒之后提醒我 xxx”：到点用语音和弹幕说一句。
+/// “X 秒之后提醒我 xxx”：到点用语音和弹幕说一句（提醒的固定程序，ADR 045 D3）。
 fn builtin_remind(now: u64) -> Automation {
     Automation {
         id: BUILTIN_REMIND_ID.into(),
@@ -529,9 +1028,8 @@ fn builtin_remind(now: u64) -> Automation {
                 default: None,
             },
         ],
-        action: AutomationBody::Speak(SpeakAction {
-            text: "{text}".into(),
-            delivery: vec![DeliveryKind::Voice, DeliveryKind::Danmaku],
+        action: AutomationBody::Program(ProgramBody {
+            source: reminder_source(&[DeliveryKind::Voice, DeliveryKind::Danmaku]).into(),
         }),
         created_by: CreatedBy::User,
         created_at_ms: now,
@@ -586,6 +1084,10 @@ fn program(
 /// 内置模板“英雄联盟进加载界面播报突破口”（ADR 036 D8）：每次触发花一次 AI 调用，所以默认关。
 pub const BUILTIN_LOL_SCOUT_ID: &str = "builtin-lol-scout-on-loading";
 
+/// 交给她的那句话（以前是“让她做”，ADR 045 起是程序里的 `ask()`）。
+const LOL_SCOUT_ASK: &str =
+    "这局进加载界面了。用 lol.scout 看看对面谁是突破口，用一句话告诉我原因（说成信息，不贴标签）。";
+
 fn builtin_lol_scout(now: u64) -> Automation {
     let mut matches = Map::new();
     matches.insert("to".into(), Value::from("loading"));
@@ -594,8 +1096,8 @@ fn builtin_lol_scout(now: u64) -> Automation {
         name: "英雄联盟进加载界面播报突破口".into(),
         description: "进加载界面时她查一下这局 10 个人的战绩，用一句话告诉你对面谁是突破口。每次花一次 AI 调用，默认关。".into(),
         params: vec![],
-        action: AutomationBody::Prompt(PromptBody {
-            text: "这局进加载界面了。用 lol.scout 看看对面谁是突破口，用一句话告诉我原因（说成信息，不贴标签）。".into(),
+        action: AutomationBody::Program(ProgramBody {
+            source: format!("ask({})", lua_string(LOL_SCOUT_ASK)),
         }),
         created_by: CreatedBy::User,
         created_at_ms: now,
@@ -664,11 +1166,8 @@ fn refresh_builtin(automations: &mut [Automation], now: u64) -> Vec<String> {
             CHAT_REPEAT_ID => CHAT_REPEAT_SOURCE_BEFORE_ADR041,
             _ => continue,
         };
-        let AutomationBody::Program(program) = &stored.action else {
-            continue;
-        };
         // 装的时候存的是 `source.trim() + "\n"`（[`program`]）
-        if program.source.trim() != old.trim() {
+        if stored.action.source().trim() != old.trim() {
             continue;
         }
         let Some(next) = current.iter().find(|a| a.id == stored.id) else {
@@ -871,26 +1370,52 @@ pub struct AutomationLibrary {
 }
 
 impl AutomationLibrary {
+    /// 打开。旧写法（播报、让她做）在这里转成程序并存盘（ADR 045 D1）；`version` 还是 1（rc.13 认得
+    /// `program`，读新文件不出错）。存盘失败只记日志：内存里已经转好，下次保存时一起写。
     pub fn open(path: PathBuf) -> Result<Self, String> {
-        let stored = match std::fs::read(&path) {
+        let (stored, upgraded) = match std::fs::read(&path) {
             Ok(bytes) => {
                 if bytes.len() > 8 * 1024 * 1024 {
                     return Err("自动化文件超过大小上限".into());
                 }
-                let stored: StoredAutomations = serde_json::from_slice(&bytes)
+                let file: StoredAutomationsFile = serde_json::from_slice(&bytes)
                     .map_err(|e| format!("自动化文件无法读取，已保留原文件：{e}"))?;
-                if stored.version != STORE_VERSION {
+                if file.version != STORE_VERSION {
                     return Err("自动化文件版本暂不支持，已保留原文件".into());
                 }
-                stored
+                let mut upgraded = false;
+                let automations = file
+                    .automations
+                    .into_iter()
+                    .map(|stored| {
+                        let (automation, changed) = stored.upgrade();
+                        upgraded |= changed;
+                        automation
+                    })
+                    .collect();
+                let stored = StoredAutomations {
+                    version: file.version,
+                    next_id: file.next_id,
+                    automations,
+                    builtin: file.builtin,
+                };
+                (stored, upgraded)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => StoredAutomations::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                (StoredAutomations::default(), false)
+            }
             Err(e) => return Err(format!("读取自动化文件失败：{e}")),
         };
-        Ok(Self {
+        let library = Self {
             path,
             state: Mutex::new(stored),
-        })
+        };
+        if upgraded {
+            if let Err(e) = library.persist(&library.state.lock().unwrap()) {
+                crate::log::log(&format!("automation library: upgraded but not saved: {e}"));
+            }
+        }
+        Ok(library)
     }
 
     /// 全部定义，按名字排序。
@@ -970,9 +1495,7 @@ impl AutomationLibrary {
     pub fn ensure_builtin(&self) -> Result<bool, String> {
         let mut state = self.state.lock().unwrap();
         let now = now_ms();
-        let mut all = vec![builtin_remind(now), builtin_lol_scout(now)];
-        all.extend(builtin_programs(now));
-        let missing: Vec<Automation> = all
+        let missing: Vec<Automation> = all_builtin(now)
             .into_iter()
             .filter(|a| !state.builtin.contains(&a.id))
             .collect();
@@ -994,9 +1517,9 @@ impl AutomationLibrary {
         Ok(true)
     }
 
-    /// 内置程序的定义（测试与文档用）。
+    /// 全部内置自动化的定义（“X 秒之后提醒我”、突破口、按键程序；测试与文档用）。
     pub fn builtin_programs_preview() -> Vec<Automation> {
-        builtin_programs(0)
+        all_builtin(0)
     }
 
     /// 删除；返回是否存在。已安排的执行保存了快照，不受影响。
@@ -1018,6 +1541,12 @@ impl AutomationLibrary {
     }
 }
 
+fn all_builtin(now: u64) -> Vec<Automation> {
+    let mut all = vec![builtin_remind(now), builtin_lol_scout(now)];
+    all.extend(builtin_programs(now));
+    all
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1031,8 +1560,16 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    fn draft(value: Value) -> AutomationDraft {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn source(draft: &AutomationDraft) -> &str {
+        draft.action.source()
+    }
+
     fn press_every() -> AutomationDraft {
-        serde_json::from_value(json!({
+        draft(json!({
             "name": "  连按某键 ",
             "description": "每隔一段时间按一次",
             "params": [
@@ -1042,42 +1579,203 @@ mod tests {
             ],
             "action": {"kind": "program", "source": "every(args.interval, function() key(args.key) end)"},
         }))
-        .unwrap()
     }
 
+    /// ADR 045 D1：旧播报转成拼接的 `say` / `toast`，显示和以前的 `{参数}` 替换一样。
     #[test]
-    fn speak_automations_take_simple_params_placeholders_and_a_delay() {
-        let draft: AutomationDraft = serde_json::from_value(json!({
-            "name": "提醒", "params": [
-                {"name": "delay_seconds", "type": "number", "min": 1, "integer": true, "default": 5},
-                {"name": "text", "type": "text"}],
-            "action": {"kind": "speak", "text": "该{text}了", "delivery": ["voice"]},
-        }))
-        .unwrap();
-        let ok = draft.clone().normalized(&EventCatalog::generic()).unwrap();
-        let AutomationBody::Speak(speak) = &ok.action else {
-            panic!()
+    fn old_speak_drafts_become_programs_that_say_the_same_words() {
+        let speak = |text: &str, delivery: Value, params: Value| {
+            draft(json!({"name": "提醒", "params": params,
+                "action": {"kind": "speak", "text": text, "delivery": delivery}}))
         };
-        let filled = validate_args(&ok.params, &args(json!({"text": "打小龙"}))).unwrap();
-        assert_eq!(
-            render_speak(speak, &filled),
-            ("该打小龙了".to_string(), 5_000)
-        );
-
-        let mut unknown = draft.clone();
-        unknown.action = serde_json::from_value(
-            json!({"kind": "speak", "text": "{who}", "delivery": ["voice"]}),
+        let text_and_delay = json!([
+            {"name": "delay_seconds", "type": "number", "min": 1, "integer": true, "default": 5},
+            {"name": "text", "type": "text"}]);
+        let cases = [
+            (
+                speak("该{text}了", json!(["voice"]), text_and_delay.clone()),
+                r#"say("该" .. args.text .. "了")"#,
+            ),
+            (
+                speak(
+                    "{text}",
+                    json!(["voice", "danmaku"]),
+                    text_and_delay.clone(),
+                ),
+                "say(args.text, { toast = true })",
+            ),
+            (
+                speak(" 喝水 ", json!(["danmaku"]), json!([])),
+                r#"toast("喝水")"#,
+            ),
+            (
+                speak(
+                    "{delay_seconds} 秒到了，{loud}{who}",
+                    json!(["danmaku", "voice"]),
+                    json!([
+                        {"name": "delay_seconds", "type": "number", "default": 5},
+                        {"name": "loud", "type": "boolean", "default": true},
+                        {"name": "who", "type": "choice", "options": ["我", "你"], "default": "我"}]),
+                ),
+                r#"say(tostring(args.delay_seconds) .. " 秒到了，" .. (args.loud and "是" or "否") .. args.who, { toast = true })"#,
+            ),
+            (
+                speak("说 \"{x\\n", json!(["voice"]), json!([])),
+                r#"say("说 \"{x\\n")"#,
+            ),
+        ];
+        for (draft, want) in cases {
+            assert_eq!(source(&draft), want);
+            // 转出来的定义照样能保存；延迟参数留着（对所有自动化都有效，D7）
+            let ok = draft.normalized(&EventCatalog::generic()).unwrap();
+            assert!(!ok.action.uses().window, "{want}");
+        }
+        let filled = validate_args(
+            &speak("{text}", json!(["voice"]), text_and_delay.clone()).params,
+            &args(json!({"text": "打小龙"})),
         )
         .unwrap();
-        assert!(unknown
+        assert_eq!(
+            delay_ms(
+                &speak("{text}", json!(["voice"]), text_and_delay).params,
+                &filled
+            ),
+            5_000
+        );
+        // 旧写法照旧规矩查：不认识的 {参数}、空话、重复的回答方式
+        for (bad, want) in [
+            (
+                json!({"name": "x", "action": {"kind": "speak", "text": "{who}", "delivery": ["voice"]}}),
+                "{who}",
+            ),
+            (
+                json!({"name": "x", "action": {"kind": "speak", "text": " ", "delivery": ["voice"]}}),
+                "1 到 300",
+            ),
+            (
+                json!({"name": "x", "action": {"kind": "speak", "text": "x", "delivery": ["voice", "voice"]}}),
+                "不能重复",
+            ),
+        ] {
+            let error = serde_json::from_value::<AutomationDraft>(bad.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(want), "{bad} → {error}");
+        }
+        // 不再限制参数类型（ADR 045“删掉的规矩”）
+        let region = speak(
+            "看这里",
+            json!(["voice"]),
+            json!([{"name": "area", "type": "region", "default": {"x": 0, "y": 0, "w": 1, "h": 1}}]),
+        );
+        assert!(region.normalized(&EventCatalog::generic()).is_ok());
+    }
+
+    /// “让她做”转 `ask("…")`：引号、反斜杠、换行转义正确；不再限制参数。
+    #[test]
+    fn old_prompt_drafts_become_ask_with_escaped_text() {
+        let ok = draft(json!({
+            "name": "进加载界面说突破口",
+            "action": {"kind": "prompt", "text": "  看看\"对面\"谁是突破口\\\n说一句  "},
+            "params": [{"name": "n", "type": "number", "default": 1}],
+            "on": {"event": ["game.phase_changed"], "game": "lol", "match": {"to": "loading"}, "oncePerMatch": true}
+        }))
+        .normalized(&EventCatalog::generic())
+        .unwrap();
+        assert_eq!(source(&ok), r#"ask("看看\"对面\"谁是突破口\\\n说一句")"#);
+        assert_eq!(
+            ok.action.uses(),
+            ProgramUses {
+                window: false,
+                asks: true
+            }
+        );
+        assert!(ok.on.as_ref().unwrap().once_per_match);
+        for (bad, want) in [
+            (
+                json!({"name": "x", "action": {"kind": "prompt", "text": " "}}),
+                "不能为空",
+            ),
+            (
+                json!({"name": "x", "action": {"kind": "prompt", "text": "a".repeat(501)}}),
+                "500",
+            ),
+            (
+                json!({"name": "x", "action": {"kind": "prompt", "text": "说一句"}, "when": 1}),
+                "when",
+            ),
+        ] {
+            let error = serde_json::from_value::<AutomationDraft>(bad.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(want), "{bad} → {error}");
+        }
+        let unknown_event = draft(json!({"name": "x",
+            "action": {"kind": "speak", "text": "龙", "delivery": ["voice"]},
+            "on": {"event": ["lol.dragon"]}}));
+        let error = unknown_event
             .normalized(&EventCatalog::generic())
-            .unwrap_err()
-            .contains("{who}"));
-        let mut region = draft;
-        region
-            .params
-            .push(spec(json!({"name": "area", "type": "region"})));
-        assert!(region.normalized(&EventCatalog::generic()).is_err());
+            .unwrap_err();
+        assert!(error.contains("没有"), "{error}");
+        assert_eq!(
+            lua_string("a\tb\u{1}c"),
+            r#""a\tb\u{1}c""#,
+            "控制字符用 \\u{{…}}"
+        );
+    }
+
+    /// 老用户的 `automations.json`：播报、让她做转成程序并存盘，版本还是 1，编号和内置记录不动。
+    #[test]
+    fn an_old_library_file_is_upgraded_and_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("automations.json");
+        let old = json!({
+            "version": 1, "nextId": 3, "builtin": [BUILTIN_REMIND_ID, BUILTIN_LOL_SCOUT_ID],
+            "automations": [
+                {"id": BUILTIN_REMIND_ID, "name": "X 秒之后提醒我", "params": [
+                    {"name": "delay_seconds", "type": "number", "min": 1, "max": 86400, "integer": true, "default": 60},
+                    {"name": "text", "type": "text", "maxLength": 100}],
+                 "action": {"kind": "speak", "text": "{text}", "delivery": ["voice", "danmaku"]},
+                 "createdBy": "user", "createdAtMs": 1, "updatedAtMs": 1},
+                {"id": BUILTIN_LOL_SCOUT_ID, "name": "突破口", "params": [],
+                 "action": {"kind": "prompt", "text": LOL_SCOUT_ASK},
+                 "createdBy": "user", "createdAtMs": 1, "updatedAtMs": 1,
+                 "on": {"event": ["game.phase_changed"], "enabled": false}},
+                {"id": "auto-2", "name": "按 Q", "params": [],
+                 "action": {"kind": "program", "source": "key('Q')"},
+                 "createdBy": "agent", "createdAtMs": 1, "updatedAtMs": 1}
+            ]
+        });
+        std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        let library = AutomationLibrary::open(path.clone()).unwrap();
+        // 老用户装过的内置项转成的程序和新装的一字不差
+        let fresh = all_builtin(0);
+        for id in [BUILTIN_REMIND_ID, BUILTIN_LOL_SCOUT_ID] {
+            let want = fresh.iter().find(|a| a.id == id).unwrap();
+            assert_eq!(library.get(id).unwrap().action, want.action, "{id}");
+        }
+        assert_eq!(library.get("auto-2").unwrap().action.source(), "key('Q')");
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["version"], 1);
+        assert_eq!(saved["nextId"], 3);
+        assert!(saved["automations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["action"]["kind"] == "program" && a["action"].get("text").is_none()));
+        // 已经是新写法：打开不再写盘
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        drop(library);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let reopened = AutomationLibrary::open(path.clone()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+        assert_eq!(reopened.list().len(), 3);
+        // `Automation` 本身也认得旧写法（别处存过的定义）
+        let one: Automation = serde_json::from_value(old["automations"][0].clone()).unwrap();
+        assert_eq!(one.action.source(), "say(args.text, { toast = true })");
     }
 
     #[test]
@@ -1105,6 +1803,19 @@ mod tests {
         assert!(draft.normalized(&EventCatalog::generic()).is_err());
     }
 
+    fn as_draft(a: &Automation) -> AutomationDraft {
+        AutomationDraft {
+            id: None,
+            name: a.name.clone(),
+            description: a.description.clone(),
+            params: a.params.clone(),
+            action: a.action.clone(),
+            schedule: a.schedule.clone(),
+            on: a.on.clone(),
+        }
+    }
+
+    /// 新装的“X 秒之后提醒我”直接是提醒的程序（ADR 045 D1、D3）；删了不装回。
     #[test]
     fn the_builtin_reminder_is_installed_once_and_stays_deleted() {
         let dir = tempfile::tempdir().unwrap();
@@ -1112,18 +1823,14 @@ mod tests {
         assert!(library.ensure_builtin().unwrap());
         let builtin = library.get(BUILTIN_REMIND_ID).unwrap();
         assert_eq!(builtin.name, "X 秒之后提醒我");
+        assert_eq!(builtin.action.source(), "say(args.text, { toast = true })");
+        assert!(!builtin.action.uses().window);
+        let filled = validate_args(&builtin.params, &args(json!({"text": "打小龙"}))).unwrap();
+        assert_eq!(delay_ms(&builtin.params, &filled), 60_000);
         // 装上的定义自己也要能通过校验
-        AutomationDraft {
-            id: None,
-            name: builtin.name.clone(),
-            description: builtin.description.clone(),
-            params: builtin.params.clone(),
-            action: builtin.action.clone(),
-            schedule: None,
-            on: None,
-        }
-        .normalized(&EventCatalog::generic())
-        .unwrap();
+        as_draft(&builtin)
+            .normalized(&EventCatalog::generic())
+            .unwrap();
         assert!(!library.ensure_builtin().unwrap());
         library.delete(BUILTIN_REMIND_ID).unwrap();
         let reopened = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
@@ -1193,10 +1900,8 @@ mod tests {
         let library = AutomationLibrary::open(path.clone()).unwrap();
         assert!(library.ensure_builtin().unwrap(), "换了要写盘");
         let a = library.get(CHAT_REPEAT_ID).unwrap();
-        let AutomationBody::Program(p) = &a.action else {
-            panic!()
-        };
-        assert!(p.source.contains("chat(args.text)") && !p.source.contains("key("));
+        let source = a.action.source();
+        assert!(source.contains("chat(args.text)") && !source.contains("key("));
         let names: Vec<&str> = a.params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(
             names,
@@ -1216,10 +1921,11 @@ mod tests {
         write(&path, installed(&edited));
         let library = AutomationLibrary::open(path).unwrap();
         assert!(!library.ensure_builtin().unwrap());
-        let AutomationBody::Program(p) = &library.get(CHAT_REPEAT_ID).unwrap().action else {
-            panic!()
-        };
-        assert!(p.source.contains("wait(300)"), "玩家改过的程序不动");
+        let a = library.get(CHAT_REPEAT_ID).unwrap();
+        assert!(
+            a.action.source().contains("wait(300)"),
+            "玩家改过的程序不动"
+        );
     }
 
     #[test]
@@ -1236,21 +1942,18 @@ mod tests {
         let library = AutomationLibrary::open(path.clone()).unwrap();
         assert!(library.ensure_builtin().unwrap());
         assert!(library.get(BUILTIN_REMIND_ID).is_none(), "删过的不装回");
+        assert!(
+            library.get(BUILTIN_LOL_SCOUT_ID).is_some(),
+            "新加的内置项老用户也装上"
+        );
         for id in BUILTIN_PROGRAM_IDS {
             let a = library.get(id).unwrap_or_else(|| panic!("{id}"));
-            let draft = AutomationDraft {
-                id: None,
-                name: a.name.clone(),
-                description: a.description.clone(),
-                params: a.params.clone(),
-                action: a.action.clone(),
-                schedule: None,
-                on: None,
-            }
-            .normalized(&EventCatalog::generic())
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
+            let draft = as_draft(&a)
+                .normalized(&EventCatalog::generic())
+                .unwrap_or_else(|e| panic!("{id}: {e}"));
             // 缺省值本身能通过入参校验（什么都不填也能跑）
             validate_args(&draft.params, &Map::new()).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert!(a.action.uses().window, "按键程序都用到游戏窗口：{id}");
         }
         assert!(!library.ensure_builtin().unwrap());
         library.delete("builtin-key-repeat").unwrap();
@@ -1320,14 +2023,13 @@ mod tests {
         dup.params[1].name = "key".into();
         let mut bad_default = press_every();
         bad_default.params[1].default = Some(json!(5));
-        let mut speak_with_params: AutomationDraft = serde_json::from_value(json!({
-            "name": "喝水", "action": {"kind": "speak", "text": "喝水", "delivery": ["voice"]},
-        }))
-        .unwrap();
-        speak_with_params.params = press_every().params;
         let mut empty = press_every();
         empty.action = AutomationBody::Program(ProgramBody {
             source: "  ".into(),
+        });
+        let mut too_long = press_every();
+        too_long.action = AutomationBody::Program(ProgramBody {
+            source: "x".repeat(MAX_SOURCE_CHARS + 1),
         });
         let mut no_name = press_every();
         no_name.name = " ".into();
@@ -1335,8 +2037,8 @@ mod tests {
             (bad_name, "参数名"),
             (dup, "重复"),
             (bad_default, "缺省值"),
-            (speak_with_params, "只能是数字、文字、开关或选项"),
             (empty, "为空"),
+            (too_long, "8000"),
             (no_name, "名字"),
         ] {
             let err = draft.normalized(&EventCatalog::generic()).unwrap_err();
@@ -1390,48 +2092,6 @@ mod tests {
     }
 
     #[test]
-    fn prompt_automations_with_a_game_event_trigger() {
-        let draft = |value: Value| serde_json::from_value::<AutomationDraft>(value).unwrap();
-        let ok = draft(json!({
-            "name": "进加载界面说突破口",
-            "action": {"kind": "prompt", "text": "  用 lol.scout 看看对面谁是突破口  "},
-            "on": {"event": ["game.phase_changed"], "game": "lol", "match": {"to": "loading"}, "oncePerMatch": true}
-        }))
-        .normalized(&EventCatalog::generic())
-        .unwrap();
-        let AutomationBody::Prompt(prompt) = &ok.action else {
-            panic!("{:?}", ok.action)
-        };
-        assert_eq!(prompt.text, "用 lol.scout 看看对面谁是突破口");
-        assert!(ok.on.as_ref().unwrap().once_per_match);
-        for (bad, want) in [
-            (
-                json!({"name": "x", "action": {"kind": "prompt", "text": " "}}),
-                "不能为空",
-            ),
-            (
-                json!({"name": "x", "action": {"kind": "prompt", "text": "a".repeat(501)}}),
-                "500",
-            ),
-            (
-                json!({"name": "x", "action": {"kind": "prompt", "text": "说一句"},
-                    "params": [{"name": "n", "type": "number"}]}),
-                "不用参数",
-            ),
-            (
-                json!({"name": "x", "action": {"kind": "speak", "text": "龙", "delivery": ["voice"]},
-                    "on": {"event": ["lol.dragon"]}}),
-                "没有",
-            ),
-        ] {
-            let error = draft(bad.clone())
-                .normalized(&EventCatalog::generic())
-                .unwrap_err();
-            assert!(error.contains(want), "{bad} → {error}");
-        }
-    }
-
-    #[test]
     fn the_lol_scout_template_is_installed_switched_off_and_valid() {
         let dir = tempfile::tempdir().unwrap();
         let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
@@ -1440,18 +2100,15 @@ mod tests {
         let on = a.on.clone().unwrap();
         assert!(!on.enabled, "每次花一次 AI 调用：默认关（ADR 036 D8）");
         assert!(on.once_per_match);
-        assert!(matches!(a.action, AutomationBody::Prompt(_)));
-        let draft = AutomationDraft {
-            id: None,
-            name: a.name.clone(),
-            description: a.description.clone(),
-            params: a.params.clone(),
-            action: a.action.clone(),
-            schedule: None,
-            on: a.on.clone(),
-        }
-        .normalized(&EventCatalog::generic())
-        .unwrap();
+        assert!(a.action.source().starts_with("ask(\"这局进加载界面了。"));
+        assert_eq!(
+            a.action.uses(),
+            ProgramUses {
+                window: false,
+                asks: true
+            }
+        );
+        let draft = as_draft(&a).normalized(&EventCatalog::generic()).unwrap();
         assert_eq!(draft.on, a.on);
         // 老的自动化文件里没有 on：照兼容规则读成 None
         let old: Automation = serde_json::from_value(json!({
@@ -1461,5 +2118,108 @@ mod tests {
         .unwrap();
         assert!(old.on.is_none());
         assert!(!serde_json::to_string(&old).unwrap().contains("\"on\""));
+    }
+
+    /// ADR 045 D4：按源码保守判断用不用游戏窗口、会不会叫她。
+    #[test]
+    fn the_scanner_finds_window_functions_conservatively() {
+        let uses = |source: &str| ProgramUses::of(source);
+        for (source, window) in [
+            ("key('Q')", true),
+            ("  every(100, function() key_up(args.key) end)", true),
+            ("local k = key", true),
+            ("local f = _G.key f('Q')", true),
+            ("if game_focused() then log('x') end", true),
+            ("x = 1 .. key", true),
+            ("x = `按 {key}`", true),
+            ("x = `{ args.text }` say(x)", false),
+            ("say(args.key)", false),
+            ("say(t:find('key'))", false),
+            (
+                "local t = { key = 1, chat = 2 } say(tostring(t.key))",
+                false,
+            ),
+            ("-- key('Q')\nsay('好')", false),
+            ("--[[ key('Q')\nclick(0, 0) ]] say('好')", false),
+            ("--[==[ key() ]] still comment ]==] toast('好')", false),
+            ("say(\"key('Q')\") toast('chat(\\'x\\')')", false),
+            ("local s = [[ key() ]] say(s)", false),
+            ("local s = [=[ ]] key() ]=] say(s)", false),
+            ("push('买眼') ask('看看')", false),
+            ("wait(1.5e3) say('a') wait(0x10)", false),
+            ("local keys = 1 local mykey = keys", false),
+        ] {
+            assert_eq!(uses(source).window, window, "{source}");
+        }
+        assert!(uses("ask('看看')").asks);
+        assert!(uses("local f = ask f('x')").asks);
+        assert!(!uses("say('ask')").asks);
+        assert!(!uses("args.ask = 1").asks);
+        // 两张表没有重名
+        for name in WINDOW_FUNCTIONS {
+            assert!(!PLAIN_FUNCTIONS.contains(name), "{name}");
+        }
+    }
+
+    /// D7：延迟只认声明成数字的 `delay_seconds`。
+    #[test]
+    fn delay_seconds_delays_any_automation_that_declares_it() {
+        let declared = [spec(
+            json!({"name": "delay_seconds", "type": "number", "default": 1.5}),
+        )];
+        assert_eq!(
+            delay_ms(&declared, &args(json!({"delay_seconds": 1.5}))),
+            1_500
+        );
+        assert_eq!(delay_ms(&declared, &args(json!({"delay_seconds": 0}))), 0);
+        assert_eq!(delay_ms(&[], &args(json!({"delay_seconds": 5}))), 0);
+        let text = [spec(json!({"name": "delay_seconds", "type": "text"}))];
+        assert_eq!(delay_ms(&text, &args(json!({"delay_seconds": "5"}))), 0);
+    }
+
+    /// D9：四个模板能保存、只填缺省值就能通过入参校验（脚本引擎的测试另外真跑一遍）。
+    #[test]
+    fn templates_are_valid_drafts() {
+        let all = templates();
+        let ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["say", "push", "ask", "blank"]);
+        for t in &all {
+            let draft = AutomationDraft {
+                id: None,
+                name: t.name.clone(),
+                description: t.description.clone(),
+                params: t.params.clone(),
+                action: AutomationBody::Program(ProgramBody {
+                    source: t.source.clone(),
+                }),
+                schedule: None,
+                on: None,
+            }
+            .normalized(&EventCatalog::generic())
+            .unwrap_or_else(|e| panic!("{}: {e}", t.id));
+            validate_args(&draft.params, &Map::new()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+            let uses = ProgramUses::of(&t.source);
+            assert!(!uses.window, "模板都不用游戏窗口：{}", t.id);
+            assert_eq!(uses.asks, t.id == "ask", "{}", t.id);
+        }
+        assert!(!all[0].source.contains('{'), "“说一句”不用 {{参数}} 写法");
+    }
+
+    #[test]
+    fn event_fields_fill_params_of_the_same_name() {
+        let params = [
+            spec(json!({"name": "killer_name", "type": "text"})),
+            spec(json!({"name": "team", "type": "text"})),
+            spec(json!({"name": "other", "type": "text", "default": "x"})),
+        ];
+        let event: GameEvent = serde_json::from_value(json!({
+            "id": "e", "type": "demo.ace", "game": "demo", "time": 1, "source": "x",
+            "data": {"killerName": "某人", "team": "enemy", "extra": 1}
+        }))
+        .unwrap();
+        assert_eq!(
+            Value::Object(event_args(&params, &event)),
+            json!({"killer_name": "某人", "team": "enemy"})
+        );
     }
 }

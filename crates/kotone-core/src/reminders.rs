@@ -1,14 +1,8 @@
-//! 提醒的意图、视图与投递端口。调度已并入自动化调度器（`crate::automation`，ADR 013）：
-//! 提醒 = “延迟 + 播报”的一次执行；这里保留 AI 提出的提醒意图、界面沿用的提醒视图、
-//! 投递端口，以及只读的旧 `reminders.json` 格式（首次启动时导入）。
+//! 提醒的意图与视图。调度已并入自动化调度器（`crate::automation`，ADR 013）：提醒 = “晚一会儿开始、
+//! 只说一句”的程序（ADR 045 D3，`say(args.text)` 等三段固定程序）；投递由程序里的 `say()` / `toast()`
+//! 负责。这里保留 AI 提出的提醒意图、界面沿用的提醒视图，以及只读的旧 `reminders.json` 格式（首次启动时导入）。
 
-use std::{
-    future::Future,
-    pin::Pin,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-use crate::cancel::CancellationToken;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MISSED_GRACE_MS: u64 = 120_000;
 
@@ -71,17 +65,6 @@ pub struct Reminder {
     pub due_at_ms: u64,
     pub status: ReminderStatus,
     pub error: Option<String>,
-}
-
-pub type DeliveryFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
-
-pub trait ReminderDelivery: Send + Sync {
-    /// 投递操作必须尊重取消；返回表示该投递已完成，不能悄悄丢给无人管理的任务。
-    fn deliver<'a>(
-        &'a self,
-        reminder: &'a Reminder,
-        cancel: CancellationToken,
-    ) -> DeliveryFuture<'a>;
 }
 
 /// 旧版（0.1.x）`reminders.json`：只读，首次启动时导入未到期的提醒；文件本身不改。

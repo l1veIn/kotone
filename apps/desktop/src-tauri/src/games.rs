@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use kotone_core::automation::library::{Automation, AutomationBody};
+use kotone_core::automation::library::Automation;
 use kotone_core::games::{
     Armed, EventCatalog, Fire, GameEvent, GameState, Hub, Observation, Phase, Triggers,
 };
@@ -23,6 +23,8 @@ use tokio::sync::broadcast;
 /// 进程和前台窗口多久看一次。
 const POLL: Duration = Duration::from_secs(2);
 /// “让她做”每局最多触发几次（D8：每次花一次 AI 调用）。
+// TODO(ADR 045 B): 换成 core 的 `Triggers::take_ask(.., kotone_core::games::ASKS_PER_MATCH)`，然后删掉这个。
+#[allow(dead_code)]
 pub const PROMPT_PER_MATCH: u32 = 3;
 
 #[derive(Default)]
@@ -95,18 +97,13 @@ pub fn push(
     dispatch(app, event.into_iter().collect());
 }
 
-/// 有事件触发的自动化；“让她做”每局有上限（D8）。
+/// 有事件触发的自动化。每局叫她几次看程序里的 `ask()`（ADR 045 D2，`Triggers::take_ask`）。
 fn armed(automations: &[Automation]) -> Vec<Armed<'_>> {
     automations
         .iter()
         .filter_map(|a| {
             let trigger = a.on.as_ref()?;
-            Some(Armed {
-                id: &a.id,
-                trigger,
-                per_match: matches!(a.action, AutomationBody::Prompt(_))
-                    .then_some(PROMPT_PER_MATCH),
-            })
+            Some(Armed { id: &a.id, trigger })
         })
         .collect()
 }
@@ -386,7 +383,6 @@ mod tests {
             &[Armed {
                 id: "a",
                 trigger: &on,
-                per_match: None,
             }],
             &event,
             2_000,

@@ -7,7 +7,6 @@ use kotone_ai::agent::{ToolOutcome, ToolPort};
 use kotone_core::automation::library::{
     Automation, AutomationBody, CreatedBy, ParamKind, ParamSpec, ProgramBody,
 };
-use kotone_core::automation::SpeakAction;
 use kotone_core::cancel::CancellationToken;
 use kotone_core::reminders::DeliveryKind;
 use kotone_tools::testing::{FakeAppHost, FakeDesktop, ManualClock};
@@ -367,9 +366,9 @@ fn saved_automation_becomes_a_typed_tool() {
     let image = param("template", ParamKind::Image, None);
     assert!(saved_entry(&saved("auto-3", vec![image])).is_none());
     let speak = Automation {
-        action: AutomationBody::Speak(SpeakAction {
-            text: "喝水".into(),
-            delivery: vec![DeliveryKind::Voice],
+        // ADR 045：以前的播报转成只说话的程序（不用游戏窗口）
+        action: AutomationBody::Program(ProgramBody {
+            source: "say(\"喝水\")".into(),
         }),
         ..saved("auto-4", Vec::new())
     };
