@@ -133,9 +133,10 @@ test("turning the plugin on (its risky switches with it) shows the dialog once; 
 test("the game profile's 读客户端数据 shows the dialog the first time it is turned on, not the second time", async ({ page }) => {
   await open(page);
   await page.getByTestId("settings-nav-game").click();
+  await page.locator('[data-game-id="tencent:lol"]').getByTestId("installed-game-detail").click();
   const lol = page.getByTestId("game-profile-lol");
   await lol.getByRole("button", { name: "编辑", exact: true }).click();
-  const box = lol.getByTestId("game-profile-lol-data");
+  const box = page.getByTestId("game-related-plugins").getByTestId("game-profile-lol-data");
   // 风险提示不摆在这里
   await expect(box).not.toContainText("可能违反腾讯的用户协议");
   await expect(box.getByTestId("game-profile-lol-risk")).toHaveCount(0);

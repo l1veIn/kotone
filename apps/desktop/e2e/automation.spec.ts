@@ -4,13 +4,14 @@ import { screenshot } from "./screenshot.cjs";
 // 「自动化」页（ADR 013 §8、ADR 045）：浏览器预览用示例数据，不运行任何程序。动作只有程序一种：
 // 新建先选模板（说一句 / 推送一条 / 让她做 / 空白程序）；▶ 只对用到游戏窗口的先倒数。
 
-async function openAutomation(page: Page) {
+async function openAutomation(page: Page, library = true) {
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-automation").click();
+  if (library) await page.getByTestId("automation-library").click();
   return page.getByTestId("automation-page");
 }
 
-test("one list: play / stop, temporary reminders, schedules, details and the full history", async ({ page, baseURL }, testInfo) => {
+test("activity home and library share live runs, reminders and history", async ({ page, baseURL }, testInfo) => {
   const origin = new URL(baseURL!).origin;
   const external: string[] = [];
   page.on("request", (request) => {
@@ -18,13 +19,18 @@ test("one list: play / stop, temporary reminders, schedules, details and the ful
     if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin && !/^(127\.0\.0\.1|localhost)$/.test(new URL(request.url()).hostname)) external.push(request.url());
   });
   await page.setViewportSize({ width: 1040, height: 1000 });
-  const automation = await openAutomation(page);
+  const automation = await openAutomation(page, false);
   await expect(automation.getByRole("heading", { name: "自动化", exact: true })).toBeVisible();
   await expect(automation.getByText(/界面预览/)).toBeVisible();
   // 没有“进行中 / 已保存”分页了
   await expect(page.getByTestId("automation-nav-open")).toHaveCount(0);
   await expect(automation.getByText("Ctrl+Shift+F12", { exact: true })).toBeVisible();
 
+  await expect(automation.getByTestId("automation-active")).toContainText("每秒按 Q");
+  await expect(automation.getByTestId("automation-pending")).toContainText("打野有闪了");
+  await expect(automation.getByTestId("automation-history")).toContainText("变黑就按回车");
+  await screenshot(page, { path: testInfo.outputPath("activity-live.png"), animations: "disabled" });
+  await automation.getByTestId("automation-library").click();
   const items = automation.getByTestId("automation-item");
   await expect(items).toHaveCount(4);
   // 内置的“X 秒之后提醒我”排第一
@@ -70,11 +76,16 @@ test("one list: play / stop, temporary reminders, schedules, details and the ful
   await pressQ.getByTestId("automation-run-panel").getByRole("button", { name: "取消", exact: true }).click();
 
   // 全部记录：提醒写回答方式，没有种类标签
-  await automation.getByTestId("automation-history").locator("summary").first().click();
+  await automation.getByTestId("automation-library").click();
+  await expect(automation.getByTestId("automation-active")).toHaveCount(0);
+  await expect(automation.getByTestId("automation-pending")).toHaveCount(0);
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10000 });
+  await screenshot(page, { path: testInfo.outputPath("activity-idle.png"), animations: "disabled" });
   const history = automation.getByTestId("automation-history").getByTestId("automation-run");
   await expect(history).toHaveCount(3);
   const done = history.filter({ hasText: "界面示例：变黑就按回车" });
-  await expect(done).toContainText("跑完 · 输入 1 次");
+  await done.getByText("执行详情").click();
+  await expect(done.getByText(/跑完 · 输入 1 次/)).toBeVisible();
   const reminder = history.filter({ hasText: "界面示例：打野有闪了" });
   await expect(reminder).toContainText("语音 + 弹幕");
   await expect(reminder).toContainText("已取消");
@@ -327,4 +338,21 @@ test("game events: the LoL template is off, and an 'ask her' automation saves wi
   await saved.getByTestId("automation-edit").click();
   await expect(editor.getByTestId("automation-trigger-hold")).toHaveValue("60");
   await expect(editor.getByLabel("让她做什么", { exact: true })).toHaveValue("提醒我买真眼，一句话");
+});
+
+test("activity controls and the schedule shortcut work in a narrow window", async ({ page }) => {
+  await page.setViewportSize({ width: 460, height: 740 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByRole("button", { name: /进行中的自动化/ }).click();
+  const home = page.getByTestId("automation-page");
+  const active = home.getByTestId("automation-active");
+  const pending = home.getByTestId("automation-pending");
+  await active.getByRole("button", { name: /停止/ }).click();
+  await expect(active).toHaveCount(0);
+  await pending.getByRole("button", { name: /取消/ }).click();
+  await expect(pending).toHaveCount(0);
+  await home.getByRole("button", { name: /喝水提醒/ }).click();
+  const item = home.getByTestId("automation-item").filter({ hasText: "界面示例：喝水提醒" });
+  await expect(item.getByTestId("automation-item-toggle")).toBeFocused();
+  await expect(item.getByTestId("automation-details")).toBeVisible();
 });

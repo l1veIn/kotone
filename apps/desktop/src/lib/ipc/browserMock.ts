@@ -817,8 +817,12 @@ export async function deleteProfile(profileId: string): Promise<"reset" | "delet
 }
 
 /** 读取 profile 图标字节（无图标 → 空）；前端按 icon 扩展名推断 mime 建 Blob URL */
+const profileIcons = import.meta.glob<string>("../../../../../crates/kotone-core/resources/profiles/icons/*.webp", { query: "?url", import: "default", eager: true });
 export async function getProfileIcon(profileId: string): Promise<Uint8Array> {
-  return new Uint8Array(0);
+  const name = mock.profiles.find(p => p.id === profileId)?.icon;
+  const url = profileIcons[`../../../../../crates/kotone-core/resources/profiles/icons/${name}`];
+  if (!url) return new Uint8Array(0);
+  return new Uint8Array(await (await fetch(url)).arrayBuffer());
 }
 
 /** 控制台通道（ADR 032）：浏览器预览里只记在内存，假装游戏装在 Steam 库、没在运行 */

@@ -17,7 +17,7 @@
    * - 版式：SettingsPage / SettingsSection（参照 DeepSeek Harness 设置页）。
    */
   import { companionName } from "$lib/stores/companion";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
     updateSettings,
@@ -39,16 +39,18 @@
   } from "../../../lib/ipc";
   import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
-  import { Download, Gamepad2, Globe, LoaderCircle, ScanSearch, Upload } from "@lucide/svelte";
+  import { ArrowLeft, SlidersHorizontal, Download, Gamepad2, Globe, LoaderCircle, ScanSearch, Upload } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
+  import { installedProfile } from "$lib/installedProfile";
+  import { openTarget } from "$lib/stores/navigation";
   import InstalledGamesSection from "./InstalledGamesSection.svelte";
   import { eventCatalog, eventLabel, eventsFor, phaseLabel, playingGames, type PlayingGame } from "../../../lib/gameEvents";
-  import { pluginEnabled, pluginsStore, type PluginInfo } from "../../../lib/plugins";
+  import { pluginName, pluginEnabled, pluginsStore, type PluginInfo } from "../../../lib/plugins";
   import { PLUGIN_UI } from "../../../lib/pluginUi";
   import { listSeparator } from "$lib/locale";
   import { listen } from "@tauri-apps/api/event";
@@ -64,6 +66,21 @@
   let { legacyVoiceOnly = false }: { legacyVoiceOnly?: boolean } = $props();
 
   let profiles = $state<GameProfile[]>([]);
+  let selected = $state<InstalledGame | null>(null);
+  let managing = $state(false);
+  const selectedProfile = $derived(selected ? installedProfile(selected, profiles) : undefined);
+  const visibleProfiles = $derived(legacyVoiceOnly || managing ? profiles : selectedProfile ? [selectedProfile] : []);
+  const relatedPlugins = $derived($pluginsStore.filter(p => selectedProfile && p.manifest.games.includes(selectedProfile.id)));
+
+  async function backToGames() {
+    const gameId = selected?.id;
+    closeEditor();
+    selected = null;
+    managing = false;
+    await tick();
+    document.getElementById(gameId ? `game-link-${gameId}` : "manage-game-profiles")?.focus();
+  }
+
   /** 启动路径的“自动检测”结果（null = 还没检测）。 */
   let detected = $state<InstalledGame[] | null>(null);
   let detecting = $state(false);
@@ -556,18 +573,44 @@
   {/if}
 {/snippet}
 
-<SettingsPage title={legacyVoiceOnly ? m.game_page_title_legacy() : m.game_page_title()} description={legacyVoiceOnly ? m.game_page_description_legacy() : m.game_page_description()}>
-  {#if !legacyVoiceOnly}
-  <InstalledGamesSection {profiles} onOpenProfile={(p) => { openEditor(p); requestAnimationFrame(() => document.querySelector(`[data-testid="game-profile-${p.id}"]`)?.scrollIntoView({ block: "start" })); }} />
-  {/if}
+<SettingsPage title={legacyVoiceOnly ? m.game_page_title_legacy() : managing ? m.game_catalog_manage() : selected?.name ?? m.game_page_title()}
+  description={legacyVoiceOnly ? m.game_page_description_legacy() : managing || selected ? "" : m.game_page_description()}>
   {#snippet actions()}
-    <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
-      <Upload class="size-3.5" />{importingPackage ? m.game_importing() : m.game_package_import()}
-    </Button>
+    {#if !legacyVoiceOnly && (selected || managing)}
+      <Button variant="ghost" size="sm" onclick={backToGames} data-testid="back-to-games"><ArrowLeft class="size-4" />{m.game_catalog_back()}</Button>
+    {/if}
+    {#if !legacyVoiceOnly && !selected && !managing}
+      <Button variant="outline" size="sm" id="manage-game-profiles" onclick={() => { managing = true; }} data-testid="manage-game-profiles"><SlidersHorizontal class="size-4" />{m.game_catalog_manage()}</Button>
+    {/if}
+    {#if managing || legacyVoiceOnly}
+      <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
+        <Upload class="size-3.5" />{importingPackage ? m.game_importing() : m.game_package_import()}
+      </Button>
+    {/if}
   {/snippet}
-
-  <SettingsSection title={m.game_profiles_title()} description={m.game_profiles_description()} flush>
-    {#each profiles as p (p.id)}
+  {#if !legacyVoiceOnly && !managing}
+    <InstalledGamesSection {profiles} profileIcons={iconUrls} bind:selected />
+  {/if}
+  {#if !legacyVoiceOnly && !managing && selected}
+    <section data-testid="game-related-plugins">
+      <h2 class="mb-2.5 text-sm font-semibold">{m.game_catalog_plugins()}</h2>
+      {#each relatedPlugins as plugin (plugin.manifest.id)}
+        {@const Section = PLUGIN_UI[plugin.manifest.id]?.gameSection}
+        {#if Section && selectedProfile}<Section {plugin} gameId={selectedProfile.id} />
+        {:else}<Button variant="outline" onclick={() => openTarget({ page: "plugin", id: plugin.manifest.id })}>{pluginName(plugin.manifest)}</Button>{/if}
+      {:else}<p class="text-sm text-muted-foreground">{m.game_catalog_no_plugins()}</p>{/each}
+    </section>
+    {#if !selectedProfile}
+      <SettingsSection title={m.game_profiles_title()}>
+        <div class="flex flex-wrap items-center justify-between gap-2 py-3"><p class="text-sm text-muted-foreground">{m.game_catalog_unmatched()}</p>
+          <Button size="sm" variant="outline" onclick={() => { managing = true; }}>{m.game_catalog_manage()}</Button>
+        </div>
+      </SettingsSection>
+    {/if}
+  {/if}
+  {#if legacyVoiceOnly || managing || selectedProfile}
+  <SettingsSection title={m.game_profiles_title()} description={managing || legacyVoiceOnly ? m.game_profiles_description() : ""} flush>
+    {#each visibleProfiles as p (p.id)}
       {@const active = $settingsStore?.activeProfileId === p.id}
       {@const editing = editingId === p.id && draft !== null}
       <div class="px-4 py-3.5" data-testid={`game-profile-${p.id}`}>
@@ -598,12 +641,15 @@
             <Button size="sm" variant={editing ? "secondary" : "outline"} onclick={() => (editing ? closeEditor() : openEditor(p))}>
               {editing ? m.game_profile_collapse() : m.game_profile_edit()}
             </Button>
+            {#if managing || legacyVoiceOnly || editing}
             <Button size="sm" variant="ghost" title={m.game_package_export_title()} onclick={() => void onExportPackage(p)}>
               {m.game_export()}
             </Button>
+            {/if}
             {#if !active}
               <Button size="sm" variant="outline" onclick={() => void onActivate(p.id)}>{m.game_profile_activate()}</Button>
             {/if}
+            {#if managing || legacyVoiceOnly || editing}
             <Button size="sm" variant={deletingId === p.id ? "destructive" : "ghost"}
               class={deletingId === p.id ? "" : "text-muted-foreground"}
               title={isBuiltin(p) ? m.game_profile_reset_title() : m.game_profile_delete_title()}
@@ -616,6 +662,7 @@
                   ? m.game_profile_reset()
                   : m.game_profile_delete()}
             </Button>
+            {/if}
           </div>
         </div>
 
@@ -641,6 +688,13 @@
           </div>
         {/if}
 
+        {#if selected && !managing && !editing}
+          <dl class="mt-4 grid grid-cols-[auto_1fr] gap-x-5 gap-y-2 border-t border-hairline pt-3 text-xs">
+            {#if p.hotwords.length}<dt class="text-muted-foreground">{m.game_catalog_terms()}</dt><dd class="min-w-0 break-words">{p.hotwords.slice(0, 6).join(listSeparator())}{p.hotwords.length > 6 ? "…" : ""}</dd>{/if}
+            <dt class="text-muted-foreground">{m.game_computer_use_label({ companion: $companionName })}</dt>
+            <dd>{COMPUTER_USE_OPTIONS.find(o => o.value === (p.computerUse ?? "ask"))?.label}</dd>
+          </dl>
+        {/if}
         {#if editing && draft}
           <!-- 普通用户只编辑热词；聊天键和注入策略收进高级输入设置。 -->
           <div class="mt-4 space-y-5 rounded-xl border border-hairline bg-muted/30 p-4" data-testid="game-profile-editor">
@@ -767,10 +821,13 @@
             {/if}
 
             <!-- 挂在这个游戏上的插件给的小节（ADR 038）：例如英雄联盟插件的“读客户端数据”（默认开，提示风险） -->
+            {#if legacyVoiceOnly || managing}
             {#each pluginsFor(draft.id) as plugin (plugin.manifest.id)}
               {@const Section = PLUGIN_UI[plugin.manifest.id]?.gameSection}
               {#if Section}<Section {plugin} gameId={draft.id} />{/if}
             {/each}
+
+            {/if}
 
             {#if draft.processNames.length}
               <!-- 游戏事件（ADR 036）：这个游戏现在在哪个阶段、能给哪些事（自动化里“按游戏事件运行”用） -->
@@ -842,6 +899,8 @@
       </div>
     {/each}
   </SettingsSection>
+
+  {/if}
 
   <!-- dev:web 导入热词用隐藏文件选择器 -->
   <input

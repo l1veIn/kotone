@@ -67,7 +67,7 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   await row(page, "game").getByTestId("sidebar-page-open").click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByTestId("settings-nav-game")).toHaveCount(0);
-  await expect(page.locator('[data-testid^="game-profile-"]').first()).toBeVisible();
+  await expect(page.getByTestId("installed-games")).toBeVisible();
 
   // 恢复默认
   await page.getByTestId("sidebar-all-pages").click();

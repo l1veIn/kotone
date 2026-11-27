@@ -13,6 +13,7 @@ test("LoL events come from the plugin; with the plugin off they leave the picker
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-automation").click();
   const automation = page.getByTestId("automation-page");
+  await automation.getByTestId("automation-library").click();
 
   // 插件开着：选英雄联盟，事件里有插件登记的“拿了小龙”，带“哪一边”
   // “让她做”是一个模板（ADR 045 D9）：程序是 ask(args.request)，只填交给她的那句话

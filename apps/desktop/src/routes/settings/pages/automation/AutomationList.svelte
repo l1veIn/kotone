@@ -25,7 +25,8 @@
   import { listSeparator } from "$lib/locale";
   import { getLocale } from "$lib/paraglide/runtime.js";
 
-  let { automations, templates = [], runs, now, busyId, onStop, onChanged }: {
+  let { expanded = $bindable(""), automations, templates = [], runs, now, busyId, onStop, onChanged }: {
+    expanded?: string;
     automations: Automation[];
     /** 新建时选的模板（随已保存的自动化一起来）。 */
     templates?: AutomationTemplate[];
@@ -38,7 +39,6 @@
 
   /** 新建（先选模板）、编辑、复制一份（按内置的按键程序改一个自己的）。 */
   let editing = $state<{ mode: "new" } | { mode: "edit" | "copy"; automation: Automation } | null>(null);
-  let expanded = $state("");
   let runPanel = $state("");
   let runArgs = $state<Record<string, unknown>>({});
   let switchSeconds = $state(3);
@@ -49,6 +49,7 @@
   // 游戏配置 id → 名字（触发说明里用）
   let profileNames = $state<Record<string, string>>({});
   onMount(async () => {
+    if (expanded) document.getElementById(`program-toggle-${expanded}`)?.focus();
     try { profileNames = Object.fromEntries((await listProfiles()).map((p) => [p.id, p.displayName])); } catch { profileNames = {}; }
   });
   const gameName = (id: string) => profileNames[id] ?? id;
@@ -198,7 +199,7 @@
                 {#if starting === item.id}<LoaderCircle class="size-3.5 animate-spin" />{:else}<Play class="size-3.5 fill-current" />{/if}
               </Button>
             {/if}
-            <button type="button" class="min-w-0 flex-1 text-left" aria-expanded={isOpen} onclick={() => { expanded = isOpen ? "" : item.id; }} data-testid="automation-item-toggle">
+            <button type="button" class="min-w-0 flex-1 text-left" id={`program-toggle-${item.id}`} aria-expanded={isOpen} onclick={() => { expanded = isOpen ? "" : item.id; }} data-testid="automation-item-toggle">
               <p class="m-0 flex items-center gap-1.5 truncate text-[13px] font-medium text-foreground">
                 {item.name}
                 {#if item.id === BUILTIN_REMIND_ID || item.id === BUILTIN_LOL_SCOUT_ID}<span class="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">{m.auto_list_builtin()}</span>{/if}

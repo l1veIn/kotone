@@ -9,6 +9,7 @@ test("game profile saves the automation-input switch and launch path without dro
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-game").click();
   await expect(page.getByRole("heading", { name: "游戏列表", exact: true })).toBeVisible();
+  await page.getByTestId("manage-game-profiles").click();
 
   // 没写过这个字段的配置按“允许”显示
   const generic = page.getByTestId("game-profile-generic");
@@ -54,6 +55,7 @@ test("auto-detect lists installed games, matching ones first, and fills the laun
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-game").click();
+  await page.getByTestId("manage-game-profiles").click();
   const lol = page.getByTestId("game-profile-lol");
   await lol.getByRole("button", { name: "编辑", exact: true }).click();
   const editor = lol.getByTestId("game-profile-editor");
@@ -72,6 +74,7 @@ test("game profile saves who may operate the game (computer use)", async ({ page
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-game").click();
+  await page.getByTestId("manage-game-profiles").click();
   const lol = page.getByTestId("game-profile-lol");
   await lol.getByRole("button", { name: "编辑", exact: true }).click();
   const editor = lol.getByTestId("game-profile-editor");
@@ -90,19 +93,33 @@ test("game profile saves who may operate the game (computer use)", async ({ page
   expect(saved?.hotwords).toHaveLength(6);
 });
 
-test("the game list detects installed games on first open, links their profiles and can re-detect", async ({ page }) => {
+test("local library opens the selected game's plugins and settings, then returns to its row", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1040, height: 800 });
   await page.goto("/#/settings?onboarding=never");
   await page.evaluate(() => localStorage.removeItem("kotone.installedGames"));
   await page.getByTestId("settings-nav-game").click();
   const list = page.getByTestId("installed-games");
   await expect(list.getByTestId("installed-game")).toHaveCount(3);
-  await expect(list.getByTestId("installed-games-elapsed")).toContainText("ms");
   const lol = list.locator('[data-game-id="tencent:lol"]');
-  await expect(lol).toContainText("英雄联盟（国服）");
   await expect(lol).toContainText("腾讯");
-  // 有对应的游戏配置：点“已适配”打开它的编辑
-  await lol.getByTestId("installed-game-profile").click();
-  await expect(page.getByTestId("game-profile-editor")).toBeVisible();
+  await expect(lol.getByTestId("installed-game-icon")).toBeVisible();
+  await expect(page.getByTestId("game-profile-lol")).toHaveCount(0);
+  await screenshot(page, { path: testInfo.outputPath("local-game-list.png"), animations: "disabled" });
+  await lol.getByTestId("installed-game-detail").click();
+  await expect(page.getByRole("heading", { name: "英雄联盟（国服）" })).toBeVisible();
+  await expect(page.getByTestId("game-related-plugins")).toContainText("英雄联盟插件");
+  const profile = page.getByTestId("game-profile-lol");
+  await expect(profile).toContainText("闪现");
+  await expect(page.getByTestId("game-profile-generic")).toHaveCount(0);
+  await screenshot(page, { path: testInfo.outputPath("local-game-detail.png"), animations: "disabled" });
+  await profile.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(profile.getByTestId("game-profile-editor")).toBeVisible();
+  await page.getByTestId("back-to-games").click();
+  await expect(lol.getByTestId("installed-game-detail")).toBeFocused();
+  await list.locator('[data-game-id="hoyo:hk4e_cn"]').getByTestId("installed-game-detail").click();
+  await expect(page.getByText("这款游戏还没有专属配置。")).toBeVisible();
+  await expect(page.getByTestId("game-related-plugins")).toContainText("暂无关联插件");
+  await page.getByTestId("back-to-games").click();
   await list.getByTestId("installed-games-detect").click();
   await expect(list.getByTestId("installed-game")).toHaveCount(3);
 });
@@ -125,6 +142,7 @@ test("console chat switch shows only for profiles that declare it and reports th
     });
   });
   await page.getByTestId("settings-nav-game").click();
+  await page.getByTestId("manage-game-profiles").click();
 
   const lol = page.getByTestId("game-profile-lol");
   await lol.getByRole("button", { name: "编辑", exact: true }).click();
@@ -160,6 +178,7 @@ test("the League profile shows the plugin's client-data switch and saves plugins
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-game").click();
+  await page.getByTestId("manage-game-profiles").click();
 
   // 别的游戏没有这个开关
   const generic = page.getByTestId("game-profile-generic");

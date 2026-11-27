@@ -54,9 +54,10 @@ test("the League of Legends plugin opens from 插件 with the client-data switch
 
   // 游戏配置页：英雄联盟那一节是插件给的，开关是同一个；游戏事件只剩通用的
   await page.getByTestId("settings-nav-game").click();
+  await page.locator('[data-game-id="tencent:lol"]').getByTestId("installed-game-detail").click();
   const lol = page.getByTestId("game-profile-lol");
   await lol.getByRole("button", { name: "编辑", exact: true }).click();
-  const section = lol.getByTestId("game-profile-lol-data");
+  const section = page.getByTestId("game-related-plugins").getByTestId("game-profile-lol-data");
   await expect(section).toContainText("英雄联盟插件");
   await expect(section.getByTestId("profile-lol-data")).toHaveAttribute("aria-checked", "false");
   const events = lol.getByTestId("game-profile-events");
