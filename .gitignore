@@ -16,3 +16,4 @@ apps/desktop/src-tauri/gen/
 .tools/ref-bcm/
 .repochan/
 .env
+.tmp*
