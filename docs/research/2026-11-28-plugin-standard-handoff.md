@@ -38,7 +38,7 @@
 | （本提交） | ADR 047 实现情况、交接文档 | 只有文档 |
 
 - **最后在本地照 CI 跑了一遍**（rustc 1.100.0，和 CI 一样）：fmt ✓、clippy `-D warnings` ✓、`test --workspace --locked` 2039 过 0 失败、`pnpm check` ✓（svelte-check + 英雄联盟 App）、**Playwright 286 过**、`pnpm audit` / `cargo audit` ✓、`release:verify` / `release:test` ✓。
-- **远端 CI**（`gh workflow run ci.yml --ref claude/plugin-standard`）：1eda9b50 那次红（CS2 一条没用到的文字 → 下一个提交修了；另有 kotone-mcp `a_crash_at_startup_says_why` 一次 “pipe is being closed”、悬浮窗一个用例重试才过，都不是这一轮改的，下一次就绿了）；d7bef850 绿；38612438 绿；最后一次见第五节上面的结论。
+- **远端 CI**（`gh workflow run ci.yml --ref claude/plugin-standard`）：1eda9b50 那次红（CS2 一条没用到的文字 → 下一个提交修了；另有 kotone-mcp `a_crash_at_startup_says_why` 一次 “pipe is being closed”、悬浮窗一个用例重试才过，都不是这一轮改的，下一次就绿了）；d7bef850 绿；38612438 绿；最后的 795d4982（含第 4 期）绿（run 46053092088：Rust lint、Rust test、Frontend 三个都过）。
 - **真机脚本**（隔离的 `KOTONE_HOME`、假服务器 / 假数据、不发键）：
 
 | 脚本 | 结果 | 测了什么 |
