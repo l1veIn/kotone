@@ -174,7 +174,7 @@ pub struct DesktopHost {
     app: AppHandle,
     id: String,
     manifest: Manifest,
-    /// 这次是谁调了插件的工具（她、外部 Agent、玩家的热键）：插件经入口发到游戏时照谁的规矩、记成谁发的
+    /// 这次是谁调了插件的工具（她、外部 Agent、玩家设下的热键和自动化）：插件经入口发到游戏时照谁的规矩、记成谁发的
     /// （[`Host::send_to_game`]）。插件自己的后台、页面调的、入口回头调插件的发法时是 None：不能发。
     speaker: Option<kotone_core::send_to_game::Speaker>,
 }
@@ -229,8 +229,9 @@ fn speaker_of(caller: Caller<'_>) -> Option<kotone_core::send_to_game::Speaker> 
     match caller {
         Caller::Her => Some(Speaker::Companion),
         Caller::Service => Some(Speaker::Agent),
-        // 玩家自己加的、插件预设的热键：照“替玩家发言”的规矩（前台要是游戏），和热键调 game_chat.send 一样
-        Caller::Hotkey => Some(Speaker::Automation),
+        // 玩家设下的（自己加的、插件预设的热键，自动化程序里的 tool()）：照“替玩家发言”的规矩（前台要是游戏），
+        // 和热键调 game_chat.send 一样
+        Caller::Automation => Some(Speaker::Automation),
         Caller::Page(_) => None,
     }
 }
@@ -719,9 +720,9 @@ pub enum Caller<'a> {
     Service,
     /// 插件自己的页面（只能调自己插件的、给页面的工具）。
     Page(&'a str),
-    /// 玩家自己加的热键（ADR 040 第 3 期）：和她一样只调给她的工具（`visibility` 含 `model`）；第三方插件的也能调
-    /// （是玩家在 Kotone 里按的，不是转给外部 Agent）。
-    Hotkey,
+    /// 玩家设下的：热键（ADR 040 第 3 期）、自动化程序里的 `tool()`（ADR 046）。和她一样只调给她的工具（`visibility`
+    /// 含 `model`）；第三方插件的也能调（是玩家在 Kotone 里设下的，不是转给外部 Agent）。
+    Automation,
 }
 
 /// 调一个插件的工具。
@@ -749,7 +750,7 @@ pub async fn call(
             return Err(format!("{page_plugin} 的页面不能调 {tool}"));
         }
         Caller::Page(_) if !spec.for_app() => return Err(format!("{tool} 不给页面用")),
-        Caller::Her | Caller::Hotkey if !spec.for_model() => {
+        Caller::Her | Caller::Automation if !spec.for_model() => {
             return Err(format!("{tool} 只给插件的页面用"))
         }
         _ => {}
@@ -961,13 +962,13 @@ mod tests {
         );
     }
 
-    /// 插件经入口发话（ADR 041 第 3 期）照调它的人的规矩：她、外部 Agent、热键；页面调的不能发。
+    /// 插件经入口发话（ADR 041 第 3 期）照调它的人的规矩：她、外部 Agent、玩家设下的（热键、自动化）；页面调的不能发。
     #[test]
     fn plugins_speak_for_whoever_called_their_tool() {
         use kotone_core::send_to_game::Speaker;
         assert_eq!(speaker_of(Caller::Her), Some(Speaker::Companion));
         assert_eq!(speaker_of(Caller::Service), Some(Speaker::Agent));
-        assert_eq!(speaker_of(Caller::Hotkey), Some(Speaker::Automation));
+        assert_eq!(speaker_of(Caller::Automation), Some(Speaker::Automation));
         assert_eq!(speaker_of(Caller::Page("lol")), None);
         // 英雄联盟的一键喊话只给她（和热键、外部 Agent），页面调不到
         let shout = find("lol")
@@ -1147,8 +1148,8 @@ mod tests {
         assert_eq!(third_party_refusal(true, Caller::Service), Some(NOT_SHARED));
         assert!(third_party_refusal(true, Caller::Her).is_none());
         assert!(
-            third_party_refusal(true, Caller::Hotkey).is_none(),
-            "玩家自己加的热键能调第三方的工具（在 Kotone 里按的）"
+            third_party_refusal(true, Caller::Automation).is_none(),
+            "玩家设下的热键、自动化能调第三方的工具（在 Kotone 里设下的）"
         );
         assert!(third_party_refusal(true, Caller::Page(id)).is_none());
         assert!(third_party_refusal(false, Caller::Service).is_none());

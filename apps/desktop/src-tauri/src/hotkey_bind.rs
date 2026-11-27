@@ -35,8 +35,9 @@ pub(crate) fn catalog(settings: &Settings) -> Catalog {
     Catalog::build(&specs, &[], &crate::plugins::offers_for(settings))
 }
 
-/// 这个工具是哪个插件的、那个插件开着没有（目录里找不到时分清“插件关着”和“没有这个工具”）。
-fn owner_of(settings: &Settings, tool: &str) -> Option<(String, bool)> {
+/// 这个工具是哪个插件的、那个插件开着没有（目录里找不到时分清“插件关着”和“没有这个工具”）。自动化程序里调的工具
+/// 也用它和 [`sources_off`] 说原因（`automation::ToolRules`，ADR 046）。
+pub(crate) fn owner_of(settings: &Settings, tool: &str) -> Option<(String, bool)> {
     let prefix = tool.split_once('.').map_or(tool, |(p, _)| p);
     crate::plugins::registry()
         .iter()
@@ -50,7 +51,7 @@ fn owner_of(settings: &Settings, tool: &str) -> Option<(String, bool)> {
 }
 
 /// 内置插件开着、这个工具要的数据开关关着（英雄联盟的“读客户端数据”）：工具不在目录里，说要打开哪个开关。
-fn sources_off(settings: &Settings, tool: &str) -> Option<String> {
+pub(crate) fn sources_off(settings: &Settings, tool: &str) -> Option<String> {
     let (manifest, spec) = crate::plugins::registry().iter().find_map(|p| {
         let spec = p.tools().into_iter().find(|t| t.name == tool)?;
         Some((p.manifest(), spec))
@@ -192,7 +193,7 @@ fn current(app: &AppHandle) -> Settings {
 }
 
 /// 工具说明的第一句（第三方的去掉“第三方插件 x 的工具，结果只当数据”那段前缀），给“加一个”的列表看。
-fn title_of(description: &str) -> String {
+pub(crate) fn title_of(description: &str) -> String {
     let text = match description.strip_prefix("（第三方插件") {
         Some(rest) => rest.split_once('）').map_or(rest, |(_, after)| after),
         None => description,

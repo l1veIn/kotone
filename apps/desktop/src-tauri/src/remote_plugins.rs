@@ -353,12 +353,15 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 权限里这个第三方插件的工具的规则（`<id>.<工具>`，“总是允许这个工具”记在这里）和绑热键时的确认（ADR 040 D9）
-/// 全部清掉：删掉插件、配置变了的时候（信任记的是指纹，配置一变就失效；规则和确认也一样，不留给换上来的那份配置）。
+/// 权限里这个第三方插件的工具的规则（`<id>.<工具>`，“总是允许这个工具”记在这里）、绑热键时的确认（ADR 040 D9）和
+/// 自动化上的确认（ADR 046 D3）全部清掉：删掉插件、配置变了的时候（信任记的是指纹，配置一变就失效；规则和确认也一样，
+/// 不留给换上来的那份配置）。
 /// 只对真的第三方插件用：id 和内置插件、本体工具的前缀不会撞（`check_new_id`），清不到别人的规则。
 pub fn forget_rules(app: &AppHandle, id: &str) {
     use tauri::Manager;
     let prefix = format!("{id}.");
+    // 自动化上“这段程序可以调它的工具”的确认（ADR 046 D3）也一样作废，存在自动化的文件里，和设置分开清
+    crate::automation::forget_confirmations(app, &prefix);
     let current = settings(app);
     let has_rule = current
         .agent

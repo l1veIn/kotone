@@ -53,6 +53,7 @@ mod speech_screen;
 mod startup;
 mod stop;
 mod system_cmd;
+mod tool_call;
 mod tool_config;
 mod tool_service;
 mod tray;
@@ -545,6 +546,8 @@ pub fn run() {
             games::game_state,
             automation::automation_get,
             automation::automation_save,
+            automation::automation_confirm,
+            automation::automation_tools,
             automation::automation_delete,
             automation::automation_run_saved,
             automation::automation_stop,

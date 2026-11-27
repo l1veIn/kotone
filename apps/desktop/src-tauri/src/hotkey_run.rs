@@ -4,8 +4,9 @@
 //!   只看不吞、按了气泡提示（第 2 期主会话定的第 2 条），所以经 `dispatch_runtime_hotkey`（运行时的入场票）到这里。
 //! - 运行自动化、调工具：不用听，随应用登记，识别没在跑也照样按（P4），在 `route_named_hotkey` 里直接到这里。按的时候
 //!   **不问**（绑的时候问过了，D9），但照现在的权限、插件开关再判一次（[`crate::hotkey_bind::state`]，规则可能刚改过）。
-//!   运行自动化跑那个已保存的自动化（发起方 `hotkey`）；工具服务的经进程内的工具服务，插件的经 `Caller::Hotkey`（第三方的
-//!   也能调），`game_chat.send` 照“替玩家发言”的前台规矩（前台要是游戏，`Speaker::Automation`）。调工具的成了弹幕一行
+//!   运行自动化跑那个已保存的自动化（发起方 `hotkey`）；调工具和自动化程序里的 `tool()` 走同一份（[`crate::tool_call`]：
+//!   工具服务的经进程内的工具服务，插件的经 `Caller::Automation`（第三方的也能调），`game_chat.send` 照“替玩家发言”的
+//!   前台规矩（前台要是游戏，`Speaker::Automation`））。调工具的成了弹幕一行
 //!   工具回的结果、不出声（P2）；运行自动化的成了不出声也不弹（2026-11-27 玩家：播报、弹幕、发到聊天都是程序里的函数，
 //!   要不要通知由程序自己决定），只记下结果。没成都照快捷指令以前的做法说一句原因（原则 21：程序根本没跑起来，它没法自己说）。
 //!   同一条上一次还没做完时再按，这次不做（不排队、不补发，ADR 032）。
@@ -22,7 +23,6 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
-use kotone_agent::catalog::Source;
 use kotone_core::hotkey_bindings::Binding;
 use kotone_core::hotkey_custom::{find_row, Action, CustomState, ROW_PREFIX};
 use kotone_core::hotkey_table::LastRun;
@@ -204,51 +204,9 @@ async fn call(app: &AppHandle, binding: &Binding) -> Result<String, String> {
     let entry = catalog
         .get(tool)
         .ok_or_else(|| format!("找不到工具 {tool}"))?;
-    let done = || format!("{tool} 做完了");
-    match &entry.source {
-        Source::Service => {
-            let service =
-                crate::tool_service::service(app).ok_or("工具服务还没准备好，过一会再按")?;
-            let envelope = service
-                .call(kotone_tools::protocol::ToolCallRequest {
-                    request_id: None,
-                    tool: tool.to_string(),
-                    arguments: args,
-                    timeout_ms: None,
-                })
-                .await;
-            if envelope.ok {
-                Ok(envelope
-                    .result
-                    .as_ref()
-                    .and_then(summary)
-                    .unwrap_or_else(done))
-            } else {
-                Err(envelope
-                    .error
-                    .map(|e| e.message)
-                    .unwrap_or_else(|| format!("{tool} 没成")))
-            }
-        }
-        Source::Body => {
-            let result = crate::game_chat::body_tool(
-                app,
-                tool,
-                &args,
-                "hotkey",
-                kotone_core::send_to_game::Speaker::Automation,
-                None,
-            )
-            .await?;
-            Ok(summary(&result.content).unwrap_or_else(done))
-        }
-        Source::Plugin { .. } => {
-            let result =
-                crate::plugins::call(app, tool, &args, crate::plugins::Caller::Hotkey).await?;
-            Ok(summary(&result.content).unwrap_or_else(done))
-        }
-        _ => Err(format!("{tool} 不能绑热键（只在和她的对话里用）")),
-    }
+    // 经哪条路调和自动化程序里的 tool() 是同一份（ADR 046）
+    let reply = crate::tool_call::call(app, entry, args, crate::tool_call::By::Hotkey).await?;
+    Ok(summary(&reply.content).unwrap_or_else(|| format!("{tool} 做完了")))
 }
 
 /// 打开页面（P1）：窗口拿到前面（游戏独占全屏时不拿，用语音说一句），页面交给界面（标着是玩家自己要看的）。

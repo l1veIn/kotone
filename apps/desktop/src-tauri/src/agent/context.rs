@@ -70,7 +70,8 @@ pub(super) fn is_player_message(message: &Message) -> bool {
     matches!(message, Message::User { source, .. } if kotone_agent::subagents::is_player_source(source))
 }
 
-/// 交给模型的已保存自动化：没被隐藏、模型能调用（没有必填图片），最多 30 个。
+/// 交给模型的已保存自动化：没被隐藏、模型能调用（没有必填图片、不会叫她、程序里的工具名都是直接写的），最多 30 个。
+/// 等玩家确认的照样给：她运行时拿到“要先在「自动化」页点允许”，好告诉玩家（ADR 046 D3）。
 pub(super) fn offered_automations(
     app: &AppHandle,
     hidden: &[String],
@@ -78,8 +79,8 @@ pub(super) fn offered_automations(
     crate::automation::saved_list(app)
         .into_iter()
         .filter(|a| !hidden.contains(&a.id))
-        // TODO(ADR 046 C): 这里只看给不给（会叫她、必填图片、工具名不是直接写的不给），和工具清单无关，所以传空清单；
-        // 副作用在 `Catalog::build` 里按她的工具清单算。
+        // 这里只看给不给，和工具清单无关，所以传空清单；`saved.*` 的副作用（按程序调的工具算，ADR 046 D5）在
+        // `Catalog::build` 里按她这段对话的工具清单算
         .filter(|a| saved_entry(a, &[]).is_some())
         .take(MAX_SAVED_TOOLS)
         .collect()

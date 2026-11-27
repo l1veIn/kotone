@@ -14,13 +14,19 @@
 //! - **按住的键一定会松开**：`key_down` 记账，程序结束（正常、出错、取消、超限）时全部 `key_up`。
 //! - 停下（停止自动化热键、托盘、说“停下”、不带 id 的 `automation.stop`，D6）：运行中的全停；等待中的只取消
 //!   绑了游戏窗口的，等待中的提醒留着。应用退出只停止运行中的程序，等待中的留到下次启动（过期则记为错过）。
+//! - **程序里调工具**（ADR 046，[`ToolRules`]）：能调的范围、权限、插件开关和热键同一张表、同一份目录；要问的由玩家在
+//!   「自动化」页确认一次（[`automation_confirm`]、“允许并保存”，只有 Kotone 窗口能写）。安排时查一遍：等你确认的、
+//!   调不了的不运行（▶ 和热键说原因、她拿到错误、游戏事件和定时只记日志）；运行中每次 `tool()` 再判一次
+//!   （[`program::DesktopHost`]）。对外的定义不带确认的原文，带每个工具现在的状态（`tools[]`、`needsConfirm`）。
 
 mod program;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use kotone_agent::catalog::{Catalog, ToolEntry};
+use kotone_agent::permissions::{program_callable, program_decision, BindingDecision};
 use kotone_core::automation::library::{
     self, validate_args, Automation, AutomationBody, AutomationDraft, AutomationLibrary, CreatedBy,
     ParamKind, ProgramUses,
@@ -31,6 +37,7 @@ use kotone_core::automation::{
 };
 use kotone_core::games::GameEvent;
 use kotone_core::reminders::DeliveryKind;
+use kotone_core::settings::Settings;
 use kotone_core::tools::{WindowIdentity, WindowInfo, WindowObserver};
 use kotone_platform_windows::window_tools::WindowsWindowObserver;
 use kotone_script::{Cancel, Limits, Outcome, ScriptHost};
@@ -251,6 +258,237 @@ fn check_source(source: &str) -> Result<&str, String> {
     Ok(source)
 }
 
+// ---------- 程序里调的工具（ADR 046 D1–D3、D9） ----------
+
+/// 确认：工具 → 确认时它的副作用（[`Automation::confirmed`]）。
+type Confirmed = BTreeMap<String, Vec<String>>;
+
+/// 程序里调的一个工具现在怎么样。界面上“会调用：…”那一行、安排时的检查、每次 `tool()` 用同一个判断（[`ToolRules`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolState {
+    /// 能调。
+    Ready,
+    /// 要玩家在「自动化」页点“允许”（保存的自动化）：这个工具会做什么（权限的原因）。
+    Confirm(String),
+    /// 插件或它要的数据开关关着：说要打开哪个。
+    Off(String),
+    /// 调不了：不在程序能调的范围（D2）、权限里禁止、只读模式、找不到、临时程序遇到要确认的。
+    Blocked(String),
+}
+
+impl ToolState {
+    /// 给界面的 `state`。
+    fn word(&self) -> &'static str {
+        match self {
+            ToolState::Ready => "ready",
+            ToolState::Confirm(_) => "confirm",
+            ToolState::Off(_) => "off",
+            ToolState::Blocked(_) => "blocked",
+        }
+    }
+
+    /// 给界面的 `reason`（能调的是空的）。
+    fn reason(&self) -> &str {
+        match self {
+            ToolState::Ready => "",
+            ToolState::Confirm(r) | ToolState::Off(r) | ToolState::Blocked(r) => r,
+        }
+    }
+
+    /// 不运行 / 调不了时交给发起方的一句（带上是哪个工具）。
+    fn refusal(&self, tool: &str) -> String {
+        match self {
+            ToolState::Ready => String::new(),
+            ToolState::Confirm(reason) => {
+                format!("要先在「自动化」页点“允许”，才能调用 {tool}（{reason}）")
+            }
+            ToolState::Off(reason) | ToolState::Blocked(reason) if reason.contains(tool) => {
+                reason.clone()
+            }
+            ToolState::Off(reason) | ToolState::Blocked(reason) => format!("{tool}：{reason}"),
+        }
+    }
+}
+
+/// 判断程序里调的工具用的那一刻的规则：玩家的权限（含整体模式）、插件和数据开关、能绑的工具目录（和热键同一份，
+/// [`crate::hotkey_bind::catalog`]）。一次判断建一个（只读内存）。
+pub(crate) struct ToolRules {
+    settings: Settings,
+    catalog: Catalog,
+}
+
+impl ToolRules {
+    pub(crate) fn of(settings: Settings) -> Self {
+        let catalog = crate::hotkey_bind::catalog(&settings);
+        Self { settings, catalog }
+    }
+
+    pub(crate) fn now(app: &AppHandle) -> Self {
+        Self::of(
+            app.state::<crate::SharedState>()
+                .settings
+                .read()
+                .unwrap()
+                .clone(),
+        )
+    }
+
+    /// 这个工具现在能不能调：能调交回它的条目，不能调交回为什么（[`ToolState`]，不会是 `Ready`）。
+    /// `confirmed`：保存的自动化是 `Some(它的确认)`，临时程序是 None（只能调不用确认的，D3）。
+    pub(crate) fn entry(
+        &self,
+        tool: &str,
+        confirmed: Option<&Confirmed>,
+    ) -> Result<&ToolEntry, ToolState> {
+        let Some(entry) = self.catalog.get(tool) else {
+            return Err(self.missing(tool));
+        };
+        program_callable(entry).map_err(ToolState::Blocked)?;
+        let policy = &self.settings.agent.permissions;
+        let seen: Option<Vec<&str>> = confirmed
+            .and_then(|map| map.get(tool))
+            .map(|effects| effects.iter().map(String::as_str).collect());
+        match program_decision(policy, entry, seen.as_deref(), confirmed.is_some()) {
+            BindingDecision::Run => Ok(entry),
+            BindingDecision::Confirm { reason } => Err(ToolState::Confirm(reason)),
+            // 临时程序遇到要确认的：program_decision 已经说清楚了（先存起来让玩家允许）
+            BindingDecision::Refused { reason }
+                if confirmed.is_none()
+                    && matches!(
+                        program_decision(policy, entry, None, true),
+                        BindingDecision::Confirm { .. }
+                    ) =>
+            {
+                Err(ToolState::Blocked(reason))
+            }
+            BindingDecision::Refused { reason } => {
+                Err(ToolState::Blocked(format!("{reason}：去她的「权限」里改")))
+            }
+        }
+    }
+
+    /// 目录里没有：分清插件关着、数据开关关着、第三方插件没连上、根本没有（和热键同一套说法）。
+    fn missing(&self, tool: &str) -> ToolState {
+        let page_only = crate::plugins::owner(tool)
+            .and_then(|p| p.tools().into_iter().find(|t| t.name == tool))
+            .is_some_and(|spec| !spec.for_model());
+        if page_only {
+            return ToolState::Blocked(format!("{tool} 只给插件的页面用，程序里调不了"));
+        }
+        if let Some(reason) = crate::hotkey_bind::sources_off(&self.settings, tool) {
+            return ToolState::Off(reason);
+        }
+        match crate::hotkey_bind::owner_of(&self.settings, tool) {
+            Some((name, false)) => ToolState::Off(format!(
+                "「{name}」插件关着（在左侧栏的「插件」里可以打开）"
+            )),
+            Some((name, true)) => ToolState::Blocked(format!(
+                "「{name}」现在没有 {tool} 这个工具（第三方插件还没连上，或者更新以后去掉了）"
+            )),
+            None => ToolState::Blocked(format!(
+                "找不到工具 {tool}（插件没装或被删了，或者名字写错了）"
+            )),
+        }
+    }
+
+    pub(crate) fn state(&self, tool: &str, confirmed: Option<&Confirmed>) -> ToolState {
+        self.entry(tool, confirmed)
+            .map_or_else(|state| state, |_| ToolState::Ready)
+    }
+
+    /// 显示名：工具说明的第一句（和「设置 → 热键」的“加一个”同一个；插件关着时照插件登记的说明），没有就用名字。
+    fn title(&self, tool: &str) -> String {
+        let description = self
+            .catalog
+            .get(tool)
+            .map(|e| e.description.clone())
+            .or_else(|| {
+                crate::plugins::owner(tool)
+                    .and_then(|p| p.tools().into_iter().find(|t| t.name == tool))
+                    .map(|t| t.description)
+            })
+            .unwrap_or_default();
+        let title = crate::hotkey_bind::title_of(&description);
+        if title.is_empty() {
+            tool.to_string()
+        } else {
+            title
+        }
+    }
+
+    /// 界面上“会调用：…”那一行（D9）：程序里每个工具（按出现的先后）现在怎么样。
+    pub(crate) fn lines(&self, automation: &Automation) -> Vec<ToolLine> {
+        self.lines_of(automation.action.source(), &automation.confirmed)
+            .unwrap_or_default()
+    }
+
+    /// 一段程序（保存的自动化的确认是 `confirmed`）里每个工具现在怎么样；工具名不是直接写的返回原因。
+    fn lines_of(&self, source: &str, confirmed: &Confirmed) -> Result<Vec<ToolLine>, String> {
+        Ok(library::tools_called(source)?
+            .into_iter()
+            .map(|name| ToolLine {
+                title: self.title(&name),
+                state: self.state(&name, Some(confirmed)),
+                name,
+            })
+            .collect())
+    }
+
+    /// 安排之前查一遍（D1、D3）：工具名要直接写（临时程序也是）；等你确认的、调不了的都不运行（免得只做一半：
+    /// 话说了、歌没放），原因交给发起方。
+    pub(crate) fn check(&self, source: &str, confirmed: Option<&Confirmed>) -> Result<(), String> {
+        let problems: Vec<String> = library::tools_called(source)?
+            .iter()
+            .filter_map(|tool| {
+                self.entry(tool, confirmed)
+                    .err()
+                    .map(|state| state.refusal(tool))
+            })
+            .collect();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("；"))
+        }
+    }
+
+    /// 玩家点“允许”时记下的（D3）：程序里现在要确认的工具 → 它这时的副作用。不用确认的、调不了的不记。
+    pub(crate) fn to_confirm(&self, source: &str) -> Confirmed {
+        let policy = &self.settings.agent.permissions;
+        library::tools_called(source)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|tool| {
+                let entry = self.catalog.get(&tool)?;
+                matches!(
+                    program_decision(policy, entry, None, true),
+                    BindingDecision::Confirm { .. }
+                )
+                .then(|| (tool, entry.side_effects.clone()))
+            })
+            .collect()
+    }
+}
+
+/// 程序里调的一个工具在界面上的一行（D9）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolLine {
+    pub name: String,
+    pub title: String,
+    pub state: ToolState,
+}
+
+impl ToolLine {
+    fn json(&self) -> Value {
+        json!({
+            "name": self.name,
+            "title": self.title,
+            "state": self.state.word(),
+            "reason": self.state.reason(),
+        })
+    }
+}
+
 fn scheduled_json(run: &Run, target: Option<&str>) -> Value {
     json!({
         "status": if run.status == RunStatus::Running { "started" } else { "scheduled" },
@@ -262,24 +500,32 @@ fn scheduled_json(run: &Run, target: Option<&str>) -> Value {
 
 /// 安排一段程序；`due_at_ms` 不晚于现在就立即启动。程序里用到游戏窗口（[`ProgramUses`]，ADR 045 D4）时目标是
 /// **现在**的前台窗口（要是允许自动化输入的游戏）；没用到的不看前台、不绑窗口（返回的 `target` 为 null）。
+///
+/// 临时程序（她和外部 Agent 的 `automation.run {source}`）只能调不用确认的工具（ADR 046 D3）。
 pub fn start(
     app: &AppHandle,
     session: &str,
     request: ProgramRequest<'_>,
     due_at_ms: u64,
 ) -> Result<Value, String> {
-    schedule(app, session, request, None, due_at_ms)
+    schedule(app, session, request, None, None, due_at_ms)
 }
 
-/// [`start`]，带上触发它的游戏事件（按事件触发的执行：随执行记录保存，`ask()` 交给她时附上，ADR 045 D8）。
+/// [`start`]，带上保存的自动化对这份程序的确认（`confirmed`，临时程序是 None）和触发它的游戏事件（按事件触发的执行：
+/// 随执行记录保存，`ask()` 交给她时附上，ADR 045 D8）。程序里调的工具先查一遍（[`ToolRules::check`]）：等你确认的、
+/// 调不了的不安排，原因交给发起方。
 fn schedule(
     app: &AppHandle,
     session: &str,
     request: ProgramRequest<'_>,
+    confirmed: Option<&Confirmed>,
     event: Option<GameEvent>,
     due_at_ms: u64,
 ) -> Result<Value, String> {
     let source = check_source(request.source)?;
+    if !library::tools_called(source)?.is_empty() {
+        ToolRules::now(app).check(source, confirmed)?;
+    }
     let target = if ProgramUses::of(source).window {
         let (target, window) = foreground_target_info()?;
         // 按游戏配置的“允许自动化输入”（ADR 014 第 5 步）；到点执行时还会再查一次。
@@ -341,6 +587,7 @@ fn run_saved_on(
             automation_id: Some(automation.id.clone()),
             args,
         },
+        Some(&automation.confirmed),
         event,
         due,
     )
@@ -524,7 +771,8 @@ pub fn saved_list(app: &AppHandle) -> Vec<Automation> {
 }
 
 /// 定义的对外形状；`with_source = false`（列表）时省略程序源码。后端按源码算好的 `usesWindow`（用到游戏窗口：
-/// ▶ 先倒数、要切到游戏）和 `asks`（会叫她，每次花一次 AI 调用）一起给（ADR 045 D9）。
+/// ▶ 先倒数、要切到游戏）和 `asks`（会叫她，每次花一次 AI 调用）一起给（ADR 045 D9）。确认的原文（`confirmed`）不往外给
+/// （ADR 046：外部 Agent 原样抄回 `automation.save` 会被拒），每个工具现在怎么样见 [`describe`] 加的 `tools[]`。
 pub fn automation_json(automation: &Automation, with_source: bool) -> Value {
     let uses = automation.action.uses();
     let mut value = serde_json::to_value(automation).unwrap_or(Value::Null);
@@ -534,15 +782,79 @@ pub fn automation_json(automation: &Automation, with_source: bool) -> Value {
                 action.remove("source");
             }
         }
+        object.remove("confirmed");
         object.insert("usesWindow".into(), json!(uses.window));
         object.insert("asks".into(), json!(uses.asks));
     }
     value
 }
 
+/// [`automation_json`] 加上程序里调的工具（ADR 046 D9）：`tools: [{name, title, state, reason}]`（`state` 是
+/// `ready` / `confirm` / `off` / `blocked`，按程序里出现的先后），`needsConfirm`（有要玩家在「自动化」页点“允许”的）。
+/// 界面、工具 `automation.get` / `list` / `save` 都是这个形状。
+fn describe(automation: &Automation, with_source: bool, rules: &ToolRules) -> Value {
+    let mut value = automation_json(automation, with_source);
+    if let Some(object) = value.as_object_mut() {
+        add_tools(object, &rules.lines(automation));
+    }
+    value
+}
+
+/// `tools[]` 和 `needsConfirm`（[`describe`]、编辑器的 [`automation_tools`] 同一个形状）。
+fn add_tools(object: &mut serde_json::Map<String, Value>, lines: &[ToolLine]) {
+    object.insert(
+        "tools".into(),
+        json!(lines.iter().map(ToolLine::json).collect::<Vec<_>>()),
+    );
+    object.insert(
+        "needsConfirm".into(),
+        json!(lines
+            .iter()
+            .any(|l| matches!(l.state, ToolState::Confirm(_)))),
+    );
+}
+
+/// 编辑器里“会调用：…”那一行（ADR 046 D9）：照编辑器里现在这份程序（还没存）算，`{tools, needsConfirm, error}`，存的
+/// 按钮照 `needsConfirm` 写“保存”还是“允许并保存”。`confirmed` 是正在改的那个自动化存着的确认：程序和存着的一样才算数
+/// （存的时候程序一变，确认就作废）。工具名不是直接写的：`tools` 为空，`error` 说清楚（这样存不进来）。
+fn preview(source: &str, stored: Option<&Automation>, rules: &ToolRules) -> Value {
+    let confirmed = stored
+        .filter(|a| a.action.source().trim() == source.trim())
+        .map(|a| a.confirmed.clone())
+        .unwrap_or_default();
+    let (lines, error) = match rules.lines_of(source, &confirmed) {
+        Ok(lines) => (lines, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let mut object = serde_json::Map::new();
+    add_tools(&mut object, &lines);
+    object.insert("error".into(), json!(error));
+    Value::Object(object)
+}
+
 /// 保存（新建或按 id 覆盖）；程序先检查语法。游戏事件触发按合并后的事件目录校验（插件登记的也认得）；
 /// 触发里的事现在不会发生时（例如英雄联盟插件关着）照常保存，结果里多一项 `triggerNotes` 说清楚（原则 21）。
-pub fn save(app: &AppHandle, mut draft: AutomationDraft, by: CreatedBy) -> Result<Value, String> {
+/// 程序里调了要确认的工具时，结果的 `needsConfirm` 是 true（她存的：告诉玩家去「自动化」页点“允许”，ADR 046 D9）。
+pub fn save(app: &AppHandle, draft: AutomationDraft, by: CreatedBy) -> Result<Value, String> {
+    let (saved, notes) = store(app, draft, by)?;
+    Ok(saved_json(&saved, &notes, &ToolRules::now(app)))
+}
+
+/// 保存结果的形状：[`describe`]（带源码），触发里有现在不会发生的事时加 `triggerNotes`。
+fn saved_json(saved: &Automation, notes: &[String], rules: &ToolRules) -> Value {
+    let mut value = describe(saved, true, rules);
+    if let (false, Some(object)) = (notes.is_empty(), value.as_object_mut()) {
+        object.insert("triggerNotes".into(), json!(notes));
+    }
+    value
+}
+
+/// 存下草稿（[`save`] 和「自动化」页的保存共用）：返回存好的定义和触发的说明。
+fn store(
+    app: &AppHandle,
+    mut draft: AutomationDraft,
+    by: CreatedBy,
+) -> Result<(Automation, Vec<String>), String> {
     let AutomationBody::Program(program) = &mut draft.action;
     program.source = check_source(&program.source)?.to_string();
     store_draft_images(&mut draft)?;
@@ -562,31 +874,29 @@ pub fn save(app: &AppHandle, mut draft: AutomationDraft, by: CreatedBy) -> Resul
         "automation.saved",
         json!({"id": saved.id, "name": saved.name}),
     );
-    let mut value = automation_json(&saved, true);
     let notes = saved
         .on
         .as_ref()
         .map(|on| events.notes(on))
         .unwrap_or_default();
-    if let (false, Some(object)) = (notes.is_empty(), value.as_object_mut()) {
-        object.insert("triggerNotes".into(), json!(notes));
-    }
-    Ok(value)
+    Ok((saved, notes))
 }
 
 pub fn get(app: &AppHandle, id: &str) -> Result<Value, String> {
+    let rules = ToolRules::now(app);
     library(app)?
         .get(id)
-        .map(|a| automation_json(&a, true))
+        .map(|a| describe(&a, true, &rules))
         .ok_or_else(|| format!("找不到自动化 {id}"))
 }
 
 pub fn list_saved(app: &AppHandle) -> Result<Value, String> {
     let list = library(app)?.list();
     let now = kotone_core::automation::now_ms();
+    let rules = ToolRules::now(app);
     Ok(json!({
         "automations": list.iter().map(|a| {
-            let mut value = automation_json(a, false);
+            let mut value = describe(a, false, &rules);
             // 定时的下一次（界面显示“下次 08:00”）
             let next = a.schedule.as_ref().filter(|s| s.enabled)
                 .and_then(|s| kotone_core::automation::cron::Cron::parse(&s.cron).ok())
@@ -607,6 +917,53 @@ pub fn delete(app: &AppHandle, id: &str) -> Result<bool, String> {
         crate::tool_service::publish(app, "automation.deleted", json!({"id": id}));
     }
     Ok(deleted)
+}
+
+/// 记下这段程序可以调现在要确认的工具（[`ToolRules::to_confirm`]；核对的是 `automation` 这份程序，期间被改了就不认）。
+/// 没有要确认的什么都不写。
+fn confirm_tools(
+    app: &AppHandle,
+    automation: &Automation,
+    rules: &ToolRules,
+) -> Result<Automation, String> {
+    let map = rules.to_confirm(automation.action.source());
+    if map.is_empty() {
+        return Ok(automation.clone());
+    }
+    let confirmed = library(app)?.confirm(&automation.id, automation.action.source(), map)?;
+    let _ = app.emit("kotone://automations-updated", ());
+    kotone_core::log::log(&format!(
+        "automation {}: 玩家允许了 {}",
+        confirmed.id,
+        confirmed
+            .confirmed
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("、")
+    ));
+    Ok(confirmed)
+}
+
+/// 第三方插件的配置变了、删掉了（`remote_plugins::forget_rules`）：自动化上对它的工具的确认也作废（ADR 046 D3，
+/// 和热键一样）。`prefix` 带点（`demo.`）。
+pub fn forget_confirmations(app: &AppHandle, prefix: &str) {
+    let Some(manager) = app.try_state::<AutomationManager>() else {
+        return;
+    };
+    let Ok(library) = &manager.library else {
+        return;
+    };
+    match library.forget_confirmations(prefix) {
+        Ok(true) => {
+            kotone_core::log::log(&format!("automation: 清掉了对 {prefix}* 的确认"));
+            let _ = app.emit("kotone://automations-updated", ());
+        }
+        Ok(false) => {}
+        Err(error) => {
+            kotone_core::log::log(&format!("automation: 对 {prefix}* 的确认没清掉：{error}"))
+        }
+    }
 }
 
 /// 有绑了游戏窗口的自动化程序正在运行（`game.act` 据此不与它同时按键，ADR 019“输入锁”）。不用窗口的（正在说一句、
@@ -810,10 +1167,50 @@ pub fn automation_get(app: AppHandle, id: String) -> Result<Value, String> {
     get(&app, &id)
 }
 
-/// 设置页保存（创建者记为用户）。
+/// 「自动化」页保存（创建者记为用户），返回存好的定义（[`describe`] 的形状，带 `tools[]`、`needsConfirm`）。
+/// `confirm` = 玩家点了“允许并保存”（ADR 046 D3、D9）：存好以后照刚存的这份程序记下要确认的工具（[`confirm_tools`]）；
+/// 不传当 false。改了程序的，存的时候就要再点一次“允许并保存”（存的时候确认已经作废了）。
 #[tauri::command]
-pub fn automation_save(app: AppHandle, draft: AutomationDraft) -> Result<Value, String> {
-    save(&app, draft, CreatedBy::User)
+pub fn automation_save(
+    app: AppHandle,
+    draft: AutomationDraft,
+    confirm: Option<bool>,
+) -> Result<Value, String> {
+    let (saved, notes) = store(&app, draft, CreatedBy::User)?;
+    let rules = ToolRules::now(&app);
+    let saved = if confirm.unwrap_or(false) {
+        confirm_tools(&app, &saved, &rules)
+            .map_err(|error| format!("已经存了，但没允许成：{error}"))?
+    } else {
+        saved
+    };
+    Ok(saved_json(&saved, &notes, &rules))
+}
+
+/// 「自动化」页列表上点“允许”（ADR 046 D3）：`source` 是玩家看到的那份程序，和现在存的不一样（这期间被她、外部 Agent
+/// 或另一个窗口改了）就不认。返回确认后的定义（带源码）。
+///
+/// **确认只有这条路和“允许并保存”（[`automation_save`] 带 `confirm`）能写**：和热键的 `confirm_hotkey` 一样是 Kotone
+/// 窗口的命令，不进工具服务（她和外部 Agent 调不到）；插件的页面在回环代理的另一个源里，没有 Kotone 的命令可调；
+/// `automation.save` 的草稿带 `confirmed` 直接拒。
+#[tauri::command]
+pub fn automation_confirm(app: AppHandle, id: String, source: String) -> Result<Value, String> {
+    let automation = library(&app)?
+        .get(&id)
+        .ok_or_else(|| format!("找不到自动化 {id}"))?;
+    if automation.action.source().trim() != source.trim() {
+        return Err("程序刚被改过，请重新看一遍".into());
+    }
+    let rules = ToolRules::now(&app);
+    let confirmed = confirm_tools(&app, &automation, &rules)?;
+    Ok(describe(&confirmed, true, &rules))
+}
+
+/// 编辑器里程序下面那一行（[`preview`]）：`source` 是编辑器里现在的程序，`id` 是正在改的那个自动化（新建的不传）。
+#[tauri::command]
+pub fn automation_tools(app: AppHandle, source: String, id: Option<String>) -> Value {
+    let stored = id.and_then(|id| library(&app).ok()?.get(&id));
+    preview(&source, stored.as_ref(), &ToolRules::now(&app))
 }
 
 #[tauri::command]
@@ -840,6 +1237,8 @@ pub fn automation_run_saved(
     if !needs_countdown(&automation) {
         return run_saved(&app, "ui", &id, &stored, kotone_core::automation::now_ms());
     }
+    // 等你确认的、调不了的不用倒数就说（ADR 046 D3）；倒数完安排时还会再查一次
+    ToolRules::now(&app).check(automation.action.source(), Some(&automation.confirmed))?;
     let seconds = switch_seconds.clamp(1, 30);
     std::thread::Builder::new()
         .name("kotone-automation-countdown".into())
@@ -980,5 +1379,200 @@ mod tests {
         assert!(!any_bound(&running), "提醒、在等 ask 的不挡");
         running.insert("run-3".to_string(), live(true));
         assert!(any_bound(&running));
+    }
+
+    // ---------- ADR 046：程序里调工具 ----------
+
+    /// 存进一个临时的库（事件目录照默认设置合并，插件登记的 `lol.death` 也认得）。
+    pub(super) fn saved(draft: Value) -> (tempfile::TempDir, AutomationLibrary, Automation) {
+        let dir = tempfile::tempdir().unwrap();
+        let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
+        let events = crate::games::event_catalog(&Settings::default());
+        let draft: AutomationDraft = serde_json::from_value(draft).unwrap();
+        let automation = library.save(draft, CreatedBy::Companion, &events).unwrap();
+        (dir, library, automation)
+    }
+
+    fn program(source: &str) -> Value {
+        json!({"name": "调工具", "action": {"kind": "program", "source": source}})
+    }
+
+    fn states(rules: &ToolRules, automation: &Automation) -> Vec<(String, &'static str)> {
+        rules
+            .lines(automation)
+            .into_iter()
+            .map(|l| (l.name, l.state.word()))
+            .collect()
+    }
+
+    /// 测试清单 10、13、D9：界面上“会调用：…”每个工具现在怎么样——放歌默认能调；改设置要确认（`needsConfirm`）；
+    /// 结果不可信又只读的、往游戏里打字的、找不到的调不了。对外的形状不带确认的原文。
+    #[test]
+    fn each_tool_a_program_calls_shows_whether_it_is_ready() {
+        let (_dir, library, automation) = saved(program(
+            "tool('music', { action = 'play' }) tool('settings.update', { patch = {} })\n\
+             tool('lol.scout') tool('game_chat.send', { text = 'gg' }) tool('nobody.thing')\n\
+             tool('ocr.recognize') tool('companion.read_chat')",
+        ));
+        let rules = ToolRules::of(Settings::default());
+        assert_eq!(
+            states(&rules, &automation),
+            [
+                ("music".to_string(), "ready"),
+                ("settings.update".to_string(), "confirm"),
+                ("lol.scout".to_string(), "blocked"),
+                ("game_chat.send".to_string(), "blocked"),
+                ("nobody.thing".to_string(), "blocked"),
+                ("ocr.recognize".to_string(), "blocked"),
+                ("companion.read_chat".to_string(), "blocked"),
+            ]
+        );
+        let value = describe(&automation, true, &rules);
+        assert_eq!(value["needsConfirm"], true);
+        let tools = value["tools"].as_array().unwrap();
+        assert!(tools[0]["title"].as_str().unwrap().starts_with("放歌"));
+        assert_eq!(tools[0]["reason"], "");
+        assert_eq!(tools[1]["reason"], "会修改设置");
+        assert!(tools[2]["reason"].as_str().unwrap().contains("别人写的字"));
+        assert!(tools[3]["reason"].as_str().unwrap().contains("chat()"));
+        assert!(tools[4]["reason"].as_str().unwrap().contains("找不到"));
+        assert_eq!(tools[4]["title"], "nobody.thing", "没有显示名就用名字");
+        for key in ["name", "title", "state", "reason"] {
+            assert!(tools[0].get(key).is_some(), "{key}");
+        }
+
+        // 玩家点“允许”：只记要确认的那个，记的是它这时的副作用；之后就能调了，对外也看不到 confirmed
+        let map = rules.to_confirm(automation.action.source());
+        assert_eq!(
+            map.keys().collect::<Vec<_>>(),
+            ["settings.update"],
+            "不用确认的、调不了的不记"
+        );
+        let confirmed = library
+            .confirm(&automation.id, automation.action.source(), map)
+            .unwrap();
+        assert_eq!(states(&rules, &confirmed)[1].1, "ready");
+        let value = describe(&confirmed, false, &rules);
+        assert_eq!(value["needsConfirm"], false);
+        assert!(value.get("confirmed").is_none(), "确认的原文不往外给");
+        assert!(value["action"].get("source").is_none());
+        assert!(automation_json(&confirmed, true).get("confirmed").is_none());
+    }
+
+    /// D3：插件关着、数据开关关着是 `off`（说要打开哪个）；只读模式、权限里禁止是 `blocked`（说去「权限」里改）。
+    #[test]
+    fn switched_off_plugins_and_permissions_say_what_to_change() {
+        let (_dir, _library, automation) = saved(program(
+            "tool('lol.match') tool('music', { action = 'play' })",
+        ));
+        let line = |settings: Settings, index: usize| {
+            ToolRules::of(settings).lines(&automation)[index].clone()
+        };
+        let mut settings = Settings::default();
+        assert_eq!(
+            line(settings.clone(), 0).state,
+            ToolState::Ready,
+            "这一局的数据是可信的"
+        );
+        settings
+            .plugins
+            .entry("lol".into())
+            .or_default()
+            .sources
+            .insert("client".into(), false);
+        assert!(matches!(
+            line(settings.clone(), 0).state,
+            ToolState::Off(r) if r.contains("“读客户端数据”")
+        ));
+        settings.plugins.get_mut("lol").unwrap().enabled = Some(false);
+        let off = line(settings.clone(), 0);
+        assert!(matches!(&off.state, ToolState::Off(r) if r.contains("插件关着")));
+        assert_eq!(off.state.word(), "off");
+        assert_ne!(off.title, "lol.match", "插件关着也有显示名");
+
+        let mut settings = Settings::default();
+        settings.agent.permissions.mode = kotone_core::agent::Mode::ReadOnly;
+        assert!(matches!(
+            line(settings.clone(), 1).state,
+            ToolState::Blocked(r) if r.contains("只读模式") && r.contains("「权限」")
+        ));
+        let mut settings = Settings::default();
+        settings
+            .agent
+            .permissions
+            .rules
+            .insert("music".into(), kotone_core::agent::Rule::Deny);
+        assert!(matches!(
+            line(settings, 1).state,
+            ToolState::Blocked(r) if r.contains("禁止")
+        ));
+    }
+
+    /// 测试清单 11、13：安排之前查一遍——等你确认的不运行（说去「自动化」页点允许）；临时程序只能调允许的；工具名
+    /// 不是直接写的、调不了的不运行，原因里带着是哪个工具。
+    #[test]
+    fn nothing_runs_while_a_tool_waits_for_confirmation_or_cannot_be_called() {
+        let rules = ToolRules::of(Settings::default());
+        let none = Confirmed::new();
+        let asks = "tool('settings.update', { patch = {} })";
+        let error = rules.check(asks, Some(&none)).unwrap_err();
+        assert!(
+            error.contains("「自动化」页") && error.contains("settings.update"),
+            "{error}"
+        );
+        let confirmed: Confirmed = rules.to_confirm(asks);
+        assert!(rules.check(asks, Some(&confirmed)).is_ok());
+        // 临时程序（她和外部 Agent 的 automation.run {source}）：要确认的就是不能调，确认了也不算
+        let temp = rules.check(asks, None).unwrap_err();
+        assert!(temp.contains("临时程序"), "{temp}");
+        assert!(rules
+            .check("tool('music', { action = 'play' })", None)
+            .is_ok());
+        assert!(rules
+            .check("tool(args.name)", None)
+            .unwrap_err()
+            .contains("直接写工具名"));
+        assert!(rules
+            .check(
+                "say('好') tool('game_chat.send', { text = 'gg' })",
+                Some(&none)
+            )
+            .unwrap_err()
+            .contains("game_chat.send"));
+        // 工具后来多了副作用：要重新确认
+        let mut stale = confirmed.clone();
+        stale.insert("settings.update".into(), Vec::new());
+        assert!(rules.check(asks, Some(&stale)).is_err());
+        assert!(rules.check("say('只说一句')", None).is_ok());
+    }
+
+    /// D3、D9：编辑器照还没存的程序算“会调用：…”——程序没改，存着的确认算数（直接“保存”）；改了程序，要再点一次
+    /// “允许并保存”；新建的、工具名不是直接写的说清楚。只给插件页面用的工具调不了。
+    #[test]
+    fn the_editor_previews_the_program_being_written() {
+        let source = "tool('settings.update', { patch = {} })";
+        let (_dir, library, automation) = saved(program(source));
+        let rules = ToolRules::of(Settings::default());
+        let confirmed = library
+            .confirm(&automation.id, source, rules.to_confirm(source))
+            .unwrap();
+        let same = preview(&format!("{source}\n"), Some(&confirmed), &rules);
+        assert_eq!(
+            (same["needsConfirm"].clone(), same["error"].clone()),
+            (json!(false), Value::Null)
+        );
+        assert_eq!(same["tools"][0]["state"], "ready");
+        let edited = preview(&format!("{source}\nsay('好')"), Some(&confirmed), &rules);
+        assert_eq!(edited["needsConfirm"], true, "改了程序要重新允许");
+        assert_eq!(preview(source, None, &rules)["needsConfirm"], true);
+        let bad = preview("tool(args.name)", None, &rules);
+        assert!(bad["error"].as_str().unwrap().contains("直接写工具名"));
+        assert_eq!(bad["tools"], json!([]));
+        let page = preview("tool('music.state')", None, &rules);
+        assert_eq!(page["tools"][0]["state"], "blocked");
+        assert!(page["tools"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("页面"));
     }
 }

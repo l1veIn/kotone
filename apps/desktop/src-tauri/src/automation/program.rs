@@ -2,21 +2,23 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+use kotone_agent::catalog::ToolEntry;
 use kotone_core::assistant::is_legacy_reminder_session;
-use kotone_core::automation::{ProgramAction, Run};
+use kotone_core::automation::{program_failure, program_view, ProgramAction, Run};
 use kotone_core::cancel::CancellationToken;
 use kotone_core::input_lock::{InputGuard, InputUser};
 use kotone_core::reminders::DeliveryKind;
 use kotone_core::send_to_game::{ChannelPick, ChatRequest, SendToGame, Speaker};
 use kotone_platform_windows::inject;
 use kotone_script::{
-    Cancel, KeyAction, MouseAction, MouseButton, Pixels, Region, ScriptHost, TextLine,
+    Cancel, KeyAction, MouseAction, MouseButton, Pixels, Region, ScriptHost, TextLine, ToolReply,
 };
 use tauri::AppHandle;
 
-use super::{images_dir, MAX_IMAGE_SIDE};
+use super::{images_dir, Confirmed, ToolRules, MAX_IMAGE_SIDE};
 use crate::game_session::GameSession;
 use crate::ocr_engines::ocr_image;
+use crate::tool_call::{self, By};
 
 /// `say()` 最长多久（排队等她的输出队列也算在里面；以前播报循环的投递上限，ADR 045 D3）。超过就停下这句、记失败。
 pub(super) const SAY_LIMIT: Duration = Duration::from_secs(240);
@@ -24,6 +26,9 @@ pub(super) const SAY_LIMIT: Duration = Duration::from_secs(240);
 pub(super) const SAY_GRACE: Duration = Duration::from_secs(5);
 /// 多久看一次脚本的取消标记（停下时把它桥接到投递的取消 token）。
 const CANCEL_POLL: Duration = Duration::from_millis(50);
+
+/// `tool()` 等一个工具最多多久（ADR 046 D1，脚本引擎打断不了阻塞中的宿主调用，由宿主照这个数等）。
+pub(super) const TOOL_LIMIT: Duration = Duration::from_millis(kotone_script::TOOL_TIMEOUT_MS);
 
 /// 没绑游戏窗口时窗口函数的报错（ADR 045 D4 兜底：不进“游戏不在前台就暂停”的等待）。
 const NO_WINDOW: &str = "这次运行没有绑定游戏窗口（安排时没看出程序要操作游戏）：\
@@ -45,6 +50,8 @@ pub(super) struct DesktopHost {
     action: ProgramAction,
     /// 已经推送了几条（推送的 key 是 `<执行记录 id>-<第几条>`，每条都是新的）。
     pushes: AtomicU32,
+    /// 这段程序里直接写着的工具名（`tools_called`，安排时查过；`tool()` 调的名字要在这上面）。
+    tools: Vec<String>,
 }
 
 impl DesktopHost {
@@ -54,6 +61,7 @@ impl DesktopHost {
         cancel: Cancel,
         run: &Run,
     ) -> Self {
+        let action = run.program().clone();
         Self {
             app,
             session,
@@ -61,9 +69,24 @@ impl DesktopHost {
             started: Instant::now(),
             run_id: run.id.clone(),
             legacy_voice: is_legacy_reminder_session(&run.session_id),
-            action: run.program().clone(),
+            tools: kotone_core::automation::library::tools_called(&action.source)
+                .unwrap_or_default(),
+            action,
             pushes: AtomicU32::new(0),
         }
+    }
+
+    /// 保存的自动化对这次跑的这份程序的确认（每次 `tool()` 现读：玩家可能刚允许；定义上的程序要是这期间被改了，
+    /// 那上面的确认不算这份程序的）；临时程序是 None（只能调不用确认的）。
+    fn confirmed_now(&self) -> Option<Confirmed> {
+        let id = self.action.automation_id.as_deref()?;
+        let current = super::library(&self.app).ok().and_then(|l| l.get(id));
+        Some(
+            current
+                .filter(|a| a.action.source().trim() == self.action.source.trim())
+                .map(|a| a.confirmed)
+                .unwrap_or_default(),
+        )
     }
 
     /// 绑定的游戏窗口；没绑时报 [`NO_WINDOW`]。
@@ -180,6 +203,81 @@ where
     // 投递自己另有 Drop 守卫兜底。
     let _ = tokio::time::timeout(grace, &mut delivery).await;
     Err(interrupted)
+}
+
+/// 等一件事（`tool()` 调的工具）的结果。
+#[derive(Debug, PartialEq)]
+pub(super) enum Waited<T> {
+    Done(T),
+    /// 超过上限还没回来。
+    TimedOut,
+    /// 程序被停下了。
+    Stopped,
+}
+
+/// 最多等 `limit`；脚本被停下（`cancel`）就不等了（ADR 046 D1：停下就跟着停）。不等的那件事直接丢掉，不收尾：
+/// 工具调用没有要停的语音、要收的弹幕。
+pub(super) async fn wait_bounded<T>(
+    cancel: &Cancel,
+    limit: Duration,
+    work: impl Future<Output = T>,
+) -> Waited<T> {
+    let stopped = async {
+        while !cancel.is_cancelled() {
+            tokio::time::sleep(CANCEL_POLL).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = stopped => Waited::Stopped,
+        result = tokio::time::timeout(limit, work) => match result {
+            Ok(value) => Waited::Done(value),
+            Err(_) => Waited::TimedOut,
+        },
+    }
+}
+
+/// 程序里一次 `tool()` 能不能调（ADR 046 D1、D3）：名字要在这段程序的单子上（安排时按源码列的；`_G["to" .. "ol"]` 这类
+/// 绕过记号器的写法到这里就报错），再照这一刻的权限、插件开关判一次（规则可能刚改过）。能调交回这个工具的条目；
+/// 调不了返回原因（程序出错结束，执行记录写原因）。`confirmed`：保存的自动化是它对这份程序的确认，临时程序 None。
+pub(super) fn program_tool(
+    called: &[String],
+    rules: &ToolRules,
+    name: &str,
+    confirmed: Option<&Confirmed>,
+) -> Result<ToolEntry, String> {
+    if !called.iter().any(|c| c == name) {
+        return Err(format!(
+            "这段程序里没有直接写 tool(\"{name}\")，调不了：tool() 的第一个参数要直接写工具名"
+        ));
+    }
+    rules
+        .entry(name, confirmed)
+        .cloned()
+        .map_err(|state| state.refusal(name))
+}
+
+/// 工具回来以后交给程序的（ADR 046 D1、D4）：做成了给 [`program_view`]（不可信的只有 `{status}`）；工具自己说没成、超时
+/// 是 `nil, 原因`（不可信的只有“没成”，完整原因交给 `log`）；停下了返回错误（脚本引擎看得到停下，记成已取消）。
+pub(super) fn tool_reply(
+    name: &str,
+    untrusted: bool,
+    waited: Waited<Result<tool_call::Reply, String>>,
+    log: impl FnOnce(&str),
+) -> Result<ToolReply, String> {
+    let reason = match waited {
+        Waited::Done(Ok(reply)) => {
+            return Ok(ToolReply::Value(program_view(
+                reply.for_program(),
+                untrusted,
+            )))
+        }
+        Waited::Done(Err(reason)) => reason,
+        Waited::TimedOut => format!("{name} 超过 {} 秒没回来", TOOL_LIMIT.as_secs().max(1)),
+        Waited::Stopped => return Err(format!("已停下，不等 {name} 了")),
+    };
+    log(&reason);
+    Ok(ToolReply::Failed(program_failure(&reason, untrusted)))
 }
 
 fn platform_button(button: MouseButton) -> inject::MouseButton {
@@ -441,6 +539,26 @@ impl ScriptHost for DesktopHost {
     fn require_window(&self) -> Result<(), String> {
         self.window().map(|_| ())
     }
+
+    /// 调一个工具（ADR 046 D1）：先照这一刻的规则判能不能调（[`program_tool`]），再经和热键同一份的路调（[`tool_call`]），
+    /// 最多等 [`TOOL_LIMIT`]、停下就跟着停（[`wait_bounded`]），结果按“数据不是指令”挑好再交给程序（[`tool_reply`]）。
+    fn tool(&self, name: &str, args: &serde_json::Value) -> Result<ToolReply, String> {
+        let rules = ToolRules::now(&self.app);
+        let entry = program_tool(&self.tools, &rules, name, self.confirmed_now().as_ref())?;
+        let untrusted = entry.untrusted;
+        let app = self.app.clone();
+        let args = args.clone();
+        let waited =
+            tauri::async_runtime::block_on(wait_bounded(&self.cancel, TOOL_LIMIT, async move {
+                tool_call::call(&app, &entry, args, By::Program).await
+            }));
+        tool_reply(name, untrusted, waited, |reason| {
+            kotone_core::log::log(&format!(
+                "automation {}: {name} 没成：{reason}",
+                self.run_id
+            ))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -547,5 +665,417 @@ mod tests {
         assert!(started.elapsed() >= LIMIT);
         assert_eq!(SAY_LIMIT, Duration::from_secs(240));
         assert_eq!(SAY_GRACE, Duration::from_secs(5));
+    }
+
+    // ---------- ADR 046：程序里调工具 ----------
+
+    use crate::automation::ToolState;
+    use kotone_core::automation::library::{event_args, tools_called, validate_args};
+    use kotone_core::games::{trigger_matches, Armed, GameEvent, Triggers};
+    use kotone_core::settings::Settings;
+    use kotone_script::{Limits, Outcome};
+    use serde_json::{json, Value};
+    use std::sync::Mutex;
+
+    /// 测试清单 14：工具回来了就是回来了；超过上限不等了；停下就跟着停（不等到上限），已经停下了就不去调。
+    #[tokio::test]
+    async fn a_tool_call_waits_at_most_the_limit_and_stops_with_the_program() {
+        let cancel = Cancel::default();
+        assert_eq!(
+            wait_bounded(&cancel, LIMIT, async { 7 }).await,
+            Waited::Done(7)
+        );
+        let started = Instant::now();
+        assert_eq!(
+            wait_bounded(&cancel, LIMIT, std::future::pending::<()>()).await,
+            Waited::TimedOut
+        );
+        assert!(started.elapsed() >= LIMIT);
+        let stopper = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            stopper.cancel();
+        });
+        let started = Instant::now();
+        assert_eq!(
+            wait_bounded(&cancel, LIMIT, std::future::pending::<()>()).await,
+            Waited::Stopped
+        );
+        assert!(started.elapsed() < LIMIT, "停下就跟着停");
+        let called = Arc::new(AtomicBool::new(false));
+        let c = called.clone();
+        let waited = wait_bounded(&cancel, LIMIT, async move {
+            c.store(true, Ordering::SeqCst);
+        })
+        .await;
+        assert_eq!(waited, Waited::Stopped);
+        assert!(!called.load(Ordering::SeqCst), "已经停下了就不去调");
+        assert_eq!(TOOL_LIMIT, Duration::from_secs(30));
+    }
+
+    /// 测试清单 13、14：做成了——可信的原样给（有结构化结果用它），不可信的只有 status；工具自己说没成、超时——
+    /// `nil, 原因`（不可信的只有“没成”，完整原因进日志）；停下了——报错（脚本引擎记成已取消）。
+    #[test]
+    fn what_the_program_gets_back_from_a_tool() {
+        let done = |content: Value, structured: Option<Value>| {
+            Waited::Done(Ok(tool_call::Reply {
+                content,
+                structured,
+            }))
+        };
+        let quiet = |_: &str| {};
+        let this_match = tool_reply(
+            "lol.match",
+            false,
+            done(
+                json!("这局 12:30"),
+                Some(json!({"status": "ok", "gameTime": 750})),
+            ),
+            quiet,
+        );
+        assert_eq!(
+            this_match,
+            Ok(ToolReply::Value(json!({"status": "ok", "gameTime": 750})))
+        );
+        let music = tool_reply(
+            "music",
+            true,
+            done(
+                json!({"status": "playing", "playing": "某首歌 - 某人"}),
+                None,
+            ),
+            quiet,
+        );
+        assert_eq!(music, Ok(ToolReply::Value(json!({"status": "playing"}))));
+        let mut logged = String::new();
+        let failed = tool_reply(
+            "music",
+            true,
+            Waited::Done(Err("歌单「某人起的名字」没有版权".into())),
+            |reason| logged = reason.to_string(),
+        );
+        assert_eq!(failed, Ok(ToolReply::Failed("没成".into())));
+        assert!(logged.contains("某人起的名字"), "完整原因只进日志");
+        assert_eq!(
+            tool_reply(
+                "settings.get",
+                false,
+                Waited::Done(Err("读不到设置".into())),
+                quiet
+            ),
+            Ok(ToolReply::Failed("读不到设置".into()))
+        );
+        let Ok(ToolReply::Failed(timeout)) =
+            tool_reply("settings.get", false, Waited::TimedOut, quiet)
+        else {
+            panic!("超时是没成");
+        };
+        assert!(timeout.contains("30 秒"), "{timeout}");
+        assert_eq!(
+            tool_reply("music", true, Waited::TimedOut, quiet),
+            Ok(ToolReply::Failed("没成".into()))
+        );
+        assert!(tool_reply("music", true, Waited::Stopped, |_: &str| panic!(
+            "停下不算没成"
+        ))
+        .is_err());
+    }
+
+    /// 测试清单 8、12、13：名字不在这段程序的单子上调不了；屏幕上的字、读聊天、往游戏里打字、自动化自己的工具都调不了；
+    /// 放歌能调；要确认的，保存的自动化确认过才能调，临时程序不能；只读模式下放歌被拒。
+    #[test]
+    fn which_tools_a_running_program_may_call() {
+        let rules = ToolRules::of(Settings::default());
+        let called: Vec<String> = [
+            "music",
+            "ocr.recognize",
+            "companion.read_chat",
+            "game_chat.send",
+            "lol.shout",
+            "automation.run",
+            "settings.update",
+        ]
+        .map(String::from)
+        .to_vec();
+        let none = Confirmed::new();
+        assert_eq!(
+            program_tool(&called, &rules, "music", None).unwrap().name,
+            "music"
+        );
+        assert!(program_tool(&called, &rules, "lol.match", None)
+            .unwrap_err()
+            .contains("直接写"));
+        for name in [
+            "ocr.recognize",
+            "companion.read_chat",
+            "game_chat.send",
+            "lol.shout",
+            "automation.run",
+        ] {
+            let error = program_tool(&called, &rules, name, Some(&none)).unwrap_err();
+            assert!(error.contains(name), "{name}: {error}");
+        }
+        assert!(
+            program_tool(&called, &rules, "settings.update", Some(&none))
+                .unwrap_err()
+                .contains("「自动化」页")
+        );
+        let confirmed = rules.to_confirm("tool('settings.update', { patch = {} })");
+        assert!(program_tool(&called, &rules, "settings.update", Some(&confirmed)).is_ok());
+        assert!(program_tool(&called, &rules, "settings.update", None)
+            .unwrap_err()
+            .contains("临时程序"));
+        let mut settings = Settings::default();
+        settings.agent.permissions.mode = kotone_core::agent::Mode::ReadOnly;
+        assert!(
+            program_tool(&called, &ToolRules::of(settings), "music", Some(&none))
+                .unwrap_err()
+                .contains("只读模式")
+        );
+    }
+
+    /// 假宿主：`tool()` 走和真宿主同一个判断和整理（[`program_tool`]、[`tool_reply`]），工具本身是假的——记下调了什么，
+    /// 回 `reply`（当成插件给她的那份内容）。说话、弹幕、推送记下来；没绑游戏窗口。
+    struct FakeHost {
+        rules: ToolRules,
+        called: Vec<String>,
+        confirmed: Option<Confirmed>,
+        reply: Value,
+        calls: Mutex<Vec<(String, Value)>>,
+        shown: Mutex<Vec<String>>,
+        started: Instant,
+    }
+
+    impl FakeHost {
+        fn new(source: &str, confirmed: Option<Confirmed>, reply: Value) -> Self {
+            Self {
+                rules: ToolRules::of(Settings::default()),
+                called: tools_called(source).unwrap(),
+                confirmed,
+                reply,
+                calls: Mutex::default(),
+                shown: Mutex::default(),
+                started: Instant::now(),
+            }
+        }
+
+        fn show(&self, text: &str) -> Result<(), String> {
+            self.shown.lock().unwrap().push(text.to_string());
+            Ok(())
+        }
+    }
+
+    impl ScriptHost for FakeHost {
+        fn now_ms(&self) -> u64 {
+            self.started.elapsed().as_millis() as u64
+        }
+        fn sleep(&self, ms: u64, cancel: &Cancel) -> bool {
+            std::thread::sleep(Duration::from_millis(ms));
+            !cancel.is_cancelled()
+        }
+        fn game_focused(&self) -> bool {
+            false
+        }
+        fn key(&self, _: KeyAction, _: &str) -> Result<(), String> {
+            Err(NO_WINDOW.into())
+        }
+        fn type_text(&self, _: &str) -> Result<(), String> {
+            Err(NO_WINDOW.into())
+        }
+        fn chat(&self, _: &str, _: Option<&str>) -> Result<(), String> {
+            Err(NO_WINDOW.into())
+        }
+        fn brightness(&self, _: Region) -> Result<f64, String> {
+            Err(NO_WINDOW.into())
+        }
+        fn color_at(&self, _: f64, _: f64) -> Result<[u8; 3], String> {
+            Err(NO_WINDOW.into())
+        }
+        fn pixels(&self, _: Region) -> Result<Pixels, String> {
+            Err(NO_WINDOW.into())
+        }
+        fn ocr(&self, _: Region) -> Result<Vec<TextLine>, String> {
+            Err(NO_WINDOW.into())
+        }
+        fn image(&self, _: &str) -> Result<Pixels, String> {
+            Err(NO_WINDOW.into())
+        }
+        fn mouse(&self, _: MouseAction) -> Result<(), String> {
+            Err(NO_WINDOW.into())
+        }
+        fn say(&self, text: &str, _: bool) -> Result<(), String> {
+            self.show(text)
+        }
+        fn toast(&self, text: &str) -> Result<(), String> {
+            self.show(text)
+        }
+        fn push(&self, text: &str) -> Result<(), String> {
+            self.show(text)
+        }
+        fn ask(&self, _: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn require_window(&self) -> Result<(), String> {
+            Err(NO_WINDOW.into())
+        }
+        fn tool(&self, name: &str, args: &Value) -> Result<ToolReply, String> {
+            let entry = program_tool(&self.called, &self.rules, name, self.confirmed.as_ref())?;
+            self.calls
+                .lock()
+                .unwrap()
+                .push((name.to_string(), args.clone()));
+            let reply = tool_call::Reply {
+                content: self.reply.clone(),
+                structured: None,
+            };
+            tool_reply(name, entry.untrusted, Waited::Done(Ok(reply)), |_| {})
+        }
+    }
+
+    fn run_on(
+        source: &str,
+        args: &serde_json::Map<String, Value>,
+        host: FakeHost,
+    ) -> (kotone_script::RunReport, Arc<FakeHost>) {
+        let host = Arc::new(host);
+        let report = kotone_script::run_with_args(
+            source,
+            args,
+            host.clone() as Arc<dyn ScriptHost>,
+            Limits::default(),
+            Cancel::default(),
+        );
+        (report, host)
+    }
+
+    /// 验收场景（ADR 046 末尾）：“队友都倒了放首歌”。存得进来（`lol.death` 是英雄联盟插件登记的事件）；不用游戏窗口、
+    /// 不会叫她；`music` 默认允许、不用确认。最后一个队友倒下（我还活着）那一件触发它，对面死了、还剩两个队友、我死了
+    /// 都不触发，60 秒里不再触发。程序调到 `music`（`action = "play"`，`query` 是参数的缺省值），拿到的只有 `{status}`：
+    /// 没登录时弹一句，放上了什么都不说。
+    #[test]
+    fn acceptance_play_a_song_when_the_last_ally_falls() {
+        let (_dir, _library, automation) = crate::automation::tests::saved(json!({
+            "name": "队友都倒了放首歌",
+            "params": [{"name": "song", "label": "放什么", "type": "text", "maxLength": 100, "default": "Legends Never Die"}],
+            "action": {"kind": "program", "source": "local r = tool(\"music\", { action = \"play\", query = args.song })\nif not r then\n  log(\"没放成\")\nelseif r.status == \"need_login\" then\n  toast(\"网易云音乐还没登录，没放成\")\nend"},
+            "on": {"event": ["lol.death"], "game": "lol", "match": {"team": "ally", "meAlive": true, "alliesAlive": 1}, "cooldownSeconds": 60}
+        }));
+        let source = automation.action.source();
+        let uses = automation.action.uses();
+        assert!(!uses.window && !uses.asks, "不用游戏窗口、不会叫她");
+        let rules = ToolRules::of(Settings::default());
+        let lines = rules.lines(&automation);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| (l.name.as_str(), l.state.clone()))
+                .collect::<Vec<_>>(),
+            [("music", ToolState::Ready)],
+            "放歌默认允许，不用确认"
+        );
+        assert!(rules.check(source, Some(&automation.confirmed)).is_ok());
+
+        let death = |data: Value| GameEvent {
+            id: "e-1".into(),
+            kind: "lol.death".into(),
+            game: "lol".into(),
+            match_id: "m-1".into(),
+            time: 0,
+            game_time: Some(900.0),
+            source: "lol/live-client".into(),
+            data: data.as_object().unwrap().clone(),
+        };
+        let fields = |team: &str, me: bool, allies: u32, me_alive: bool| {
+            json!({"team": team, "champion": "Ahri", "me": me, "killer": "Zed", "respawnSeconds": 30,
+                   "alliesAlive": allies, "enemiesAlive": 4, "meAlive": me_alive})
+        };
+        let trigger = automation.on.as_ref().unwrap();
+        for (data, why) in [
+            (fields("enemy", false, 1, true), "对面死了"),
+            (fields("ally", false, 2, true), "还剩两个队友"),
+            (fields("ally", true, 0, false), "我死了"),
+        ] {
+            assert!(!trigger_matches(trigger, &death(data)), "{why}");
+        }
+        let last_ally = death(fields("ally", false, 1, true));
+        let armed = [Armed {
+            id: &automation.id,
+            trigger,
+        }];
+        let mut triggers = Triggers::default();
+        let fires = triggers.on_event(&armed, &last_ally, 1_000);
+        assert_eq!(fires.len(), 1);
+        assert!(
+            triggers.on_event(&armed, &last_ally, 30_000).is_empty(),
+            "60 秒冷却"
+        );
+
+        let args = validate_args(
+            &automation.params,
+            &event_args(&automation.params, &fires[0].event),
+        )
+        .unwrap();
+        let confirmed = Some(automation.confirmed.clone());
+        let (report, host) = run_on(
+            source,
+            &args,
+            FakeHost::new(
+                source,
+                confirmed.clone(),
+                json!({"status": "need_login", "text": "要先登录网易云音乐"}),
+            ),
+        );
+        assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+        assert_eq!(
+            *host.calls.lock().unwrap(),
+            [(
+                "music".to_string(),
+                json!({"action": "play", "query": "Legends Never Die"})
+            )]
+        );
+        assert_eq!(*host.shown.lock().unwrap(), ["网易云音乐还没登录，没放成"]);
+
+        let (report, host) = run_on(
+            source,
+            &args,
+            FakeHost::new(
+                source,
+                confirmed,
+                json!({"status": "playing", "playing": "Legends Never Die - Against The Current"}),
+            ),
+        );
+        assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+        assert!(host.shown.lock().unwrap().is_empty(), "放上了就安静");
+    }
+
+    /// 测试清单 13、D4：不可信的工具程序只拿得到 status（歌名拿不到）；绕过记号器拼出来的名字（`_G["to" .. "ol"]`）
+    /// 安排时看不出来，一调就让程序出错结束。
+    #[test]
+    fn programs_see_only_the_status_and_cannot_sneak_in_a_tool_name() {
+        let source = "local r = tool('music', { action = 'now' })\nlog(tostring(r.status))\nlog(tostring(r.playing))";
+        let (report, _) = run_on(
+            source,
+            &Default::default(),
+            FakeHost::new(
+                source,
+                None,
+                json!({"status": "playing", "playing": "某首歌 - 某人"}),
+            ),
+        );
+        assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+        assert_eq!(report.log, ["playing", "nil"]);
+
+        let sneaky = "local f = _G['to' .. 'ol']\nf('music', { action = 'play' })";
+        assert_eq!(tools_called(sneaky).unwrap(), Vec::<String>::new());
+        let (report, host) = run_on(
+            sneaky,
+            &Default::default(),
+            FakeHost::new(sneaky, None, json!({"status": "playing"})),
+        );
+        assert!(
+            matches!(&report.outcome, Outcome::Error(e) if e.contains("直接写")),
+            "{report:?}"
+        );
+        assert!(host.calls.lock().unwrap().is_empty());
     }
 }
