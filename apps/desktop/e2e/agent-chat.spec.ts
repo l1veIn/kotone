@@ -243,6 +243,8 @@ test("streams text and thinking, tracks tool card states, asks for permission an
     await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-2", name: "saved.abc", content: "没有这个自动化", isError: true, untrusted: false, atMs: T + 2100 } });
   }, T);
   await expect(send).toHaveAttribute("data-tool-status", "completed");
+  // 发到游戏聊天的那一行折叠时就写发的字（2026-11-27 玩家）
+  await expect(send.getByTestId("agent-tool-title")).toHaveText("发到游戏聊天：gg");
   await expect(saved).toHaveAttribute("data-tool-status", "failed");
   await expect(saved.getByTestId("agent-tool-status")).toHaveText("失败");
   await send.locator("summary").click();

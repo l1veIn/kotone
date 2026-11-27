@@ -1,11 +1,11 @@
 <script lang="ts">
-  // 「自动化」页（ADR 013 §8）：一个列表——每个自动化 ▶ 运行 / ■ 停止、定时、详情；临时的提醒与程序排在最上面；
-  // 下面可以展开全部记录。
+  // 「自动化」页（ADR 013 §8、ADR 045 D9）：一个列表——每个自动化 ▶ 运行 / ■ 停止、定时、详情；临时的提醒与程序排在最上面；
+  // 下面可以展开全部记录。新建时先选模板（模板随已保存的自动化一起从后端来）。
   import { companionName } from "$lib/stores/companion";
   import { onMount } from "svelte";
   import {
-    listAutomations, listRuns, stopRuns, subscribeAutomations,
-    type Automation, type AutomationRun, type RunsSnapshot,
+    listRuns, listSaved, stopRuns, subscribeAutomations,
+    type Automation, type AutomationRun, type AutomationTemplate, type RunsSnapshot,
   } from "../../../lib/automation";
   import { isTauri } from "../../../lib/ipc";
   import { errText, settingsStore, toast } from "../../../lib/stores/ui";
@@ -19,6 +19,7 @@
   let { onOpenHotkeys }: { onOpenHotkeys: () => void } = $props();
   let snapshot = $state<RunsSnapshot | null>(null);
   let automations = $state<Automation[]>([]);
+  let templates = $state<AutomationTemplate[]>([]);
   let loadError = $state("");
   let now = $state(Date.now());
   let busyId = $state("");
@@ -28,16 +29,18 @@
   const open = $derived((snapshot?.runs ?? []).filter((r) => r.status === "pending" || r.status === "running")
     .sort((a, b) => a.dueAtMs - b.dueAtMs));
   const history = $derived((snapshot?.runs ?? []).filter((r) => r.status !== "pending" && r.status !== "running"));
-  const runningPrograms = $derived(open.filter((r) => r.action.kind === "program").length);
+  // 停下（ADR 045 D6）停掉运行中的、取消等待中绑了游戏窗口的；只剩等待中的提醒时没什么可停
+  const stoppable = $derived(open.some((r) => r.status === "running" || !!r.action.target));
   const stopHotkey = $derived($settingsStore?.automationStopHotkey ?? "");
 
   async function refresh() {
     const current = ++version;
     try {
-      const [runs, saved] = await Promise.all([listRuns(), listAutomations()]);
+      const [runs, saved] = await Promise.all([listRuns(), listSaved()]);
       if (disposed || current !== version) return;
       snapshot = runs;
-      automations = saved;
+      automations = saved.automations;
+      templates = saved.templates ?? [];
       loadError = "";
     } catch (error) {
       if (!disposed && current === version) loadError = m.auto_page_load_failed({ error: errText(error) });
@@ -89,12 +92,12 @@
       <button type="button" class="ml-1 text-primary hover:underline" onclick={onOpenHotkeys}>{m.auto_page_change_hotkey()}</button>
     </span>
     <Button variant="ghost" size="sm" onclick={refresh}><RefreshCw class="size-3.5" />{m.auto_page_refresh()}</Button>
-    <Button variant="outline" size="sm" disabled={!runningPrograms && !open.some((r) => r.action.kind === "program")}
+    <Button variant="outline" size="sm" disabled={!stoppable}
       onclick={stopAll} data-testid="automation-stop-all"><Square class="size-3 fill-current" />{m.auto_page_stop_all()}</Button>
   </div>
   {#if !snapshot}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">{m.auto_page_loading()}</p>
   {:else}
-    <AutomationList {automations} runs={snapshot.runs} {now} {busyId} onStop={stop} onChanged={refresh} />
+    <AutomationList {automations} {templates} runs={snapshot.runs} {now} {busyId} onStop={stop} onChanged={refresh} />
     <details class="group" data-testid="automation-history">
       <summary class="cursor-pointer list-none px-1 text-sm font-semibold text-foreground">
         {m.auto_page_history_title({ count: history.length })} <span class="text-xs font-normal text-muted-foreground">{m.auto_page_history_hint()}</span>

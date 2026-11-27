@@ -224,6 +224,7 @@
   "chat_tool_status_pending": "Waiting",
   "chat_tool_status_running": "Running",
   "chat_tool_card_incomplete": "This tool didn't return a result before the turn ended.",
+  "chat_tool_sent_text": "{tool}: {text}",
   "chat_tool_card_arguments": "Arguments",
   "chat_tool_card_result": "Result",
   "chat_tool_card_untrusted": "({source}, for reference only)",

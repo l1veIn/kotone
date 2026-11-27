@@ -273,6 +273,23 @@ test("a line push and a voice push are a small text row in the chat, updated in 
   await expect(page.getByTestId("push-item")).toHaveCount(2);
 });
 
+test("an automation's push() is a line from 自动化, not from a plugin (ADR 045 D2)", async ({ page }) => {
+  await open(page);
+  // i18n-ignore-start：示例推送（后端合成的自动化推送：plugin = automation，trigger = 自动化 id，key = 执行记录 id + 第几条）
+  const message = {
+    role: "notice", text: "自动化 推送：买眼提醒", atMs: T + 10_000,
+    push: { plugin: "automation", pluginName: "自动化", trigger: "auto-3", title: "买眼提醒", key: "run-7-1", line: { cells: [{ text: "记得买真眼" }] } },
+  };
+  // i18n-ignore-end
+  await page.evaluate(async (message) => {
+    await window.pushTest.push({ kind: "posted", conversationId: "c-old", plugin: "automation", trigger: "auto-3", key: "run-7-1", held: false, alert: false, message });
+  }, message);
+  const row = pushAt(page, "run-7-1");
+  await expect(row.getByTestId("push-from")).toContainText("自动化 推送");
+  await expect(row.getByTestId("push-title")).toHaveText("买眼提醒");
+  await expect(row.getByTestId("push-cell")).toHaveText(["记得买真眼"]);
+});
+
 test("clicking a card in the floating window opens the chat at the pushed card", async ({ page }) => {
   await open(page);
   // 玩家在别的页面（交互设置）

@@ -32,6 +32,22 @@
   const presentation = $derived(toolPresentation(tool.status, runActive));
   const title = $derived(pluginToolLabel(tool.call.name) ?? toolLabel(tool.call.name));
   const saved = $derived(tool.call.name.startsWith("saved."));
+  /** 发到游戏聊天（game_chat.send，英雄联盟一键喊话 lol.shout 也走这个入口）：折叠时那一行就写发的字
+   * （2026-11-27 玩家：“要，直接显示发的字”）。game_chat.send 取参数的 text；lol.shout 的字是插件现生成的，取结果里的第一行
+   * （只看不发的 preview 不算）。多行取第一行，太长截断。 */
+  const sentText = $derived.by(() => {
+    const firstLine = (text: unknown) => (typeof text === "string" ? text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "" : "");
+    let text = "";
+    try {
+      if (tool.call.name === "game_chat.send") text = firstLine((JSON.parse(tool.call.arguments || "{}") as { text?: unknown }).text);
+      else if (tool.call.name === "lol.shout" && tool.status === "completed") {
+        const result = JSON.parse(tool.content ?? "") as { preview?: boolean; lines?: unknown[] };
+        if (!result.preview && Array.isArray(result.lines)) text = firstLine(result.lines[0]);
+      }
+    } catch { /* 参数、结果可能是截断的 JSON：照旧只写工具名 */ }
+    const chars = [...text];
+    return chars.length > 40 ? `${chars.slice(0, 40).join("")}…` : text;
+  });
   const input = $derived(open ? formatToolJson(tool.call.arguments) : "");
   const output = $derived(open ? formatToolJson(tool.content) : "");
   /** 改了设置的工具：“改了 xxx → 去看看”，点了跳到设置里的位置。 */
@@ -62,7 +78,7 @@
   <details bind:open class="group/tool min-w-0">
     <summary class="flex h-7 w-fit max-w-full cursor-pointer list-none items-center gap-2 rounded-md pr-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
       {#if saved}<Zap class="size-3.5 shrink-0" />{:else}<Wrench class="size-3.5 shrink-0" />{/if}
-      <span class="min-w-0 truncate text-foreground/85" title={tool.call.name}>{title}</span>
+      <span class="min-w-0 truncate text-foreground/85" title={tool.call.name} data-testid="agent-tool-title">{sentText ? m.chat_tool_sent_text({ tool: title, text: sentText }) : title}</span>
       <span class="size-0.5 shrink-0 rounded-full bg-muted-foreground/60" aria-hidden="true"></span>
       <span class="flex shrink-0 items-center gap-1 text-xs whitespace-nowrap {presentation.failed ? 'text-destructive' : tool.status === 'completed' ? 'text-success' : presentation.spinning ? 'text-primary' : ''}" data-testid="agent-tool-status">
         {#if presentation.spinning}<LoaderCircle class="size-3 animate-spin" />

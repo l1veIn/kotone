@@ -12,6 +12,7 @@ import { isTauri, updateSettings } from "./ipc";
 import type { Settings } from "./ipc/contracts";
 import * as pluginsMock from "./ipc/pluginsMock";
 import * as messages from "./paraglide/messages.js";
+import { m } from "./paraglide/messages.js";
 import { settingsStore } from "./stores/ui";
 
 export type PluginVisibility = "model" | "app";
@@ -246,6 +247,9 @@ export const pluginDescription = (m: PluginManifest) => pluginText(m.id, "descri
 export const sourceName = (m: PluginManifest, s: PluginSourceSpec) => pluginText(m.id, `source_${keyPart(s.id)}_name`, s.name);
 export const sourceDescription = (m: PluginManifest, s: PluginSourceSpec) => pluginText(m.id, `source_${keyPart(s.id)}_desc`, s.description);
 export const sourceRisk = (m: PluginManifest, s: PluginSourceSpec) => (s.risk ? pluginText(m.id, `source_${keyPart(s.id)}_risk`, s.risk) : "");
+/** 推送是谁发的：插件的名字（插件的文案）。自动化程序里的 push()（ADR 045 D2）也走推送，记成 plugin = "automation"，
+ * 那是本体的“自动化”，不是插件，名字用本体的文案。 */
+export const pushFromName = (id: string, fallback: string) => (id === "automation" ? m.auto_push_from() : pluginText(id, "name", fallback));
 /** 推送的名字、时机、做什么：插件的文案 `plugin_<id>_push_<推送>_title / _when / _what`，没有时用清单里的中文。 */
 export const pushTitle = (id: string, push: { id: string; title: string }) => pluginText(id, `push_${keyPart(push.id)}_title`, push.title);
 export const pushWhen = (m: PluginManifest, p: PluginPushSpec) => pluginText(m.id, `push_${keyPart(p.id)}_when`, p.when);

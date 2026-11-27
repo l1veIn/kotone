@@ -15,11 +15,13 @@ test("LoL events come from the plugin; with the plugin off they leave the picker
   const automation = page.getByTestId("automation-page");
 
   // 插件开着：选英雄联盟，事件里有插件登记的“拿了小龙”，带“哪一边”
+  // “让她做”是一个模板（ADR 045 D9）：程序是 ask(args.request)，只填交给她的那句话
   await automation.getByTestId("automation-new").click();
+  await automation.locator('[data-template="ask"]').click();
   const editor = automation.getByTestId("automation-editor");
   await editor.getByLabel("自动化名字").fill("对面拿龙提醒我");
-  await editor.getByRole("button", { name: "让琴音做", exact: true }).click();
-  await editor.getByTestId("automation-prompt").fill("提醒我对面拿了龙");
+  await editor.getByLabel("让她做什么", { exact: true }).fill("提醒我对面拿了龙");
+  await editor.getByLabel("让她做什么", { exact: true }).blur();
   await editor.getByTestId("automation-trigger-enabled").check();
   await editor.getByTestId("automation-trigger-game").click();
   await page.getByRole("option", { name: "League of Legends", exact: true }).click();
@@ -32,6 +34,7 @@ test("LoL events come from the plugin; with the plugin off they leave the picker
 
   const saved = automation.getByTestId("automation-item").filter({ hasText: "对面拿龙提醒我" });
   await expect(saved.getByTestId("automation-item-trigger")).toHaveText("League of Legends · 拿了小龙（对面） · 每局一次");
+  await expect(saved.getByTestId("automation-item-asks")).toHaveText("会叫琴音");
   await expect(saved.getByTestId("automation-item-trigger-off")).toHaveCount(0);
 
   // 关掉英雄联盟插件：保存过的还在，说清楚不会发生
@@ -57,6 +60,7 @@ test("LoL events come from the plugin; with the plugin off they leave the picker
 
   // 新建：插件关着时英雄联盟只剩通用的事
   await automation.getByTestId("automation-new").click();
+  await automation.locator('[data-template="blank"]').click();
   await editor.getByTestId("automation-trigger-enabled").check();
   await editor.getByTestId("automation-trigger-game").click();
   await page.getByRole("option", { name: "League of Legends", exact: true }).click();

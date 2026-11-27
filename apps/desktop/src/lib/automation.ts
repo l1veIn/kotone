@@ -1,4 +1,5 @@
-// 自动化（ADR 013）：执行记录（含提醒）、已保存的自动化、运行与停止。
+// 自动化（ADR 013、ADR 045）：执行记录（含提醒）、已保存的自动化、运行与停止。动作只有程序一种：
+// 说一句、弹幕、推送、交给她都是程序里的函数；“用不用游戏窗口”“会不会叫她”由后端看源码算好给界面。
 // 浏览器预览使用本地示例数据，不运行任何程序、不按键。
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -10,12 +11,17 @@ export type RunStatus = "pending" | "running" | "finished" | "failed" | "cancell
 
 export interface RunTarget { handle: number; pid: number; label: string }
 
-export type RunAction =
-  | { kind: "speak"; text: string; delivery: DeliveryKind[] }
-  | {
-    kind: "program"; name: string; source?: string; automationId?: string | null;
-    args?: Record<string, unknown>; target?: RunTarget | null;
-  };
+/** 一次执行跑的程序（快照）。`automationId`、`target` 总是在（临时程序、不用游戏窗口的是 null）；
+ * 只有按游戏事件触发的才带 `event`（只露类型和游戏）。列表里带源码（认提醒用）。 */
+export interface RunAction {
+  kind: "program";
+  name: string;
+  source?: string;
+  automationId: string | null;
+  args: Record<string, unknown>;
+  target: RunTarget | null;
+  event?: { type: string; game?: string | null };
+}
 
 export interface ProgramReport { outcome: "finished" | "stopped" | "limit" | "error"; keys: number; durationMs: number; log: string[] }
 
@@ -53,11 +59,8 @@ export interface ParamSpec {
   default?: unknown;
 }
 
-export type AutomationBody =
-  | { kind: "program"; source?: string }
-  | { kind: "speak"; text: string; delivery: DeliveryKind[] }
-  /** 让她做（ADR 036 D8）：触发时把这句话交给她跑一轮，每次花一次 AI 调用。 */
-  | { kind: "prompt"; text: string };
+/** 自动化做什么：一段程序（列表里不带源码，`automation_get` 才带）。 */
+export interface AutomationBody { kind: "program"; source?: string }
 
 /** 游戏事件触发（ADR 036 D6）：哪些事发生时运行。 */
 export interface EventTrigger {
@@ -75,8 +78,8 @@ export interface EventTrigger {
   enabled: boolean;
 }
 
-/** “让她做”每局最多触发几次（和后端一致）。 */
-export const PROMPT_PER_MATCH = 3;
+/** 程序里的 ask()（交给她）按游戏事件触发时每个自动化每局最多几次（和后端 `games::ASKS_PER_MATCH` 一致）。 */
+export const ASKS_PER_MATCH = 3;
 
 /** 定时（类似 crontab，本地时间）：到点用 args 运行一次；错过的不补。 */
 export interface Schedule { cron: string; enabled: boolean; args: Record<string, unknown> }
@@ -95,7 +98,28 @@ export interface Automation {
   on?: EventTrigger | null;
   /** 定时的下一次（列表里才有）。 */
   nextRunAtMs?: number | null;
+  /** 程序里用到游戏窗口（按键、看屏幕……）：▶ 先倒数让你切到游戏，运行时绑那个窗口（ADR 045 D4）。 */
+  usesWindow: boolean;
+  /** 程序里会叫她（ask）：每次花一次 AI 调用，不当工具交给她。 */
+  asks: boolean;
 }
+
+/** 新建时选的模板（ADR 045 D9）：说一句 / 推送一条 / 让她做 / 空白程序。名字和说明界面按 id 取文案。 */
+export interface AutomationTemplate {
+  id: string;
+  name: string;
+  description: string;
+  params: ParamSpec[];
+  source: string;
+}
+
+/** `automation_saved_list` 的结果。 */
+export interface SavedList { automations: Automation[]; max: number; templates: AutomationTemplate[] }
+
+/** ▶ 的结果：用到游戏窗口的先倒数；不用的直接排上（马上开始的是 started，晚一会儿的是 scheduled）。 */
+export type RunSavedResult =
+  | { status: "countdown"; seconds: number }
+  | { status: "started" | "scheduled"; id: string; target: null; dueAtUnixMs: number };
 
 /** 内置的“X 秒之后提醒我”。 */
 export const BUILTIN_REMIND_ID = "builtin-remind-later";
@@ -170,9 +194,24 @@ export const PARAM_TYPES: { id: ParamType; label: string }[] = [
   { id: "image", label: m.auto_param_type_image() },
 ];
 
+/** 提醒的三段固定程序（和后端 `automation.rs` 的 REMIND_* 一致，ADR 045 D3）→ 回答方式。 */
+const REMINDER_SOURCES: Record<string, DeliveryKind[]> = {
+  "say(args.text)": ["voice"],
+  "toast(args.text)": ["danmaku"],
+  "say(args.text, { toast = true })": ["voice", "danmaku"],
+};
+
+/** 提醒形状的程序（三段固定源码之一、`args.text` 是文字）：她设的提醒、旧的播报、内置“X 秒之后提醒我”跑出来的都是。
+ * 和后端 `Run::as_reminder` 同一个认法；执行记录里带源码，所以不靠“有没有绑窗口”猜。 */
+export function reminderOf(run: AutomationRun): { text: string; delivery: DeliveryKind[] } | null {
+  const delivery = REMINDER_SOURCES[run.action.source?.trim() ?? ""];
+  const text = run.action.args?.text;
+  return delivery && typeof text === "string" ? { text, delivery } : null;
+}
+
+/** 展示名：提醒取正文，别的取名字。 */
 export function runTitle(run: AutomationRun): string {
-  if (run.action.kind === "program") return run.action.name || m.auto_kind_program();
-  return run.action.text;
+  return reminderOf(run)?.text || run.action.name || m.auto_kind_program();
 }
 
 // ---------- 浏览器预览数据 ----------
@@ -185,19 +224,32 @@ function nextAt(h: number, m: number): number {
   if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
   return d.getTime();
 }
+
+/** 预览里粗略地看程序用到了什么（真实应用由后端 `ProgramUses::of` 算）：去掉注释和字符串，找当函数名用的名字。 */
+const WINDOW_FUNCTIONS = ["key", "key_down", "key_up", "type_text", "chat", "click", "mouse_move", "mouse_down", "mouse_up", "scroll",
+  "brightness", "color_at", "ocr", "find_text", "find_color", "find_image", "game_focused"];
+function previewUses(source: string): { usesWindow: boolean; asks: boolean } {
+  const code = source.replace(/--\[(=*)\[[\s\S]*?\]\1\]|--[^\n]*|\[(=*)\[[\s\S]*?\]\2\]|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, " ");
+  const names = new Set([...code.matchAll(/(?<![.:\w])([A-Za-z_]\w*)(?!\s*=[^=])/g)].map((match) => match[1]));
+  return { usesWindow: WINDOW_FUNCTIONS.some((name) => names.has(name)), asks: names.has("ask") };
+}
+
+const REMIND_BOTH = "say(args.text, { toast = true })";
 let previewRuns: AutomationRun[] = [
   {
     id: "preview-run-1", sessionId: "preview", status: "running", createdAtMs: t0 - 20_000, dueAtMs: t0 - 20_000, startedAtMs: t0 - 20_000,
     // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
-    action: { kind: "program", name: "界面示例：每秒按 Q", automationId: "preview-auto-1", args: { key: "Q", interval: 1000 }, target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } },
+    action: { kind: "program", name: "界面示例：每秒按 Q", source: "every(args.interval, function() key(args.key) end, { times = args.times })", automationId: "preview-auto-1", args: { key: "Q", interval: 1000 }, target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } },
   },
   {
+    // 她设的提醒：提醒形状的程序，不属于任何已保存的自动化、不绑窗口
     id: "preview-run-2", sessionId: "preview", status: "pending", createdAtMs: t0, dueAtMs: t0 + 300_000,
-    action: { kind: "speak", text: "界面示例：打野有闪了", delivery: ["voice", "danmaku"] },
+    action: { kind: "program", name: "界面示例：打野有闪了", source: REMIND_BOTH, automationId: null, args: { text: "界面示例：打野有闪了" }, target: null },
   },
   {
     id: "preview-run-3", sessionId: "preview", status: "finished", createdAtMs: t0 - 600_000, dueAtMs: t0 - 600_000, startedAtMs: t0 - 600_000, finishedAtMs: t0 - 590_000,
-    action: { kind: "program", name: "界面示例：变黑就按回车", target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } },
+    action: { kind: "program", name: "界面示例：变黑就按回车", source: "wait_until(function() return brightness(region(0, 0, 0.1, 0.1)) < 0.1 end); key(\"Enter\")", automationId: null, args: {},
+      target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } },
     report: { outcome: "finished", keys: 1, durationMs: 9_800, log: ["左上角变黑了"] },
   },
 ];
@@ -210,11 +262,14 @@ let previewAutomations: Automation[] = [
       { name: "times", label: "次数", description: "", type: "number", min: 1, max: 1000, integer: true },
     ],
     action: { kind: "program", source: "every(args.interval, function() key(args.key) end, { times = args.times })" },
+    usesWindow: true, asks: false,
   },
   {
+    // 以前的“播报”转换过来就是这样一小段程序（ADR 045 D1）
     id: "preview-auto-2", name: "界面示例：喝水提醒", description: "", createdBy: "agent", createdAtMs: t0, updatedAtMs: t0,
-    params: [], action: { kind: "speak", text: "该喝水了", delivery: ["danmaku"] },
+    params: [], action: { kind: "program", source: "toast(\"该喝水了\")" },
     schedule: { cron: "0 22 * * *", enabled: true, args: {} }, nextRunAtMs: nextAt(22, 0),
+    usesWindow: false, asks: false,
   },
   {
     id: BUILTIN_REMIND_ID, name: "X 秒之后提醒我", description: "过一会儿用语音和弹幕提醒你一句话，例如 300 秒后提醒“打小龙”。",
@@ -223,19 +278,35 @@ let previewAutomations: Automation[] = [
       { name: "delay_seconds", label: "几秒之后", description: "最多一天（86400 秒）", type: "number", min: 1, max: 86400, integer: true, default: 60 },
       { name: "text", label: "提醒什么", description: "", type: "text", maxLength: 100 },
     ],
-    action: { kind: "speak", text: "{text}", delivery: ["voice", "danmaku"] },
+    action: { kind: "program", source: REMIND_BOTH },
+    usesWindow: false, asks: false,
   },
   {
     id: BUILTIN_LOL_SCOUT_ID, name: "英雄联盟进加载界面播报突破口",
     description: "进加载界面时她查一下这局 10 个人的战绩，用一句话告诉你对面谁是突破口。每次花一次 AI 调用，默认关。",
     createdBy: "user", createdAtMs: t0, updatedAtMs: t0, params: [],
-    action: { kind: "prompt", text: "这局进加载界面了。用 lol.scout 看看对面谁是突破口，用一句话告诉我原因（说成信息，不贴标签）。" },
+    action: { kind: "program", source: "ask(\"这局进加载界面了。用 lol.scout 看看对面谁是突破口，用一句话告诉我原因（说成信息，不贴标签）。\")" },
     on: { event: ["game.phase_changed"], game: "lol", match: { to: "loading" }, oncePerMatch: true, enabled: false },
+    usesWindow: false, asks: true,
   },
 ];
+/** 和后端 `library::templates()` 一样的四个模板（名字和说明界面按 id 取文案，这里的只是后端给的原文）。 */
+const previewTemplates: AutomationTemplate[] = [
+  { id: "say", name: "说一句", description: "她开口说一句话。想同时弹幕就写 say(args.text, { toast = true })。",
+    params: [{ name: "text", label: "说什么", description: "", type: "text", maxLength: 200, default: "该看小地图了" }], source: "say(args.text)\n" },
+  { id: "push", name: "推送一条", description: "在 Kotone 聊天里记一条、悬浮窗显示一行；不出声，不调用 AI。最多 40 字。",
+    params: [{ name: "text", label: "推送什么", description: "", type: "text", maxLength: 40, default: "记得买真眼" }], source: "push(args.text)\n" },
+  { id: "ask", name: "让她做", description: "把一句话交给她，她看着办（查战绩、说话、调工具都行）。每次花一次 AI 调用；按游戏事件触发时每局最多 3 次。",
+    params: [{ name: "request", label: "让她做什么", description: "", type: "text", maxLength: 200, default: "看看现在的情况，用一句话告诉我该注意什么" }], source: "ask(args.request)\n" },
+  { id: "blank", name: "空白程序", description: "自己写一段程序。要通知就写 say / toast / push，不写就安静；按键类可以复制内置的程序。",
+    params: [], source: "-- 在这里写程序，例如：\n-- say(\"该买眼了\")\n" },
+];
+// i18n-ignore-end
 const previewListeners = new Set<() => void>();
 const notify = () => previewListeners.forEach((listener) => listener());
 const PREVIEW_ONLY = m.auto_preview_only();
+/** 列表里不带源码（和后端 `automation_saved_list` 一样），要源码用 getAutomation。 */
+const listed = (a: Automation): Automation => ({ ...structuredClone(a), action: { kind: "program" } });
 
 // ---------- 调用 ----------
 
@@ -243,23 +314,24 @@ export async function listRuns(): Promise<RunsSnapshot> {
   if (isTauri) return invoke("automation_runs");
   const runs = structuredClone(previewRuns);
   return {
-    running: runs.filter((r) => r.status === "running" && r.action.kind === "program").length,
+    // 名额只数绑了游戏窗口、正在跑的（ADR 045 D5）
+    running: runs.filter((r) => r.status === "running" && r.action.target).length,
     pending: runs.filter((r) => r.status === "pending").length,
     maxRunning: 3,
     runs,
   };
 }
 
-/** 取消 / 停止一条执行；不给 id = 停止全部自动化程序（等待中的提醒保留）。返回涉及条数。 */
+/** 取消 / 停止一条执行；不给 id = 停下（ADR 045 D6）：运行中的全停，等待中的只取消绑了游戏窗口的，等待中的提醒保留。返回涉及条数。 */
 export async function stopRuns(id?: string): Promise<number> {
   if (isTauri) return invoke("automation_stop", { id: id ?? null });
   let count = 0;
   for (const run of previewRuns) {
     const open = run.status === "pending" || run.status === "running";
-    const hit = id ? run.id === id : run.action.kind === "program";
+    const hit = id ? run.id === id : run.status === "running" || !!run.action.target;
     if (open && hit) {
       run.status = "cancelled";
-      run.message = "用户停止";
+      run.message = "用户停止"; // i18n-ignore：预览里模拟后端写的原因
       run.finishedAtMs = Date.now();
       count++;
     }
@@ -268,15 +340,20 @@ export async function stopRuns(id?: string): Promise<number> {
   return count;
 }
 
+/** 已保存的自动化、上限和新建用的模板。 */
+export async function listSaved(): Promise<SavedList> {
+  if (isTauri) return invoke("automation_saved_list");
+  return { automations: previewAutomations.map(listed), max: 200, templates: structuredClone(previewTemplates) };
+}
+
 export async function listAutomations(): Promise<Automation[]> {
-  if (isTauri) return (await invoke<{ automations: Automation[] }>("automation_saved_list")).automations;
-  return structuredClone(previewAutomations);
+  return (await listSaved()).automations;
 }
 
 export async function getAutomation(id: string): Promise<Automation> {
   if (isTauri) return invoke("automation_get", { id });
   const found = previewAutomations.find((a) => a.id === id);
-  if (!found) throw new Error(`找不到自动化 ${id}`);
+  if (!found) throw new Error(`找不到自动化 ${id}`); // i18n-ignore：预览里模拟后端的错误
   return structuredClone(found);
 }
 
@@ -284,15 +361,20 @@ export async function saveAutomation(draft: AutomationDraft): Promise<Automation
   if (isTauri) return invoke("automation_save", { draft });
   // 草稿可能带着界面状态的代理：存成普通 JSON，之后 structuredClone 才不会出错
   draft = JSON.parse(JSON.stringify(draft)) as AutomationDraft;
+  // i18n-ignore-start：预览里模拟后端的错误
   if (!draft.name.trim()) throw new Error("自动化名字不能为空，最多 40 字");
+  if (!draft.action.source?.trim()) throw new Error("自动化内容为空或超过 8000 字");
+  // i18n-ignore-end
   const now = Date.now();
   const existing = draft.id ? previewAutomations.find((a) => a.id === draft.id) : undefined;
+  const source = draft.action.source.trim();
   const saved: Automation = {
     id: existing?.id ?? `preview-auto-${now}`, name: draft.name.trim(), description: draft.description.trim(),
-    params: draft.params.map((p) => ({ ...p, label: p.label.trim() || p.name })), action: draft.action,
+    params: draft.params.map((p) => ({ ...p, label: p.label.trim() || p.name })), action: { kind: "program", source },
     createdBy: existing?.createdBy ?? "user", createdAtMs: existing?.createdAtMs ?? now, updatedAtMs: now,
     schedule: draft.schedule ?? null, nextRunAtMs: draft.schedule?.enabled ? now + 3_600_000 : null,
     on: draft.on ?? null,
+    ...previewUses(source),
   };
   previewAutomations = existing ? previewAutomations.map((a) => (a.id === saved.id ? saved : a)) : [...previewAutomations, saved];
   notify();
@@ -307,30 +389,38 @@ export async function deleteAutomation(id: string): Promise<boolean> {
   return previewAutomations.length !== before;
 }
 
-/** 从设置页运行：程序类倒数 switchSeconds 秒（切到游戏）后以那时的前台窗口为目标。 */
-export async function runAutomation(id: string, args: Record<string, unknown>, switchSeconds: number): Promise<{ status: string; seconds?: number }> {
+/** 从设置页运行（▶）：用到游戏窗口的倒数 switchSeconds 秒（切到游戏）后以那时的前台窗口为目标；
+ * 不用的直接排上（声明了数字参数 delay_seconds 的晚这么多秒开始）。 */
+export async function runAutomation(id: string, args: Record<string, unknown>, switchSeconds: number): Promise<RunSavedResult> {
   if (isTauri) return invoke("automation_run_saved", { id, args, switchSeconds });
   // 浏览器预览：只在列表里加一条示例执行，不会真的按键或出声
   const automation = previewAutomations.find((a) => a.id === id);
+  // i18n-ignore-start：预览里模拟后端的错误和示例窗口
   if (!automation) throw new Error(`找不到自动化 ${id}`);
   const now = Date.now();
   const missing = automation.params.find((p) => (p.default === undefined || p.default === null) && (args[p.name] === undefined || args[p.name] === ""));
   if (missing) throw new Error(`缺少参数 ${missing.label || missing.name}`);
-  if (automation.action.kind === "prompt") return { status: "sent" };
-  if (automation.action.kind === "speak") {
-    const values = Object.fromEntries(automation.params.map((p) => [p.name, args[p.name] ?? p.default]));
-    const text = automation.action.text.replace(/\{(\w+)\}/g, (_all, name: string) => String(values[name] ?? ""));
-    const delay = Number(values.delay_seconds ?? 0) * 1000;
-    previewRuns = [...previewRuns, { id: `preview-run-${now}`, sessionId: "ui", status: "pending", createdAtMs: now, dueAtMs: now + delay,
-      action: { kind: "speak", text, delivery: automation.action.delivery } }];
+  const values = Object.fromEntries(automation.params.flatMap((p) => {
+    const value = args[p.name] ?? p.default;
+    return value === undefined || value === null ? [] : [[p.name, value]];
+  }));
+  const action: RunAction = { kind: "program", name: automation.name, source: automation.action.source, automationId: id, args: values, target: null };
+  const runId = `preview-run-${now}`;
+  if (automation.usesWindow) {
+    previewRuns = [...previewRuns, { id: runId, sessionId: "ui", status: "running", createdAtMs: now, dueAtMs: now, startedAtMs: now,
+      action: { ...action, target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } } }];
     notify();
-    return { status: "scheduled" };
+    return { status: "countdown", seconds: switchSeconds };
   }
-  previewRuns = [...previewRuns, { id: `preview-run-${now}`, sessionId: "ui", status: "running", createdAtMs: now, dueAtMs: now, startedAtMs: now,
-    action: { kind: "program", name: automation.name, automationId: id, args, target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } } }];
-    // i18n-ignore-end
+  // i18n-ignore-end
+  const delay = automation.params.some((p) => p.name === "delay_seconds" && p.type === "number") ? Number(values.delay_seconds ?? 0) * 1000 : 0;
+  const dueAtMs = now + delay;
+  // 预览不出声：马上开始的直接记成跑完
+  previewRuns = [...previewRuns, delay > 0
+    ? { id: runId, sessionId: "ui", status: "pending", createdAtMs: now, dueAtMs, action }
+    : { id: runId, sessionId: "ui", status: "finished", createdAtMs: now, dueAtMs, startedAtMs: now, finishedAtMs: now, action, message: PREVIEW_ONLY }];
   notify();
-  return { status: "countdown", seconds: switchSeconds };
+  return { status: delay > 0 ? "scheduled" : "started", id: runId, target: null, dueAtUnixMs: dueAtMs };
 }
 
 export async function subscribeAutomations(callback: () => void): Promise<UnlistenFn> {

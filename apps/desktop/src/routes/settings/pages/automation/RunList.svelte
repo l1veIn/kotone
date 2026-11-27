@@ -1,6 +1,6 @@
 <script lang="ts">
   // 执行记录列表：“进行中”（等待中 + 运行中，可取消 / 停止）或“记录”（已结束）。
-  import { runTitle, type AutomationRun } from "../../../../lib/automation";
+  import { reminderOf, runTitle, type AutomationRun } from "../../../../lib/automation";
   import { m } from "$lib/paraglide/messages.js";
 
   let { runs, now, mode, busyId = "", onStop }: {
@@ -23,14 +23,12 @@
     return `${h ? `${m.auto_duration_hours({ hours: h })} ` : ""}${min ? `${m.auto_duration_minutes({ minutes: min })} ` : ""}${m.auto_duration_seconds({ seconds: seconds % 60 })}`;
   }
 
+  /** 提醒写回答方式（语音 + 弹幕），绑了窗口的写窗口；动作只有程序一种（ADR 045），不再标种类。 */
   function subtitle(run: AutomationRun): string {
-    if (run.action.kind === "speak") {
-      return run.action.delivery.map((kind) => (kind === "voice" ? m.auto_delivery_voice() : m.auto_delivery_danmaku())).join(" + ");
-    }
+    const reminder = reminderOf(run);
+    if (reminder) return reminder.delivery.map((kind) => (kind === "voice" ? m.auto_delivery_voice() : m.auto_delivery_danmaku())).join(" + ");
     return run.action.target?.label ?? "";
   }
-
-  const badgeText = { speak: m.auto_kind_speak(), program: m.auto_kind_program() } as const;
 
   function when(run: AutomationRun): string {
     if (run.status === "pending") {
@@ -38,7 +36,7 @@
       return left <= 0 ? m.auto_run_starting_soon() : m.auto_run_due_in({ duration: duration(left) });
     }
     if (run.status === "running") {
-      return run.action.kind === "speak" ? m.auto_run_reminding() : m.auto_run_running_for({ duration: duration(now - (run.startedAtMs ?? now)) });
+      return reminderOf(run) ? m.auto_run_reminding() : m.auto_run_running_for({ duration: duration(now - (run.startedAtMs ?? now)) });
     }
     return new Date(run.finishedAtMs ?? run.dueAtMs).toLocaleString();
   }
@@ -48,10 +46,7 @@
   {#each runs as run (run.id)}
     <li class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3" data-testid="automation-run" data-status={run.status}>
       <div class="min-w-0 flex-1">
-        <p class="m-0 text-[13px] break-words {mode === 'open' ? 'text-foreground' : 'text-foreground/80'}">
-          <span class="mr-1.5 inline-block rounded-md px-1.5 text-[11px] leading-[18px] align-[1px] {run.action.kind === 'program' ? 'bg-primary/12 text-primary' : 'bg-brand-pink/12 text-brand-pink'}">{badgeText[run.action.kind]}</span>
-          {runTitle(run)}
-        </p>
+        <p class="m-0 text-[13px] break-words {mode === 'open' ? 'text-foreground' : 'text-foreground/80'}">{runTitle(run)}</p>
         <p class="mt-1 mb-0 text-xs text-muted-foreground">{[subtitle(run), mode === "open" ? new Date(run.dueAtMs).toLocaleString() : ""].filter(Boolean).join(" · ")}</p>
         {#if mode === "history"}
           {#if run.message}<p class="mt-1 mb-0 text-xs {run.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}">{run.message}</p>{/if}

@@ -21,7 +21,7 @@
   import { bubbleSnapshot, subscribeBubble, type BubbleSnapshot } from "../../lib/bubble";
   import type { PushRecord, PushTone } from "../../lib/agent";
   import { getSettings, isTauri } from "../../lib/ipc";
-  import { pluginText } from "../../lib/plugins";
+  import { pushFromName } from "../../lib/plugins";
   import { settingsStore } from "../../lib/stores/ui";
   import { companionName } from "../../lib/stores/companion";
   import { initRuntime } from "../../lib/stores/runtime";
@@ -301,7 +301,7 @@
             <div data-testid="floating-her"><HerLine snap={bubble.her} /></div>
           {:else if bubble.line}
             {@const line = bubble.line}
-            {@const plugin = pluginText(line.plugin, "name", line.pluginName)}
+            {@const plugin = pushFromName(line.plugin, line.pluginName)}
             <!-- 一行推送：点它打开 Kotone、定位到这一条；按住拖动 -->
             <div class="line" class:single={line.cells.length === 1} role="button" tabindex="-1" data-testid="floating-line" data-id={line.id}
               aria-label={m.chat_floating_line_label({ plugin })} title={m.chat_floating_open()}

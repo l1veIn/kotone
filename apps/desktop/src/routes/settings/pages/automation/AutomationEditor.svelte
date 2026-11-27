@@ -1,11 +1,13 @@
 <script lang="ts">
-  // 新建 / 编辑一个已保存的自动化。程序在后端检查语法，参数声明在后端校验；这里只做基本输入。
-  import { onMount, untrack } from "svelte";
+  // 新建 / 编辑一个已保存的自动化（ADR 045 D9）。动作只有程序：新建时先选模板（说一句 / 推送一条 / 让她做 / 空白程序），
+  // 预填参数和程序；程序默认折叠，玩家多半只填参数（参数的缺省值就是平时运行用的值）；空白程序和没有参数的直接展开源码。
+  // 按键类不另做模板：在列表里复制内置的按键程序改。程序在后端检查语法，参数声明在后端校验；这里只做基本输入。
+  import { untrack, onMount } from "svelte";
+  import { BellRing, Code, Sparkles, Volume2 } from "@lucide/svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import { Button } from "$lib/components/ui/button";
-  import type { DeliveryKind } from "../../../../lib/assistant";
   import {
-    PARAM_TYPES, PROMPT_PER_MATCH, saveAutomation, type Automation, type AutomationBody, type EventTrigger, type ParamSpec, type ParamType,
+    ASKS_PER_MATCH, PARAM_TYPES, saveAutomation, type Automation, type AutomationTemplate, type EventTrigger, type ParamSpec, type ParamType,
   } from "../../../../lib/automation";
   import { eventCatalog, eventLabel, eventsFor, phaseLabel, TRIGGER_PHASES } from "../../../../lib/gameEvents";
   import { pluginsStore } from "../../../../lib/plugins";
@@ -18,33 +20,41 @@
   import { cronToPreset, presetToCron, type SchedulePreset } from "../../../../lib/automation";
   import { m } from "$lib/paraglide/messages.js";
 
-  let { automation = null, onSaved, onCancel }: {
-    automation?: Automation | null; onSaved: (saved: Automation) => void; onCancel: () => void;
+  let { automation = null, copyOf = null, templates = [], onSaved, onCancel }: {
+    /** 编辑这一个。 */
+    automation?: Automation | null;
+    /** 照这一个新建一份（复制内置的按键程序改）。 */
+    copyOf?: Automation | null;
+    templates?: AutomationTemplate[];
+    onSaved: (saved: Automation) => void; onCancel: () => void;
   } = $props();
 
-  // 编辑的是一份副本；保存成功才交回。
+  const NAME_MAX = 40;
+  // 编辑的是一份副本；保存成功才交回。复制的照它填好，存成新的。
   const initial = untrack(() => automation);
-  let name = $state(initial?.name ?? "");
-  let description = $state(initial?.description ?? "");
-  let kind = $state<AutomationBody["kind"]>(initial?.action.kind ?? "program");
-  let source = $state(initial?.action.kind === "program" ? initial.action.source ?? "" : "");
-  let text = $state(initial?.action.kind === "speak" ? initial.action.text : "");
-  let promptText = $state(initial?.action.kind === "prompt" ? initial.action.text : "");
-  let delivery = $state<DeliveryKind[]>(initial?.action.kind === "speak" ? [...initial.action.delivery] : ["voice"]);
+  const base = untrack(() => automation ?? copyOf);
+  // 新建（不是复制）先选模板；后端没给模板（旧版本）就直接写程序
+  let picking = $state(untrack(() => !automation && !copyOf && templates.length > 0));
+  let picked = $state<AutomationTemplate | null>(null);
+  let name = $state(initial?.name ?? (base ? [...m.auto_editor_copy_name({ name: base.name })].slice(0, NAME_MAX).join("") : ""));
+  let description = $state(base?.description ?? "");
+  let source = $state(base?.action.source ?? "");
   // 传进来的定义可能是上层 $state 的代理，structuredClone 会抛错：用 $state.snapshot 取普通对象。
-  let params = $state<ParamSpec[]>($state.snapshot(initial?.params ?? []) as ParamSpec[]);
+  let params = $state<ParamSpec[]>($state.snapshot(base?.params ?? []) as ParamSpec[]);
+  // 程序默认折叠（玩家多半只填参数）；没有参数的没什么可填，直接展开
+  let showSource = $state(untrack(() => !base?.params.length));
   let saving = $state(false);
   let error = $state("");
   // 定时（类似 crontab）：常用写法用选择，其余写 cron
-  const initialPreset = cronToPreset(initial?.schedule?.cron ?? "0 8 * * *");
-  let scheduled = $state(initial?.schedule?.enabled ?? false);
+  const initialPreset = cronToPreset(base?.schedule?.cron ?? "0 8 * * *");
+  let scheduled = $state(base?.schedule?.enabled ?? false);
   let presetKind = $state<SchedulePreset["kind"]>(initialPreset.kind);
   let presetTime = $state("time" in initialPreset ? initialPreset.time : "08:00");
   let presetEvery = $state("every" in initialPreset ? initialPreset.every : 10);
-  let customCron = $state(initialPreset.kind === "cron" ? initialPreset.cron : (initial?.schedule?.cron ?? "0 8 * * *"));
-  let scheduleArgs = $state<Record<string, unknown>>($state.snapshot(initial?.schedule?.args ?? {}) as Record<string, unknown>);
+  let customCron = $state(initialPreset.kind === "cron" ? initialPreset.cron : (base?.schedule?.cron ?? "0 8 * * *"));
+  let scheduleArgs = $state<Record<string, unknown>>($state.snapshot(base?.schedule?.args ?? {}) as Record<string, unknown>);
   // 游戏事件触发（ADR 036）：界面编辑第一种事件；她用工具写的多种事件不动它就原样保存
-  const initialOn: EventTrigger | null = initial?.on ? ($state.snapshot(initial.on) as EventTrigger) : null;
+  const initialOn: EventTrigger | null = base?.on ? ($state.snapshot(base.on) as EventTrigger) : null;
   const initialMatch = (initialOn?.match ?? {}) as Record<string, unknown>;
   let triggered = $state(initialOn?.enabled ?? false);
   let onGame = $state(initialOn?.game ?? "");
@@ -68,6 +78,33 @@
   });
   const eventOff = $derived(catalog.find((e) => e.type === onEvent)?.off ?? null);
   const teamEvent = $derived(catalog.find((e) => e.type === onEvent)?.team ?? false);
+  /** 会叫她的（“让她做”模板，或已经存着的会叫她的）：写清楚每次花一次 AI 调用。 */
+  const asks = $derived(picked?.id === "ask" || (!picked && !!base?.asks));
+  /** 折叠时露出来的程序第一行（让人知道它做什么）。 */
+  const sourcePreview = $derived(source.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "");
+  /** 参数的缺省值（折叠时在上面直接填）。 */
+  const defaults = $derived(Object.fromEntries(params.flatMap((p) => (p.default === undefined || p.default === null ? [] : [[p.name, p.default]]))));
+
+  /** 模板的名字和说明按 id 取文案；不认得的 id（以后加的）用后端给的。 */
+  function templateText(t: AutomationTemplate): { name: string; description: string } {
+    switch (t.id) {
+      case "say": return { name: m.auto_template_say(), description: m.auto_template_say_desc() };
+      case "push": return { name: m.auto_template_push(), description: m.auto_template_push_desc() };
+      case "ask": return { name: m.auto_template_ask({ name: $companionName }), description: m.auto_template_ask_desc({ name: $companionName, max: ASKS_PER_MATCH }) };
+      case "blank": return { name: m.auto_template_blank(), description: m.auto_template_blank_desc() };
+      default: return { name: t.name, description: t.description };
+    }
+  }
+  const ICONS: Record<string, typeof Code> = { say: Volume2, push: BellRing, ask: Sparkles, blank: Code };
+
+  function pick(t: AutomationTemplate) {
+    picked = t;
+    // 模板来自上层的 $state（代理），structuredClone 会抛错
+    params = $state.snapshot(t.params) as ParamSpec[];
+    source = t.source;
+    showSource = !t.params.length;
+    picking = false;
+  }
 
   onMount(async () => {
     try { profiles = await listProfiles(); } catch { profiles = []; }
@@ -111,19 +148,18 @@
     params = params.map((p, i) => (i === index ? { ...p, ...patch } : p));
   }
 
-  function changeType(index: number, type: ParamType) {
-    // 换类型后旧的缺省值与类型专属字段不再适用
-    const base = params[index];
-    params = params.map((p, i) => (i === index
-      // i18n-ignore-start：选择题参数的默认选项，存进自动化
-      ? { name: base.name, label: base.label, description: base.description, type, ...(type === "choice" ? { options: ["是", "否"] } : {}) }
-      // i18n-ignore-end
-      : p));
+  function setDefaults(values: Record<string, unknown>) {
+    params = params.map((p) => ({ ...p, default: values[p.name] }));
   }
 
-  function toggleDelivery(item: DeliveryKind, checked: boolean) {
-    const next = checked ? [...new Set([...delivery, item])] : delivery.filter((d) => d !== item);
-    if (next.length) delivery = next;
+  function changeType(index: number, type: ParamType) {
+    // 换类型后旧的缺省值与类型专属字段不再适用
+    const current = params[index];
+    params = params.map((p, i) => (i === index
+      // i18n-ignore-start：选择题参数的默认选项，存进自动化
+      ? { name: current.name, label: current.label, description: current.description, type, ...(type === "choice" ? { options: ["是", "否"] } : {}) }
+      // i18n-ignore-end
+      : p));
   }
 
   async function save(event: SubmitEvent) {
@@ -132,16 +168,13 @@
     saving = true;
     error = "";
     try {
-      const action: AutomationBody = kind === "program" ? { kind, source }
-        : kind === "prompt" ? { kind, text: promptText } : { kind, text, delivery };
       const saved = await saveAutomation({
         id: initial?.id ?? null, name, description,
-        // “让她做”不用参数：触发它的游戏事件会一起交给她
-        params: kind === "prompt" ? [] : params.map((p) => ({ ...p, default: p.default ?? undefined })),
-        action,
+        params: params.map((p) => ({ ...p, default: p.default ?? undefined })),
+        action: { kind: "program", source },
         on: trigger(),
         // 关掉定时时保留写好的时间（暂停），下次打开还在
-        schedule: scheduled || initial?.schedule ? { cron, enabled: scheduled, args: $state.snapshot(scheduleArgs) as Record<string, unknown> } : null,
+        schedule: scheduled || base?.schedule ? { cron, enabled: scheduled, args: $state.snapshot(scheduleArgs) as Record<string, unknown> } : null,
       });
       toast(true, initial ? m.auto_editor_saved() : m.auto_editor_created());
       onSaved(saved);
@@ -204,24 +237,61 @@
       </div>
 {/snippet}
 
+{#if picking}
+  <!-- 新建第一步：选一个模板（之后都能改） -->
+  <section class="rounded-2xl border border-hairline bg-card/70 p-5 text-foreground" data-testid="automation-templates" aria-label={m.auto_editor_title_new()}>
+    <h2 class="m-0 text-[15px] font-semibold">{m.auto_editor_title_new()}</h2>
+    <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.auto_editor_template_hint()}</p>
+    <div class="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+      {#each templates as t (t.id)}
+        {@const text = templateText(t)}
+        {@const Icon = ICONS[t.id] ?? Code}
+        <button type="button" class="template" onclick={() => pick(t)} data-testid="automation-template" data-template={t.id}>
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary"><Icon class="size-4" /></span>
+          <span class="min-w-0">
+            <span class="block text-[13px] font-medium text-foreground">{text.name}</span>
+            <span class="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">{text.description}</span>
+          </span>
+        </button>
+      {/each}
+    </div>
+    <p class="mt-3 mb-0 text-[11px] text-muted-foreground" data-testid="automation-template-keys">{m.auto_editor_template_keys_hint()}</p>
+    <div class="mt-5 flex justify-end">
+      <Button variant="outline" size="sm" onclick={onCancel}>{m.auto_action_cancel()}</Button>
+    </div>
+  </section>
+{:else}
 <form class="rounded-2xl border border-hairline bg-card/70 p-5 text-foreground" onsubmit={save} data-testid="automation-editor" aria-label={initial ? m.auto_editor_title_edit() : m.auto_editor_title_new()}>
   <h2 class="m-0 text-[15px] font-semibold">{initial ? m.auto_editor_title_edit() : m.auto_editor_title_new()}</h2>
+  {#if picked}
+    {@const text = templateText(picked)}
+    <p class="mt-1 mb-0 text-xs text-muted-foreground" data-testid="automation-template-note">{text.name} · {text.description}</p>
+  {/if}
   <div class="mt-4 flex flex-col gap-3.5">
     <label class="row"><span>{m.auto_editor_name()}</span>
-      <input class="field w-64 max-w-full" bind:value={name} maxlength="40" aria-label={m.auto_editor_name_aria()} placeholder={m.auto_editor_name_placeholder()} /></label>
+      <input class="field w-64 max-w-full" bind:value={name} maxlength={NAME_MAX} aria-label={m.auto_editor_name_aria()} placeholder={m.auto_editor_name_placeholder()} /></label>
     <label class="row"><span>{m.auto_editor_description()}</span>
       <input class="field min-w-0 flex-1" bind:value={description} maxlength="200" aria-label={m.auto_editor_description_aria()} placeholder={m.auto_editor_description_placeholder()} /></label>
-    <div class="row"><span>{m.auto_field_action()}</span>
-      <div class="flex gap-1.5" role="group" aria-label={m.auto_editor_kind_aria()}>
-        {#each [{ id: "program", label: m.auto_editor_kind_program() }, { id: "speak", label: m.auto_editor_kind_speak() }, { id: "prompt", label: m.auto_editor_kind_prompt({ name: $companionName }) }] as option}
-          <button type="button" class="chip" aria-pressed={kind === option.id} onclick={() => { kind = option.id as AutomationBody["kind"]; }}>{option.label}</button>
-        {/each}
-      </div>
-    </div>
 
-    {#if kind === "program"}
-      <div>
-        <label class="mb-1.5 block text-xs font-medium text-muted-foreground" for="automation-source">{m.auto_editor_source_label()}</label>
+    {#if !showSource && params.length}
+      <!-- 折叠时直接填参数：填的是缺省值，运行、定时、游戏事件没给值时都用它 -->
+      <div class="row !items-start" data-testid="automation-fill">
+        <span class="pt-1.5">{m.auto_field_params()}</span>
+        <div class="min-w-0 flex-1">
+          <ArgsForm {params} values={defaults} onchange={setDefaults} />
+          <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">{m.auto_editor_fill_hint()}</p>
+        </div>
+      </div>
+    {/if}
+
+    {#if showSource}
+      <div data-testid="automation-program">
+        <div class="mb-1.5 flex items-center justify-between gap-2">
+          <label class="block text-xs font-medium text-muted-foreground" for="automation-source">{m.auto_editor_source_label()}</label>
+          {#if params.length}
+            <button type="button" class="text-xs text-primary hover:underline" onclick={() => { showSource = false; }} data-testid="automation-source-toggle">{m.auto_editor_source_hide()}</button>
+          {/if}
+        </div>
         <textarea id="automation-source" bind:value={source} rows="8" maxlength="8000" spellcheck="false" data-testid="automation-source"
           placeholder={'every(args.interval, function() key(args.key) end, { times = args.times })'}
           class="w-full resize-y rounded-xl border border-input bg-background/60 px-3 py-2.5 font-mono text-xs leading-5 text-foreground outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/30"></textarea>
@@ -231,27 +301,16 @@
       </div>
 
       {@render paramsEditor()}
-    {:else if kind === "prompt"}
-      <div>
-        <label class="mb-1.5 block text-xs font-medium text-muted-foreground" for="automation-prompt">{m.auto_editor_prompt_label({ name: $companionName })}</label>
-        <textarea id="automation-prompt" bind:value={promptText} rows="3" maxlength="500" data-testid="automation-prompt"
-          placeholder={m.auto_editor_prompt_placeholder()}
-          class="w-full resize-y rounded-xl border border-input bg-background/60 px-3 py-2.5 text-[13px] leading-5 text-foreground outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/30"></textarea>
-        <p class="mt-1.5 mb-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="automation-prompt-cost">{m.auto_editor_prompt_cost({ max: PROMPT_PER_MATCH, name: $companionName })}</p>
-      </div>
     {:else}
-      <label class="row"><span>{m.auto_editor_speak_text()}</span>
-        <input class="field min-w-0 flex-1" bind:value={text} maxlength="300" aria-label={m.auto_editor_speak_text()} placeholder={m.auto_editor_speak_placeholder()} /></label>
-      <p class="m-0 -mt-1.5 pl-[5.25rem] text-[11px] text-muted-foreground">{m.auto_editor_speak_params_help()}</p>
-      <div class="row"><span>{m.auto_editor_delivery()}</span>
-        <div class="flex gap-4 text-[13px] text-foreground">
-          {#each [{ id: "voice", label: m.auto_editor_delivery_voice() }, { id: "danmaku", label: m.auto_delivery_danmaku() }] as item}
-            <label class="flex items-center gap-2"><input type="checkbox" class="size-4 accent-[var(--color-primary)]"
-              checked={delivery.includes(item.id as DeliveryKind)} onchange={(event) => toggleDelivery(item.id as DeliveryKind, event.currentTarget.checked)} />{item.label}</label>
-          {/each}
-        </div>
+      <div class="row" data-testid="automation-program">
+        <span>{m.auto_editor_source_folded()}</span>
+        <code class="min-w-0 truncate rounded-md bg-muted/60 px-2 py-1 font-mono text-[11px] text-foreground/85" data-testid="automation-source-preview">{sourcePreview}</code>
+        <button type="button" class="shrink-0 text-xs text-primary hover:underline" onclick={() => { showSource = true; }} data-testid="automation-source-toggle">{m.auto_editor_source_show()}</button>
       </div>
-      {@render paramsEditor()}
+    {/if}
+
+    {#if asks}
+      <p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="automation-ask-cost">{m.auto_editor_ask_cost({ max: ASKS_PER_MATCH, name: $companionName })}</p>
     {/if}
 
     <div class="rounded-xl border border-hairline bg-muted/30 p-3" data-testid="automation-schedule">
@@ -334,6 +393,7 @@
     <Button type="submit" size="sm" disabled={saving || !name.trim()}>{saving ? m.auto_action_saving() : m.auto_action_save()}</Button>
   </div>
 </form>
+{/if}
 
 <style>
   .row { display: flex; align-items: center; gap: .75rem; }
@@ -341,7 +401,7 @@
   .field { height: 2rem; border-radius: .5rem; border: 1px solid var(--color-input); background: color-mix(in oklab, var(--color-background) 60%, transparent); color: var(--color-foreground); padding: 0 .6rem; font-size: 13px; outline: none; transition: border-color 120ms, box-shadow 120ms; }
   .field::placeholder { color: var(--color-muted-foreground); }
   .field:focus { border-color: var(--color-ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-ring) 30%, transparent); }
-  .chip { height: 1.75rem; border-radius: .5rem; padding: 0 .7rem; font-size: 12px; color: var(--color-muted-foreground); border: 1px solid var(--color-hairline); transition: background 120ms, color 120ms; }
-  .chip:hover { color: var(--color-foreground); background: color-mix(in oklab, var(--color-muted) 60%, transparent); }
-  .chip[aria-pressed="true"] { background: color-mix(in oklab, var(--color-primary) 12%, transparent); color: var(--color-primary); border-color: color-mix(in oklab, var(--color-primary) 50%, transparent); }
+  .template { display: flex; align-items: flex-start; gap: .75rem; text-align: left; border-radius: .75rem; border: 1px solid var(--color-hairline); padding: .75rem; background: color-mix(in oklab, var(--color-background) 40%, transparent); transition: background 120ms, border-color 120ms; }
+  .template:hover { background: color-mix(in oklab, var(--color-muted) 60%, transparent); border-color: color-mix(in oklab, var(--color-primary) 40%, transparent); }
+  .template:focus-visible { outline: none; border-color: var(--color-ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-ring) 30%, transparent); }
 </style>

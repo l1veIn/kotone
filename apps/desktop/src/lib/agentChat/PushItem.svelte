@@ -8,7 +8,7 @@
   import { Volume2 } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
   import type { PushRecord, PushTone } from "../agent";
-  import { pluginText, pushTitle } from "../plugins";
+  import { pushFromName, pushTitle } from "../plugins";
   import PluginLogo from "../components/plugins/PluginLogo.svelte";
   import PluginCard from "./PluginCard.svelte";
   import { tryAgentChat } from "./context";
@@ -16,7 +16,7 @@
   let { push, atMs, onOpen }: { push: PushRecord; atMs: number; onOpen?: () => void } = $props();
 
   const chat = tryAgentChat();
-  const name = $derived(pluginText(push.plugin, "name", push.pluginName));
+  const name = $derived(pushFromName(push.plugin, push.pluginName));
   /** 有卡片用卡片的名字（插件给的），否则用这条推送在清单里的名字（插件的文案）。 */
   const title = $derived(push.card?.title ?? (push.trigger ? pushTitle(push.plugin, { id: push.trigger, title: push.title }) : push.title));
   const time = $derived(new Date(atMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }));
