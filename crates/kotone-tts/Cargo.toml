@@ -1,7 +1,7 @@
 [package]
 name = "kotone-tts"
 version = "0.1.0"
-description = "Kotone speech synthesis: Kokoro, online engines (OpenAI-compatible, Volcano), synthesis cache and cancellable PCM output"
+description = "Kotone speech synthesis: Kokoro, online engines (DeepSeek, MiniMax, Bailian, SiliconFlow, Volcano, custom OpenAI-compatible), synthesis cache and cancellable PCM output"
 edition = "2021"
 rust-version = "1.77.2"
 

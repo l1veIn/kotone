@@ -833,14 +833,16 @@ fn preview(source: &str, stored: Option<&Automation>, rules: &ToolRules) -> Valu
 }
 
 /// 保存（新建或按 id 覆盖）；程序先检查语法。游戏事件触发按合并后的事件目录校验（插件登记的也认得）；
-/// 触发里的事现在不会发生时（例如英雄联盟插件关着）照常保存，结果里多一项 `triggerNotes` 说清楚（原则 21）。
+/// 触发里的事现在不会发生时（例如英雄联盟插件关着）照常保存，结果里多一项 `triggerNotes` 说清楚（原则 21）；
+/// 开了一局一次或冷却、程序又读了事件填的参数时也在 `triggerNotes` 里提醒一句（[`library::trigger_hints`]，不拦）。
 /// 程序里调了要确认的工具时，结果的 `needsConfirm` 是 true（她存的：告诉玩家去「自动化」页点“允许”，ADR 046 D9）。
 pub fn save(app: &AppHandle, draft: AutomationDraft, by: CreatedBy) -> Result<Value, String> {
     let (saved, notes) = store(app, draft, by)?;
     Ok(saved_json(&saved, &notes, &ToolRules::now(app)))
 }
 
-/// 保存结果的形状：[`describe`]（带源码），触发里有现在不会发生的事时加 `triggerNotes`。
+/// 保存结果的形状：[`describe`]（带源码），有关于触发的提醒时加 `triggerNotes`（现在不会发生的事、条件写在程序里
+/// 会白白用掉次数和冷却）。
 fn saved_json(saved: &Automation, notes: &[String], rules: &ToolRules) -> Value {
     let mut value = describe(saved, true, rules);
     if let (false, Some(object)) = (notes.is_empty(), value.as_object_mut()) {
@@ -849,7 +851,7 @@ fn saved_json(saved: &Automation, notes: &[String], rules: &ToolRules) -> Value 
     value
 }
 
-/// 存下草稿（[`save`] 和「自动化」页的保存共用）：返回存好的定义和触发的说明。
+/// 存下草稿（[`save`] 和「自动化」页的保存共用）：返回存好的定义和关于触发的提醒（[`saved_json`] 的 `triggerNotes`）。
 fn store(
     app: &AppHandle,
     mut draft: AutomationDraft,
@@ -874,11 +876,12 @@ fn store(
         "automation.saved",
         json!({"id": saved.id, "name": saved.name}),
     );
-    let notes = saved
+    let mut notes = saved
         .on
         .as_ref()
         .map(|on| events.notes(on))
         .unwrap_or_default();
+    notes.extend(library::trigger_hints(&saved, &events));
     Ok((saved, notes))
 }
 

@@ -19,6 +19,8 @@ interface Bridge {
   /** 对话里那张开局战绩，`opening(name)` 是同一个 key、我那一行改了名字的版本。 */
   opening(name?: string): unknown;
   line(key: string, cells: { text: string; tone?: string }[]): unknown;
+  /** 示例对话（量 buildTurns 用）。 */
+  conversation: { messages: unknown[] };
 }
 declare global {
   interface Window { floatingTest: Bridge }
@@ -41,14 +43,17 @@ async function blank(page: Page) {
   await page.goto("/__floating-blank");
 }
 
-/** 打开悬浮窗的页面（窗口大小照后端第一次摆的大小，后面页面按内容报大小）。 */
-async function open(page: Page, size = { width: 460, height: 640 }) {
+/**
+ * 打开悬浮窗的页面（窗口大小照后端第一次摆的大小，后面页面按内容报大小）。`history`：示例对话前面再加这么多轮更早的
+ * （玩家一句、她一句），其中 `cards` 轮换成开局战绩那样的卡片推送（长对话、分页、量耗时用）。
+ */
+async function open(page: Page, size = { width: 460, height: 640 }, history = { turns: 0, cards: 0 }) {
   await page.setViewportSize(size);
   await page.route("**/__floating-test", (route) => route.fulfill({
     contentType: "text/html", body: '<!doctype html><html><body><div id="app"></div></body></html>',
   }));
   await page.goto("/__floating-test#/floating");
-  await page.evaluate(async ({ T, OPENING }) => {
+  await page.evaluate(async ({ T, OPENING, history }) => {
     const { mockIPC, mockWindows } = await import("/node_modules/@tauri-apps/api/mocks.js");
     const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
     const browser = await import("/src/lib/ipc/browserMock.ts");
@@ -68,9 +73,23 @@ async function open(page: Page, size = { width: 460, height: 640 }) {
       role: "notice", text: "英雄联盟 推送：海克斯三选一", atMs: T - 60_000,
       push: { plugin: "lol", pluginName: "英雄联盟", trigger: "augment-pick", title: "海克斯三选一", key, line: { cells }, said: "中间那个" },
     });
+    // 更早的几轮：每轮 2 秒，卡片均匀插在里面
+    const older: unknown[] = [];
+    const every = history.cards ? Math.floor(history.turns / history.cards) : 0;
+    for (let i = 0; i < history.turns; i += 1) {
+      const at = T - 3_000_000 + i * 2_000;
+      if (every && i % every === every - 1 && older.filter((m) => (m as { push?: unknown }).push).length < history.cards) {
+        older.push({ role: "notice", text: "英雄联盟 推送：开局战绩", atMs: at,
+          push: { plugin: "lol", pluginName: "英雄联盟", trigger: "opening", title: "开局战绩", key: `opening:h${i}`,
+            card: { title: "开局战绩", ui: { uri: "ui://kotone/lol/match" }, structuredContent: sampleMatch() } } });
+      } else {
+        older.push({ role: "user", text: `第 ${i} 句`, source: "voice", atMs: at }, { role: "assistant", text: `好的，第 ${i} 句。`, atMs: at + 1_000 });
+      }
+    }
     const conversation = {
-      version: 1, id: "c1", title: "这局", createdAtMs: T - 600_000, updatedAtMs: T,
+      version: 1, id: "c1", title: "这局", createdAtMs: T - 3_000_000, updatedAtMs: T,
       messages: [
+        ...older,
         { role: "user", text: "在吗", source: "voice", atMs: T - 600_000 },
         { role: "assistant", text: "在的。", atMs: T - 599_000 },
         line("augment:1", [{ text: "可选", tone: "ok" }, { text: "首选", tone: "good" }, { text: "可刷新", tone: "bad" }]),
@@ -81,7 +100,7 @@ async function open(page: Page, size = { width: 460, height: 640 }) {
     // i18n-ignore-end
     const bridge = {
       calls: [] as { command: string; args?: Record<string, unknown> }[],
-      opening, line,
+      opening, line, conversation,
       async view(view: Record<string, unknown>) {
         await emit("kotone://floating", { shown: true, her: false, lines: [], mini: null, since: T, ring: null, corner: "bottom-right", maxHeight: 420, ...view });
       },
@@ -117,7 +136,7 @@ async function open(page: Page, size = { width: 460, height: 640 }) {
       return typeof fn === "function" ? (fn as () => unknown)() : null;
     }, { shouldMockEvents: true });
     await import("/src/main.ts");
-  }, { T, OPENING });
+  }, { T, OPENING, history });
   await expect(page.getByTestId("floating")).toBeAttached();
 }
 
@@ -132,10 +151,10 @@ const hitAt = (boxes: [number, number, number, number][], x: number, y: number) 
   boxes.findIndex(([bx, by, w, h]) => bx <= x && x < bx + w && by <= y && y < by + h);
 const ringLeft = async (page: Page) => Number(await page.getByTestId("floating-ring").getAttribute("data-left"));
 
-test("the rule: bubble for one simple thing, the mini chat for cards, tool calls, long answers and several at once; fresh turns; the ring", async ({ page }) => {
+test("the rule: bubble for simple things (push lines and her line together), the mini chat for popped cards, tool calls, long answers and more than one reply; fresh turns; the ring", async ({ page }) => {
   await blank(page);
   const results = await page.evaluate(async () => {
-    const { floatingShape, freshTurns, complexTurn, ringFraction, LONG_TEXT } = await import("/src/routes/floating/shape.ts");
+    const { floatingShape, freshTurns, complexTurn, ringFraction, bubbleLines, LONG_TEXT, BUBBLE_LINES } = await import("/src/routes/floating/shape.ts");
     const { buildTurns } = await import("/src/lib/agentChat/timeline.ts");
     type Msg = Parameters<typeof buildTurns>[0][number];
     const since = 1_000_000;
@@ -153,10 +172,12 @@ test("the rule: bubble for one simple thing, the mini chat for cards, tool calls
     const long = "队友说中路的人消失了，让你注意下路，对面打野刚刚在上路露过头，大概二十秒以后会到下路，先往塔下退一点，等你们中单过来再打。";
     // i18n-ignore-end
     const old = [ask(since - 600_000), answer(since - 599_000, "在的。")];
-    const shape = (messages: Msg[], herSnap: unknown = null, lines = 0, popped = false, running = false) => {
+    // 推送的一行不管来了几条都不算（rc.14：信息类的给个气泡就行），只有弹出的卡片（popped）算
+    const shape = (messages: Msg[], herSnap: unknown = null, popped = false, running = false) => {
       const turns = buildTurns(messages, null, running);
-      return floatingShape({ popped, her: herSnap as never, lines, fresh: freshTurns(turns, since, null) });
+      return floatingShape({ popped, her: herSnap as never, fresh: freshTurns(turns, since, null) });
     };
+    const lineOf = (id: string) => ({ id, plugin: "lol", pluginName: "英雄联盟", key: id, conversationId: "c1", cells: [{ text: id }], untilDone: false }); // i18n-ignore
     const turnsOf = (messages: Msg[]) => buildTurns(messages, null, false);
     return {
       longIsLong: [...long].length > LONG_TEXT,
@@ -172,11 +193,15 @@ test("the rule: bubble for one simple thing, the mini chat for cards, tool calls
       multiLine: shape([...old, ask(since + 1_000), answer(since + 2_000, "一\n二")]),
       toolCard: shape([...old, ask(since + 1_000), ...card(since + 2_000)]),
       oldToolCallIgnored: shape([...old, tool(since - 500_000, "music.play"), ask(since + 1_000)], her("thinking")),
-      popped: shape(old, null, 0, true),
-      oneLine: shape([...old, push(since - 100, "lv6")], null, 1),
-      herAndLine: shape([...old, push(since - 100, "lv6")], her("speaking", "好的。"), 1),
-      twoLines: shape([...old, push(since - 100, "a"), push(since + 100, "b")], null, 2),
+      popped: shape(old, null, true),
+      poppedWithLines: shape([...old, push(since - 100, "a"), push(since + 100, "b")], her("speaking", "好的。"), true),
+      oneLine: shape([...old, push(since - 100, "lv6")]),
+      herAndLine: shape([...old, push(since - 100, "lv6")], her("speaking", "好的。")),
+      twoLines: shape([...old, push(since - 100, "a"), push(since + 100, "b")]),
+      threeLinesAndHer: shape([...old, push(since + 100, "a"), push(since + 200, "b"), push(since + 300, "c"), ask(since + 1_000),
+        say(since + 2_000, "好的。")], her("speaking", "好的。")),
       twoTalks: shape([...old, ask(since + 1_000), say(since + 2_000, "好的。"), ask(since + 9_000)], her("listening")),
+      bubbleLines: [BUBBLE_LINES, bubbleLines(["a", "b", "c", "d"].map(lineOf)).map((l) => l.id), bubbleLines([lineOf("a")]).length],
       fresh: freshTurns(turnsOf([...old, push(since - 1_500, "slack"), push(since - 5_000, "stale"), push(since - 900_000, "updated", since + 3_000),
         push(since - 900_000, "focus")]), since, "lol:focus").map((t) => t.push?.key),
       activeFresh: freshTurns(buildTurns(old, null, true), since, null).length,
@@ -194,7 +219,8 @@ test("the rule: bubble for one simple thing, the mini chat for cards, tool calls
     longIsLong: true,
     listening: "bubble", short: "bubble", longSpoken: "mini", longInTurn: "mini", written: "mini", toolCall: "mini",
     narration: "bubble", shortText: "bubble", longText: "mini", multiLine: "mini", toolCard: "mini", oldToolCallIgnored: "bubble",
-    popped: "mini", oneLine: "bubble", herAndLine: "mini", twoLines: "mini", twoTalks: "mini",
+    popped: "mini", poppedWithLines: "mini", oneLine: "bubble", herAndLine: "bubble", twoLines: "bubble", threeLinesAndHer: "bubble",
+    twoTalks: "mini", bubbleLines: [3, ["b", "c", "d"], 1],
     fresh: ["slack", "updated", "focus"], activeFresh: 1, notShown: 0, complexOld: true,
     ring: [0.5, 0.5, 0, 1],
   });
@@ -298,7 +324,7 @@ test("bubble: one push line; the ring runs, hovering stops it and tells the back
   await expect(page.getByTestId("floating-line")).toHaveCount(0);
 });
 
-test("mini chat: a popped card shows recent turns, keeps its place on update and opens the full match", async ({ page }) => {
+test("mini chat: a popped card shows recent turns, keeps its place on update, never scrolls inside the card, and opens the full match", async ({ page }) => {
   await open(page);
   await page.evaluate(() => window.floatingTest.view({
     revision: 10, maxHeight: 360, ring: { totalMs: 10_000, leftMs: 10_000, running: true, atMs: Date.now() },
@@ -332,19 +358,45 @@ test("mini chat: a popped card shows recent turns, keeps its place on update and
     const [l, c] = await Promise.all([list.boundingBox(), card.boundingBox()]);
     return l && c ? Math.round(c.y - l.y) : null;
   }).toBeLessThanOrEqual(6);
-  // 往回翻：滚轮
+  // 往回翻：滚轮（往前 / 往后翻的按钮去掉了：滚轮在不可聚焦的小窗里收得到，rc.10 真机、rc.14 试玩）
   await list.hover();
   await page.mouse.wheel(0, -2_000);
   await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(0);
   await expect(turns.nth(0)).toBeInViewport();
-  // 也有往前 / 往后翻的按钮（滚轮在不可聚焦的窗口里还没在真机上验证）
-  await expect(page.getByTestId("floating-older")).toBeDisabled();
-  await page.getByTestId("floating-newer").click();
-  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await expect(page.getByTestId("floating-older")).toHaveCount(0);
+  await expect(page.getByTestId("floating-newer")).toHaveCount(0);
 
-  // 同一个 key 再推一次：原地换掉，位置不动、不多一张
+  // 卡片里的 App 不在 iframe 里滚：iframe 是 App 的整个高度、不出滚动条；外面这一块最高到列表放得下的，超出的底部渐隐
   const frame = card.locator('[data-testid="mcp-app-frame"]');
   await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  await expect.poll(() => page.frames().some((f) => /\/app\/lol\/match$/.test(f.url()))).toBe(true);
+  const matchApp = page.frames().find((f) => /\/app\/lol\/match$/.test(f.url()))!;
+  await expect.poll(() => matchApp.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight)).toBeLessThanOrEqual(1);
+  const iframe = frame.getByTestId("mcp-app-iframe");
+  await expect(iframe).toHaveAttribute("scrolling", "no");
+  const sizes = async () => frame.evaluate((el) => {
+    const box = el.firstElementChild as HTMLElement;
+    const inner = el.querySelector("iframe")!;
+    const list = el.closest('[data-testid="floating-list"]') as HTMLElement;
+    return { box: box.getBoundingClientRect().height, iframe: inner.getBoundingClientRect().height, list: list.clientHeight,
+      clipped: el.dataset.clipped === "true" };
+  });
+  await expect.poll(async () => (await sizes()).iframe).toBeGreaterThan(120);
+  const size = await sizes();
+  expect(size.box).toBeLessThanOrEqual(size.list);
+  expect(size.clipped).toBe(size.iframe > size.box + 1);
+  // 滚轮落在卡片上：滚的是小窗的列表（Chromium 把不能滚的 iframe 的滚轮交给外面）
+  await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  const bottomTop = await list.evaluate((el) => el.scrollTop);
+  expect(bottomTop).toBeGreaterThan(40);
+  const [listBox, frameBox] = await Promise.all([list.boundingBox(), iframe.boundingBox()]);
+  const y = Math.min(listBox!.y + listBox!.height - 20, frameBox!.y + frameBox!.height - 10, Math.max(listBox!.y, frameBox!.y) + 40);
+  await page.mouse.move(frameBox!.x + frameBox!.width / 2, y);
+  await page.mouse.wheel(0, -120);
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeLessThan(bottomTop);
+  await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+
+  // 同一个 key 再推一次：原地换掉，位置不动、不多一张
   await page.evaluate(async (OPENING) => {
     const t = window.floatingTest;
     await t.push({ kind: "updated", conversationId: "c1", plugin: "lol", trigger: "opening", key: OPENING, held: false, alert: false, message: t.opening("改过的名字") }); // i18n-ignore
@@ -578,7 +630,173 @@ test("mini chat: her voice turn starts as a bubble and switches to the mini chat
   await expect(page.getByTestId("floating-line")).toBeVisible();
 });
 
-test("settings 交互 → 悬浮窗: show, pop up the mini chat for pushes, where it sits, reset after a drag, danmaku", async ({ page }) => {
+test("bubble: her line and the newest three push lines share one bubble (no mini chat for news); a click on a line opens that push", async ({ page }) => {
+  await open(page, { width: 460, height: 320 });
+  const now = await page.evaluate(() => Date.now());
+  // i18n-ignore-start：示例
+  const line = (key: string, text: string) => ({ id: `lol:${key}`, plugin: "lol", pluginName: "英雄联盟", key, conversationId: "c1", untilDone: false, cells: [{ text }] });
+  const lines = [line("lv6:1", "对面寒冰 6 级了"), line("item:1", "对面出了中娅"), line("dragon:1", "小龙 30 秒后刷新"), line("down:1", "对面阵亡 3 个")];
+  await page.evaluate(({ now, lines }) => window.floatingTest.view({ revision: 40, her: true, since: now, lines,
+    ring: { totalMs: 3_000, leftMs: 3_000, running: true, atMs: now } }), { now, lines });
+  await page.evaluate(() => window.floatingTest.her({ revision: 50, phase: "speaking", label: "琴音", text: "好的。" }));
+  // i18n-ignore-end
+  const floating = page.getByTestId("floating");
+  await expect(floating).toHaveAttribute("data-mode", "bubble");
+  await expect(page.getByTestId("floating-her")).toBeVisible();
+  // 最新的三行（旧的在上），第一行从气泡里拿掉了（聊天里照样有）
+  await expect(page.getByTestId("floating-line")).toHaveCount(3);
+  expect(await page.getByTestId("floating-line").evaluateAll((els) => els.map((e) => e.getAttribute("data-id"))))
+    .toEqual(["lol:item:1", "lol:dragon:1", "lol:down:1"]);
+  await expect(page.getByTestId("floating-mini")).toHaveCount(0);
+  // 她那一句在上面，推送的几行在下面，一个气泡（挡鼠标的还是头像和气泡两块）
+  const [herBox, firstLine] = await Promise.all([page.getByTestId("floating-her").boundingBox(), page.getByTestId("floating-line").first().boundingBox()]);
+  expect(firstLine!.y).toBeGreaterThan(herBox!.y + herBox!.height - 1);
+  await expect.poll(async () => (await lastLayout(page))?.revision).toBe(40);
+  const layout = (await lastLayout(page))!;
+  expect(layout.mini).toBe(false);
+  expect(layout.boxes).toHaveLength(2);
+  await screenshot(floating, { path: shot("floating-bubble-lines"), omitBackground: true });
+  await page.getByTestId("floating-line").nth(1).click();
+  await expect.poll(() => calls(page, "auto_card_open")).toEqual([{ conversationId: "c1", key: "dragon:1" }]);
+  // 弹出了卡片：换成聊天小窗
+  await page.evaluate(() => window.floatingTest.view({ revision: 41, her: true, since: Date.now() - 1_000,
+    mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } }));
+  await expect(floating).toHaveAttribute("data-mode", "mini");
+});
+
+test("mini chat: a card taller than the list fades at the bottom and offers the full one in Kotone; the wheel over it scrolls the list", async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => window.floatingTest.view({
+    revision: 10, maxHeight: 360, ring: { totalMs: 5_000, leftMs: 5_000, running: true, atMs: Date.now() },
+    mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" },
+  }));
+  const card = page.locator('[data-testid="floating-turn"][data-push="lol:opening:9100000"]');
+  const frame = card.locator('[data-testid="mcp-app-frame"]');
+  await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  await expect.poll(() => page.frames().some((f) => /\/app\/lol\/match$/.test(f.url()))).toBe(true);
+  const app = page.frames().find((f) => /\/app\/lol\/match$/.test(f.url()))!;
+  // App 长高到 1500 多（插件页面很长时）：iframe 跟着长、自己不滚，外面那一块不超过列表
+  await app.evaluate(() => {
+    const tall = document.createElement("div");
+    tall.style.height = "1500px";
+    tall.dataset.tall = "1";
+    document.body.appendChild(tall);
+  });
+  await expect(frame).toHaveAttribute("data-clipped", "true");
+  const iframe = frame.getByTestId("mcp-app-iframe");
+  await expect.poll(async () => (await iframe.boundingBox())?.height ?? 0).toBeGreaterThan(1500);
+  expect(await app.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight)).toBeLessThanOrEqual(1);
+  const list = page.getByTestId("floating-list");
+  const [boxHeight, listHeight] = await Promise.all([
+    frame.evaluate((el) => (el.firstElementChild as HTMLElement).getBoundingClientRect().height), list.evaluate((el) => el.clientHeight)]);
+  expect(boxHeight).toBeLessThanOrEqual(listHeight);
+  expect(boxHeight).toBeGreaterThanOrEqual(120);
+  // 底部渐隐（mask），中间一个“在 Kotone 里看完整的”
+  expect(await frame.evaluate((el) => getComputedStyle(el.firstElementChild as HTMLElement).maskImage)).toContain("linear-gradient");
+  const more = frame.getByTestId("mcp-app-more");
+  await expect(more).toHaveText("在 Kotone 里看完整的");
+  // 滚轮落在卡片上：滚的是列表
+  await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  const bottomTop = await list.evaluate((el) => el.scrollTop);
+  expect(bottomTop).toBeGreaterThan(40);
+  const [listBox, frameBox] = await Promise.all([list.boundingBox(), iframe.boundingBox()]);
+  const top = Math.max(listBox!.y, frameBox!.y);
+  await page.mouse.move(frameBox!.x + frameBox!.width / 2, top + 30);
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName, { x: frameBox!.x + frameBox!.width / 2, y: top + 30 })).toBe("IFRAME");
+  await page.mouse.wheel(0, -120);
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeLessThan(bottomTop);
+  await more.scrollIntoViewIfNeeded();
+  await screenshot(page.getByTestId("floating"), { path: shot("floating-mini-card-clipped"), omitBackground: true });
+  // 点了：打开 Kotone 看完整的「这局」（和卡头一样）
+  await more.click();
+  await expect.poll(() => calls(page, "auto_card_open")).toEqual([{ conversationId: "c1", key: OPENING, openMatch: true }]);
+});
+
+test("mini chat: draws at most the latest 20 turns (this time's + up to 10 before) and loads 20 more when scrolled to the top", async ({ page }) => {
+  await open(page, undefined, { turns: 60, cards: 0 });
+  const list = page.getByTestId("floating-list");
+  const turns = page.getByTestId("floating-turn");
+  // 这一次来的是开局战绩（最后一轮）：它和前面 10 轮
+  await page.evaluate(() => window.floatingTest.view({ revision: 1, maxHeight: 420,
+    mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } }));
+  await expect(list).toHaveAttribute("data-total", "64");
+  await expect(turns).toHaveCount(11);
+  await expect(list).toHaveAttribute("data-start", "53");
+  await page.evaluate(() => window.floatingTest.view({ revision: 2, shown: false }));
+  await expect(page.getByTestId("floating-mini")).toHaveCount(0);
+  // 这一次来的有一大段（since 在整段对话之前）：只画最后 20 轮
+  await page.evaluate(() => window.floatingTest.view({ revision: 3, maxHeight: 420, since: 1_700_000_000_000 - 3_100_000,
+    mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } }));
+  await expect(turns).toHaveCount(20);
+  await expect(list).toHaveAttribute("data-start", "44");
+  // 滚到顶：再往前加载 20 轮，原来最上面那一轮留在原处
+  const scrollToTop = async () => {
+    await list.hover();
+    await page.mouse.wheel(0, -50_000);
+  };
+  await scrollToTop();
+  await expect(list).toHaveAttribute("data-start", "24");
+  await expect(turns).toHaveCount(40);
+  const keptId = await turns.nth(20).evaluate((el) => el.dataset.floatingTurn);
+  const kept = page.locator(`[data-floating-turn="${keptId}"]`);
+  const [listBox, keptBox] = await Promise.all([list.boundingBox(), kept.boundingBox()]);
+  expect(Math.abs(keptBox!.y - listBox!.y)).toBeLessThanOrEqual(24);
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(200);
+  await scrollToTop();
+  await expect(list).toHaveAttribute("data-start", "4");
+  await scrollToTop();
+  await expect(list).toHaveAttribute("data-start", "0");
+  await expect(turns).toHaveCount(64);
+  await expect(page.getByTestId("floating-older")).toHaveCount(0);
+});
+
+test("long conversation (500 turns, 50 cards): timings for the mini chat appearing and a push arriving", async ({ page }) => {
+  await open(page, undefined, { turns: 500, cards: 50 });
+  await expect.poll(() => page.evaluate(() => document.querySelector("[data-testid=floating]") !== null)).toBe(true);
+  const timings = await page.evaluate(async () => {
+    const t = window.floatingTest;
+    const until = (ok: () => boolean) => new Promise<void>((resolve) => {
+      const check = () => (ok() ? resolve() : setTimeout(check, 0));
+      check();
+    });
+    const { buildTurns } = await import("/src/lib/agentChat/timeline.ts");
+    const messages = t.conversation.messages as Parameters<typeof buildTurns>[0];
+    // 先等对话载入（chat.init 取 agent_conversation）
+    await t.view({ revision: 1, maxHeight: 420, mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } });
+    await until(() => document.querySelectorAll("[data-testid=floating-turn]").length >= 11);
+    await t.view({ revision: 2, shown: false });
+    await until(() => !document.querySelector("[data-testid=floating-mini]"));
+    await new Promise((r) => setTimeout(r, 400));
+    let at = performance.now();
+    for (let i = 0; i < 20; i += 1) buildTurns(messages, null, false);
+    const build = (performance.now() - at) / 20;
+    const turnCount = buildTurns(messages, null, false).length;
+    at = performance.now();
+    await t.view({ revision: 3, maxHeight: 420, mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } });
+    await until(() => document.querySelectorAll("[data-testid=floating-turn]").length >= 11);
+    const show = performance.now() - at;
+    const drawn = document.querySelectorAll("[data-testid=floating-turn]").length;
+    const pushes: number[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      at = performance.now();
+      // i18n-ignore-start：示例
+      await t.push({ kind: "posted", conversationId: "c1", plugin: "lol", trigger: "augment-pick", key: `augment:p${i}`, held: true, alert: false,
+        message: t.line(`augment:p${i}`, [{ text: "首选", tone: "good" }]) });
+      // i18n-ignore-end
+      await until(() => !!document.querySelector(`[data-testid=floating-turn][data-push="lol:augment:p${i}"]`));
+      pushes.push(performance.now() - at);
+    }
+    return { turnCount, build, show, drawn, pushes };
+  });
+  console.log(`[floating timings] ${JSON.stringify(timings)}`);
+  test.info().annotations.push({ type: "timings", description: JSON.stringify(timings) });
+  expect(timings.turnCount).toBe(504);
+  expect(timings.drawn).toBeLessThanOrEqual(20);
+  expect(timings.show).toBeLessThan(2_000);
+  for (const ms of timings.pushes) expect(ms).toBeLessThan(1_000);
+});
+
+test("settings 交互 → 悬浮窗: show, pop up the mini chat for pushes, how long the bubble and the mini chat stay, where it sits, reset after a drag, danmaku", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.route("**/__floating-settings-test", (route) => route.fulfill({
     contentType: "text/html", body: '<!doctype html><html><body><div id="app"></div></body></html>',
@@ -645,8 +863,25 @@ test("settings 交互 → 悬浮窗: show, pop up the mini chat for pushes, wher
   // 关掉悬浮窗：推送时弹出小窗灰掉
   await page.getByTestId("bubble-enabled").click();
   await expect(page.getByTestId("push-popup")).toBeDisabled();
+  await expect(page.getByTestId("bubble-stay")).toBeDisabled();
+  await expect(page.getByTestId("mini-stay")).toBeDisabled();
   await page.getByTestId("bubble-enabled").click();
   await expect(page.getByTestId("push-popup")).toBeEnabled();
+
+  // 停留时间（rc.14 试玩：默认小窗 5 秒、气泡 3 秒）：和两个开关放在一起；旧设置没有这两项时显示默认
+  await expect(page.getByTestId("bubble-stay")).toHaveAttribute("data-value", "3");
+  await expect(page.getByTestId("bubble-stay")).toHaveText("3 秒（默认）");
+  await expect(page.getByTestId("mini-stay")).toHaveAttribute("data-value", "5");
+  await page.getByTestId("bubble-stay").click();
+  await expect(page.getByRole("option")).toHaveText(["2 秒", "3 秒（默认）", "5 秒", "8 秒", "10 秒", "15 秒"]);
+  await page.getByRole("option", { name: "8 秒", exact: true }).click();
+  await expect.poll(async () => (await stored()).assistant.bubble.bubbleSeconds).toBe(8);
+  await page.getByTestId("mini-stay").click();
+  await expect(page.getByRole("option")).toHaveText(["3 秒", "5 秒（默认）", "8 秒", "10 秒", "15 秒", "30 秒"]);
+  await page.getByRole("option", { name: "3 秒", exact: true }).click();
+  await expect.poll(async () => (await stored()).assistant.bubble.miniSeconds).toBe(3);
+  await expect(page.getByTestId("mini-stay")).toHaveText("3 秒");
+  expect((await stored()).assistant.bubble).toMatchObject({ enabled: true, bubbleSeconds: 8, miniSeconds: 3 });
 
   // 拖过（后端写的位置，发 settings-changed）：位置还原能点，点了清掉、再请后端照角摆一次
   await page.evaluate(() => (window as unknown as { floatingSettings: { dragged(p: unknown): Promise<void> } }).floatingSettings

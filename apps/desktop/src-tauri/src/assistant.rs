@@ -111,7 +111,8 @@ impl AssistantRuntime {
     }
 }
 
-/// 实际用哪个语音引擎：“自动”（默认）时，琴音的连接能用 DeepSeek 语音就用它，否则系统语音。
+/// 实际用哪个语音引擎：“自动”（默认）时跟着她用的模型走（ADR 048）——她的 API 连接那一家有声音、有 Key
+/// （DeepSeek / MiniMax / 阿里云百炼）就用那家，否则系统语音。
 pub fn effective_engine(app: &AppHandle, config: &AssistantConfig) -> TtsEngine {
     config.tts_engine_auto(|| {
         let companion_enabled = app.try_state::<crate::SharedState>().is_some_and(|state| {
@@ -123,7 +124,10 @@ pub fn effective_engine(app: &AppHandle, config: &AssistantConfig) -> TtsEngine 
                 .legacy_upgrade
                 .uses_legacy_assistant()
         });
-        companion_enabled && crate::tts_online::deepseek_ready(app)
+        if !companion_enabled {
+            return None;
+        }
+        crate::tts_online::her_voice(app)
     })
 }
 
@@ -134,15 +138,15 @@ fn selected_speaker(
     speaker_for_engine(app, effective_engine(app, config))
 }
 
-fn speaker_for_engine(app: &AppHandle, engine: TtsEngine) -> Result<Arc<dyn SpeechOutput>, String> {
+pub(crate) fn speaker_for_engine(
+    app: &AppHandle,
+    engine: TtsEngine,
+) -> Result<Arc<dyn SpeechOutput>, String> {
     let runtime = app.state::<AssistantRuntime>();
-    let online_kind = match engine {
-        TtsEngine::System => return runtime.system_speaker.clone(),
-        TtsEngine::Kokoro => None,
-        TtsEngine::Openai => Some(kotone_tts::online::OnlineKind::OpenAi),
-        TtsEngine::Volcano => Some(kotone_tts::online::OnlineKind::Volcano),
-        TtsEngine::Deepseek => Some(kotone_tts::online::OnlineKind::Deepseek),
-    };
+    if engine == TtsEngine::System {
+        return runtime.system_speaker.clone();
+    }
+    let online_kind = kotone_tts::catalog::kind_of(engine);
     if let Some(kind) = online_kind {
         let mut online = runtime.online_speakers.lock().unwrap();
         if let Some((_, speaker)) = online
@@ -1010,13 +1014,7 @@ fn speech_request(
     // 当前角色有自己的声音、并且属于正在用的引擎时，用角色的（换角色声音跟着换）。
     let role_voice = crate::roles::cached_voice();
     let role_voice = role_voice.trim();
-    let provider = match engine {
-        TtsEngine::Kokoro => kotone_tts::voice::KOKORO,
-        TtsEngine::System => kotone_tts::voice::SYSTEM,
-        TtsEngine::Openai => kotone_tts::voice::OPENAI,
-        TtsEngine::Volcano => kotone_tts::voice::VOLCANO,
-        TtsEngine::Deepseek => kotone_tts::voice::DEEPSEEK,
-    };
+    let provider = kotone_tts::catalog::provider_of(engine);
     let role_voice = role_voice
         .split_once('/')
         .filter(|(p, v)| *p == provider && !v.is_empty())
@@ -1029,7 +1027,8 @@ fn speech_request(
             let id = config.voice_id.trim();
             id.strip_prefix("system/").unwrap_or(id).to_string()
         }
-        (TtsEngine::Openai | TtsEngine::Volcano | TtsEngine::Deepseek, None) => String::new(),
+        // 在线引擎的声音在模型配置里，合成时解析
+        (_, None) => String::new(),
     };
     SpeechRequest {
         text: text.to_string(),
@@ -1383,24 +1382,12 @@ pub async fn list_speech_voices(
     } else {
         effective_engine(&app, &config)
     };
-    match engine {
-        TtsEngine::Kokoro => return Ok(kotone_tts::kokoro_voices()),
-        TtsEngine::Deepseek => {
-            return Ok(kotone_tts::catalog::online_voices(
-                kotone_tts::online::OnlineKind::Deepseek,
-            ))
-        }
-        TtsEngine::Openai => {
-            return Ok(kotone_tts::catalog::online_voices(
-                kotone_tts::online::OnlineKind::OpenAi,
-            ))
-        }
-        TtsEngine::Volcano => {
-            return Ok(kotone_tts::catalog::online_voices(
-                kotone_tts::online::OnlineKind::Volcano,
-            ))
-        }
-        TtsEngine::System => {}
+    if engine == TtsEngine::Kokoro {
+        return Ok(kotone_tts::kokoro_voices());
+    }
+    if let Some(kind) = kotone_tts::catalog::kind_of(engine) {
+        // MiniMax 有 Key 时在线拉（含复刻的声音），其余是内置列表
+        return Ok(crate::speech_cmd::voices_for(&app, kind).await);
     }
     let speaker = speaker_for_engine(&app, engine)?;
     let voices = tokio::task::spawn_blocking(move || speaker.voices())
@@ -1481,6 +1468,55 @@ pub async fn preview_reminder(
         .map_err(|_| "语音试听失败".to_string())
         .and_then(|r| r);
         log_result(&result);
+        guard.speaker = None;
+        result
+    })
+    .await
+}
+
+/// 试听一个声音（ADR 048，声音设置页的“试听”）：用这个声音念 `text`，不管现在选的是哪一家。音量、语速照设置。
+/// 和“试听语音”一样排队拿播报，正在播别的就报错；在线声音的结果按声音落盘（`cache::disk::also`），再听不花钱。
+pub async fn try_voice(
+    app: &AppHandle,
+    engine: TtsEngine,
+    voice_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    let runtime = app.state::<AssistantRuntime>();
+    let _output = runtime
+        .output_lock
+        .try_lock()
+        .map_err(|_| "正在播报，请稍后再试听".to_string())?;
+    let output_cancel = runtime.output_cancel.begin();
+    until_output_stopped(&output_cancel, async {
+        let mut guard = OutputGuard {
+            app: app.clone(),
+            speaker: None,
+            visual: None,
+        };
+        let config = app
+            .state::<crate::SharedState>()
+            .settings
+            .read()
+            .unwrap()
+            .assistant
+            .clone();
+        let speaker = speaker_for_engine(app, engine)?;
+        guard.speaker = Some(speaker.clone());
+        let voice = match engine {
+            TtsEngine::System => voice_id.trim_start_matches("system/").to_string(),
+            _ => voice_id.to_string(),
+        };
+        let request = SpeechRequest {
+            text: text.to_string(),
+            voice_id: (!voice.is_empty()).then_some(voice),
+            volume: config.speech_volume,
+            rate: config.speech_rate,
+        };
+        let result = queue_speech(speaker, request, &runtime.active_captures, &output_cancel)?
+            .await
+            .map_err(|_| "试听失败".to_string())
+            .and_then(|r| r);
         guard.speaker = None;
         result
     })

@@ -63,13 +63,13 @@ function games(i: number, count = 20): PlayerGame[] {
   });
 }
 
-/** 浏览器预览的账号有 47 局，可以翻过概况的 20 局并看到不足一页的末页。 */
+/** 浏览器预览的账号客户端给了 47 局（`clientGames`），可以翻过概况的 20 局并看到不足一页的末页（末页写“客户端只给了最近 47 局”）。 */
 export function sampleHistory(id: string, offset: number, pageSize: 10 | 20): HistoryPage {
   const index = NAMES.findIndex((_, i) => puuid(i) === id);
   const history = index < 0 ? [] : games(index, HISTORY_LENGTH);
   const rows = history.slice(offset, offset + pageSize);
   const hasMore = offset + rows.length < history.length;
-  return { puuid: id, offset, pageSize, games: rows, hasMore, nextOffset: hasMore ? offset + rows.length : null };
+  return { puuid: id, offset, pageSize, games: rows, hasMore, nextOffset: hasMore ? offset + rows.length : null, clientGames: history.length };
 }
 
 /** 我方 3、4 号隐藏了身份（照 2026-11-26 那一把海斗：客户端不给名字和 puuid，只有英雄；ADR 043 D9）。 */
@@ -155,7 +155,7 @@ export function sampleGame(gameId: number): GameData {
     return {
       puuid: puuid(i), riotId: `${NAMES[i]}#${1001 + i}`, champion: CHAMPIONS[(i + (record ? gameIndex : 0)) % CHAMPIONS.length], level: 14 + (i % 4),
       kills: played?.kills ?? 2 + i, deaths: played?.deaths ?? 3 + (i % 5), assists: played?.assists ?? 10 + (i % 7),
-      damage, dpm: Math.round(damage * 60 / durationS), taken: 20_000 + i * 900,
+      damage, dpm: Math.round(damage * 60 / durationS),
       gold: played?.gold ?? 10_500 + i * 300, cs: played?.cs ?? 40 + i * 3, items: ITEMS.slice(0, 2 + (i % 3)), augments: played?.augments ?? AUGMENTS.slice(0, 1 + (i % 3)),
     };
   };

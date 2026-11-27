@@ -1,28 +1,42 @@
-//! 海克斯三选一（ADR 043 D7，2026-11-26 晚修订：推一张卡片，识别范围收窄）：清单 `[[pushes]]` 的 `augment-pick`。
+//! 海克斯三选一 / 四选一（ADR 043 D7，2026-11-26 晚修订：推一张卡片，识别范围收窄；2026-11-27 修订：认四选一，语音说
+//! “选第几个”）：清单 `[[pushes]]` 的 `augment-pick`。
 //!
-//! - **看画面**：海斗对局里只截三张卡片**名字所在的那一横条**（[`NAME_STRIP`]，照 AramHex 的标题位置，见下）识别文字
+//! - **看画面**：海斗对局里只截卡片**名字所在的那一横条**（[`NAME_STRIP`]，照 AramHex 的标题位置，见下）识别文字
 //!   （宿主的 `screen_text`，**固定用本地文字识别**，和全局的识别设置无关），认出海克斯的名字（aramhex-data 的海克斯名），
-//!   并且要**三个名字在同一行、分别在这一横条的左 / 中 / 右三段里**（或者两个认出来、剩下那一段同一行有字但没认出）才算
-//!   出现了三选一（[`offer_of`]）；别的（左下角聊天框里队友打的海克斯名、卡片说明里提到的名字）一律不算。
-//!   按这局自己英雄的 英雄 × 海克斯 胜率、照 AramHex 的规则（[`rules::evaluate`]）给每张一个判断。卡片在屏幕上时每秒看一次
-//!   （本地识别一次 0.1–0.3 秒），不在时每 2 秒。
+//!   再看这些名字是不是**同一行、以画面中线对称、等距排开**，排得像三张还是四张（[`offer_of`]，规矩见下）：至少认出两个，
+//!   没认出的那几格在该在的地方同一行有字，才算出现了三选一 / 四选一；别的（左下角聊天框里队友打的海克斯名、卡片说明里
+//!   提到的名字）一律不算。按这局自己英雄的 英雄 × 海克斯 胜率、照 AramHex 的规则（[`rules::evaluate`]）给每张一个判断。
+//!   卡片在屏幕上时每秒看一次（本地识别一次 0.1–0.3 秒），不在时每 2 秒。
 //! - **一张卡片 + 语音**（玩家：“不需要单独给海克斯做一个UI，就直接推卡片就行啊，就像战绩一样推送，卡片上写清楚三个海克斯
-//!   推荐程度就行”）：卡片（页面 `ui://kotone/lol/augment-pick`）从左到右三张：图标、名字、评级、首选 / 可选 / 可刷新 /
-//!   没数据（认不出的那张写“没认出”），来源标签 aramhex-data。一次三选一一个 key：刷新了哪张卡片就原地换哪一格（同一个
-//!   key 再推，宿主原地更新）；她在卡片刚出现时说一次（“中间那个”，几个说法轮着用），刷新后最好的那张变了才再说（说法跟着
-//!   结论走：结论没变，说法就没变，宿主不再说）。三张都不好时说“都一般，可以刷新”。同样的画面连着看到两次才推（刷新的
-//!   动画里只认出一部分时不推，免得说错）。卡片没了 [`CARD_GONE`]：卡片标上“选好了”，`push_done`（聊天里的记录留着）；
-//!   之后再出三选一是新的一次（新的 key）。
+//!   推荐程度就行”）：卡片（页面 `ui://kotone/lol/augment-pick`）从左到右三格或四格（和游戏里一样）：图标、名字、评级、
+//!   首选 / 可选 / 可刷新 / 没数据（认不出的那张写“没认出”），来源标签 aramhex-data。一次三选一一个 key：刷新了哪张卡片
+//!   就原地换哪一格（同一个 key 再推，宿主原地更新；三张、四张之间变了也是同一次里变了）；她在卡片刚出现时说一次
+//!   （玩家 2026-11-27：“语音也需要改成，选第一个、选第二个、选第三个、选第四个”——三张时也按第几个说，几个说法轮着用），
+//!   刷新后最好的那张变了才再说（说法跟着结论走：结论没变，说法就没变，宿主不再说）。都不好时说“都一般，可以刷新”。
+//!   同样的画面连着看到两次才推（刷新的动画里只认出一部分时不推，免得说错）。卡片没了 [`CARD_GONE`]：卡片标上“选好了”，
+//!   `push_done`（聊天里的记录留着）；之后再出三选一是新的一次（新的 key）。
 //! - **本地识别用不了时**：一个本地模型都没装、玩家也没说过“不用”——推一张卡片问要不要下载（页面
 //!   `ui://kotone/lol/augment-ocr`，下载 / 不用；海斗选英雄时就问，进了游戏点不了）；下载走本体的模型下载，不改全局的
 //!   文字识别选择。用不了（没有模型又说了不用、下载失败、游戏是独占全屏、识别出错）时推一行说清楚原因，**每局最多一次**；
 //!   游戏不在前台不算用不了（不截，等它回到前台）。
 //!
-//! 识别的位置照 [AramHex](https://github.com/czgreat/aramhex)（MIT，Copyright (c) 2026 czgreat；读的是 `main` 分支
-//! `ffb784a`，2026-11-26）的 `lolhex/vision/detector.py`：三个标题框 `DEFAULT_BOXES` 在窗口高度的 38.7%–43.4%（国服 4K
-//! 实机校准，游戏界面按高度缩放、水平居中，其他宽高比的卡片往中间收）；判定三选一“不靠固定坐标，看画面里是否同时出现
-//! ≥2 个能匹配到海克斯字典的文字，且它们在同一水平线上、左右排开”（`_pick_row`：同一行是纵向相差 0.03 个窗口高度以内）。
-//! 这里没有它的“整块扫描 + 本机校准”：只截固定的一横条，左右分三段。许可证全文在 `licenses/aramhex-MIT.txt`。
+//! **识别的位置和怎么认几张**照 [AramHex](https://github.com/czgreat/aramhex)（MIT，Copyright (c) 2026 czgreat；读的是
+//! `main` 分支 `ffb784a`，2026-11-26），许可证全文在 `licenses/aramhex-MIT.txt`：
+//! - 标题在哪一行：`lolhex/vision/detector.py` 的 `DEFAULT_BOXES` 在窗口高度的 38.7%–43.4%（国服 4K 实机校准，游戏界面
+//!   按高度缩放、水平居中）。判定“不靠固定坐标，看画面里是否同时出现 ≥2 个能匹配到海克斯字典的文字，且它们在同一水平线上、
+//!   左右排开”（`_pick_row`：同一行是纵向相差 0.03 个窗口高度以内，这里收紧到 [`ROW_TOLERANCE`]）。
+//! - 四选一（它 1.1.7 起认，`docs/recognition-settings.md`「四选一」、`_layout_columns`、`tests/test_four_choice.py`）：
+//!   “四张卡的卡距、卡宽和标题高度与三选一相同，整组仍以画面中线对称，只是错开半张：三选一卡心在中线和中线 ±1 个卡距，
+//!   四选一在 ±0.5、±1.5 个卡距”；卡距约 0.342 个窗口高度（`CARD_SPACING_H`，它的四选一实机截图也是约 0.34）。它 4K 实录的
+//!   四选一标题框左边在 13.1%、32.3%、51.5%、70.7% 屏宽（卡心约 21%、40%、60%、79%）。它记的是“测试服新地图”；英雄联盟 wiki
+//!   的 ARAM: Mayhem 页（2026-11-27 读）写着每局开场有一个 Headliner，其中 Maestro 是“Augment selection screens now contain
+//!   four offerings of augments, rather than three.”——玩家说的“有时候会是四选一”应该就是它。
+//! - 和它不一样：它知道窗口多大（卡距按窗口高度算，两张时用实机卡距推），还有整块扫描 + 本机校准；这里只截固定的一横条，
+//!   拿到的是客户区的比例坐标、不知道宽高比，所以卡距由认出来的名字自己推（整组以中线对称，最小二乘），只认合理的卡距
+//!   （[`SPACING`]，5:4 到 32:9）；没认出的那一格要它的卡心附近同一行有字（[`NEAR`]）——这样只认出两张时也分得清三张、四张
+//!   （例如左右对称的两个名字：三选一的中间那格在中线上，四选一中间两格在 ±1/3 的位置，只有一种有字）。
+//! - **没在真机上校准过**：四选一的位置只来自 AramHex 的说明、测试和实录数字，我们自己没截过四选一的画面；横条左右放宽到
+//!   2%–98% 是按卡距算的（4:3 的四选一最外侧卡心在 11.5% / 88.5% 屏宽），没在 16:10、4:3 的屏幕上看过。
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -41,14 +55,28 @@ use crate::stats::aramhex;
 use crate::LolPlugin;
 
 const GAME_EXE: &str = "League of Legends.exe";
-/// 三张卡片名字所在的那一横条（游戏窗口客户区的比例 `[x, y, w, h]`）：只截这一条。纵向 34%–48%：AramHex 的标题框在
-/// 38.7%–43.4%，上下各留约 4.5 个点（不同电脑上差一点也盖得住）；左下角的聊天框在 55% 以下，截不到。横向 12%–88%
-/// 和 AramHex 整块扫描的 `BAND` 一样：16:9 的三张卡片名字中点约在 31%、50%、70%，4:3 到 21:9 都在里面。
-pub(crate) const NAME_STRIP: [f64; 4] = [0.12, 0.34, 0.76, 0.14];
+/// 卡片名字所在的那一横条（游戏窗口客户区的比例 `[x, y, w, h]`）：只截这一条。纵向 34%–48%：AramHex 的标题框在
+/// 38.7%–43.4%（三张、四张一样高），上下各留约 4.5 个点（不同电脑上差一点也盖得住）；左下角的聊天框在 55% 以下，截不到。
+/// 横向 2%–98%：三选一 16:9 的名字中点约在 31%、50%、70%；四选一最外侧的卡心离中线 1.5 个卡距（约 0.51 个窗口高度），
+/// 16:9 在 21% / 79%，4:3 在 11.5% / 88.5%，再留出长名字的一半（照 AramHex `_band` 给窄屏四选一放宽；原来的 12%–88%
+/// 盖不住 16:10 及更窄的四选一）。
+pub(crate) const NAME_STRIP: [f64; 4] = [0.02, 0.34, 0.96, 0.14];
 /// 同一行：纵向中点相差不到这么多（窗口高度的比例；AramHex 是 0.03，这里收紧一点，卡片说明的第一行离标题约 0.03）。
 const ROW_TOLERANCE: f64 = 0.02;
-/// 卡片的名字。
+/// 三选一、四选一的卡心（以画面中线为 0、卡距为 1；AramHex `_layout_columns`）：四选一错开半张。
+const LAYOUTS: [&[f64]; 2] = [&[-1.0, 0.0, 1.0], &[-1.5, -0.5, 0.5, 1.5]];
+/// 卡距（画面宽度的比例）的合理范围：卡距约 0.342 个窗口高度，5:4 约 0.27、16:9 约 0.19、21:9 约 0.15、32:9 约 0.096。
+const SPACING: std::ops::RangeInclusive<f64> = 0.08..=0.30;
+/// 认出来的名字离它那一格的卡心最多差几个卡距（AramHex 判四选一用 0.25，这里紧一点）。
+const FIT: f64 = 0.2;
+/// 没认出的那一格：同一行、离它的卡心不到这么多个卡距的地方有字才算。要比 1/3 小：三选一左右两张认出来时中间那格在中线上，
+/// 四选一最外两张认出来时中间两格在 ±1/3（按三选一的卡距算）的地方，靠这个分开。
+const NEAR: f64 = 0.25;
+/// 横向中点差不到这么多（画面宽度的比例）算同一张卡片上的（AramHex 是 0.08 个窗口高度，16:9 约 0.045）。
+const SAME_CARD: f64 = 0.04;
+/// 卡片的名字（三选一 / 四选一）。
 pub(crate) const PICK_CARD_TITLE: &str = "海克斯三选一";
+pub(crate) const PICK_CARD_TITLE_FOUR: &str = "海克斯四选一";
 /// 卡片在屏幕上时多久看一次（本地识别一次约 0.1–0.3 秒）。
 pub(crate) const CARD_POLL: Duration = Duration::from_secs(1);
 /// 没有卡片时多久看一次（卡片出来以后最多晚这么久认出来）；不在海斗对局里时也这么久看一眼。
@@ -65,8 +93,8 @@ pub(crate) const SETTING_DECLINED: &str = "augmentOcrDeclined";
 const OCR_CARD_KEY: &str = "augment-ocr";
 /// 那张卡片的名字。
 pub(crate) const OCR_CARD_TITLE: &str = "文字识别模型";
-/// 左 / 中 / 右（她说的话里的位置）。
-const PLACES: [&str; 3] = ["左边", "中间", "右边"];
+/// 第几个（她说的话里的位置，从左数；三选一、四选一一样说）。
+const ORDINALS: [&str; 4] = ["第一个", "第二个", "第三个", "第四个"];
 
 // ---------- 认卡片 ----------
 
@@ -114,91 +142,146 @@ pub fn match_augments(lines: &[ScreenText], d: &aramhex::Dataset) -> Vec<(Screen
     out
 }
 
-/// 名字在横条的第几段（左 / 中 / 右）：按它在游戏画面里的横向中点，把 [`NAME_STRIP`] 横着三等分。
-pub fn third_of(line: &ScreenText) -> usize {
-    let [x, _, w, _] = NAME_STRIP;
-    let center = line.rect[0] + line.rect[2] / 2.0;
-    (((center - x) / w * 3.0).floor().max(0.0) as usize).min(2)
+fn center_x(line: &ScreenText) -> f64 {
+    line.rect[0] + line.rect[2] / 2.0
 }
 
 fn center_y(line: &ScreenText) -> f64 {
     line.rect[1] + line.rect[3] / 2.0
 }
 
-/// 画面上有没有三选一：三格各是哪个海克斯（`Some(None)` = 那一段有字但没认出）。
+/// 认出来的名字放进格子的一种排法。
+#[derive(Debug, Clone, PartialEq)]
+struct Layout {
+    /// 从左到右每格是哪个海克斯（None = 这一格有字但没认出）：3 或 4 格。
+    slots: Vec<Option<i64>>,
+    /// 认出来的名字离它那格的卡心最远差几个卡距（越小排得越齐）。
+    err: f64,
+}
+
+/// `n` 格里挑 `k` 格（从左到右）的所有挑法。
+fn choose(n: usize, k: usize) -> Vec<Vec<usize>> {
+    (0u32..1 << n)
+        .filter(|mask| mask.count_ones() as usize == k)
+        .map(|mask| (0..n).filter(|i| mask & (1 << i) != 0).collect())
+        .collect()
+}
+
+/// 同一行（纵向中点 `y`）认出来的名字（横向中点、海克斯，从左到右）能怎么排进三格 / 四格：每个名字放第几格（从左到右、
+/// 不重格）都试一遍，卡距用最小二乘推（整组以画面中线对称），卡距在 [`SPACING`] 里、每个名字离它那格的卡心不到 [`FIT`]
+/// 个卡距才算；剩下的格子要卡心附近（[`NEAR`] 个卡距以内）同一行有至少 2 个字。排得最齐的那种；一样齐时三张优先
+/// （AramHex：拿不准时按三选一）。
+fn layout_of(found: &[(f64, i64)], y: f64, lines: &[ScreenText]) -> Option<Layout> {
+    let mut best: Option<Layout> = None;
+    for offsets in LAYOUTS {
+        for at in choose(offsets.len(), found.len()) {
+            let o: Vec<f64> = at.iter().map(|&i| offsets[i]).collect();
+            let u: Vec<f64> = found.iter().map(|(x, _)| x - 0.5).collect();
+            let oo: f64 = o.iter().map(|v| v * v).sum();
+            let spacing = o.iter().zip(&u).map(|(a, b)| a * b).sum::<f64>() / oo;
+            if !SPACING.contains(&spacing) {
+                continue;
+            }
+            let err = o
+                .iter()
+                .zip(&u)
+                .map(|(a, b)| (b - a * spacing).abs() / spacing)
+                .fold(0.0, f64::max);
+            if err > FIT || best.as_ref().is_some_and(|b| b.err <= err) {
+                continue;
+            }
+            let mut slots: Vec<Option<i64>> = vec![None; offsets.len()];
+            for (&i, (_, id)) in at.iter().zip(found) {
+                slots[i] = Some(*id);
+            }
+            let filled = offsets.iter().enumerate().all(|(i, offset)| {
+                slots[i].is_some()
+                    || lines.iter().any(|line| {
+                        (center_y(line) - y).abs() <= ROW_TOLERANCE
+                            && (center_x(line) - (0.5 + offset * spacing)).abs() <= NEAR * spacing
+                            && norm(&line.text).chars().count() >= 2
+                    })
+            });
+            if filled {
+                best = Some(Layout { slots, err });
+            }
+        }
+    }
+    best
+}
+
+/// 画面上有没有三选一 / 四选一：从左到右每格是哪个海克斯（`None` = 那一格有字但没认出），一共 3 或 4 格。
 ///
-/// 规矩（照 AramHex 的“同一水平线上、左右排开”）：认出来的名字里挑一行（纵向中点相差不到 [`ROW_TOLERANCE`]），每段只留
-/// 一个；三段都有认出来的名字，或者认出两个、剩下那一段同一行有没认出的字（新海克斯、名字被挡住）才算。只在一段里的
-/// （聊天框里队友打的名字、一行里写了好几个名字）、不在同一行的、只认出一个的，都不算。
-pub fn offer_of(lines: &[ScreenText], d: &aramhex::Dataset) -> Option<[Option<i64>; 3]> {
+/// 规矩（照 AramHex 的“同一水平线上、左右排开”和三张 / 四张的排法，见文件头）：认出来的名字里挑一行（纵向中点相差不到
+/// [`ROW_TOLERANCE`]），同一张卡片上的（横向差不到 [`SAME_CARD`]）只留一个；至少认出两个、按 [`layout_of`] 排得进三格或
+/// 四格才算——认出来的名字以画面中线对称、等距（卡距合理），没认出的格子该在的地方同一行有字（新海克斯、名字被挡住）。
+/// 挤在一处的（聊天框里队友打的名字、一行里写了好几个名字）、不在同一行的、排不齐的、只认出一个的，都不算。这一行里多认出
+/// 一个排不进去的（别处的字碰巧对上了名字）时，去掉它再排。
+pub fn offer_of(lines: &[ScreenText], d: &aramhex::Dataset) -> Option<Vec<Option<i64>>> {
     let hits = match_augments(lines, d);
-    let mut best: Option<[Option<i64>; 3]> = None;
-    let mut best_count = 0;
+    let mut best: Option<(usize, Layout)> = None;
     for (anchor, _) in &hits {
-        let y = center_y(anchor);
-        let mut row: [Option<(f64, i64)>; 3] = [None; 3];
+        let anchor_y = center_y(anchor);
+        // 这一行：(横向中点, 纵向中点, 离这一行多远, 海克斯)，同一张卡片上的留离得近的那个
+        let mut row: Vec<(f64, f64, f64, i64)> = Vec::new();
         for (line, id) in &hits {
-            let dy = (center_y(line) - y).abs();
+            let dy = (center_y(line) - anchor_y).abs();
             if dy > ROW_TOLERANCE {
                 continue;
             }
-            let third = third_of(line);
-            if row[third].map_or(true, |(kept, _)| dy < kept) {
-                row[third] = Some((dy, *id));
+            let x = center_x(line);
+            match row.iter_mut().find(|r| (r.0 - x).abs() < SAME_CARD) {
+                Some(kept) if dy < kept.2 => *kept = (x, center_y(line), dy, *id),
+                Some(_) => {}
+                None => row.push((x, center_y(line), dy, *id)),
             }
         }
-        let count = row.iter().flatten().count();
-        if count > best_count {
-            best_count = count;
-            best = Some(row.map(|r| r.map(|(_, id)| id)));
-        }
-    }
-    let row = best?;
-    match best_count {
-        3 => Some(row),
-        2 => {
-            // 剩下那一段：同一行有没认出的字（至少 2 个字）才算
-            let missing = row.iter().position(Option::is_none)?;
-            let found_y: Vec<f64> = hits
-                .iter()
-                .filter(|(_, id)| row.contains(&Some(*id)))
-                .map(|(line, _)| center_y(line))
-                .collect();
-            let y = found_y.iter().sum::<f64>() / found_y.len().max(1) as f64;
-            let unread = lines.iter().any(|line| {
-                third_of(line) == missing
-                    && (center_y(line) - y).abs() <= ROW_TOLERANCE
-                    && norm(&line.text).chars().count() >= 2
+        row.sort_by(|a, b| a.0.total_cmp(&b.0));
+        row.truncate(6);
+        // 认出的越多越好：先拿整行排，排不进再去掉一个、两个……（至少两个）
+        for k in (2..=row.len().min(4)).rev() {
+            if best.as_ref().is_some_and(|(count, _)| *count >= k) {
+                break;
+            }
+            let found = choose(row.len(), k).into_iter().find_map(|pick| {
+                let picked: Vec<_> = pick.iter().map(|&i| row[i]).collect();
+                let y = picked.iter().map(|r| r.1).sum::<f64>() / k as f64;
+                let found: Vec<(f64, i64)> = picked.iter().map(|r| (r.0, r.3)).collect();
+                layout_of(&found, y, lines)
             });
-            unread.then_some(row)
+            if let Some(layout) = found {
+                best = Some((k, layout));
+                break;
+            }
         }
-        _ => None,
     }
+    best.map(|(_, layout)| layout.slots)
 }
 
-/// 这一次三选一现在的样子：三格各是什么判断（None = 这一格没认出来），每格的详细（卡片上画），首选在第几格，
-/// 是不是三张都不好。
+/// 这一次三选一 / 四选一现在的样子：从左到右每格是什么判断（None = 这一格没认出来），每格的详细（卡片上画），首选在
+/// 第几格，是不是都不好。三选一 3 格、四选一 4 格。
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
-    pub slots: [Option<Verdict>; 3],
-    pub cards: [Option<CardVerdict>; 3],
+    pub slots: Vec<Option<Verdict>>,
+    pub cards: Vec<Option<CardVerdict>>,
     pub best: Option<usize>,
     pub weak: bool,
 }
 
 impl View {
-    /// 三格认出来的海克斯（[`offer_of`]）和这局自己的英雄。
-    pub fn new(offer: [Option<i64>; 3], d: &aramhex::Dataset, hero: i64) -> Self {
+    /// 每格认出来的海克斯（[`offer_of`]）和这局自己的英雄。
+    pub fn new(offer: &[Option<i64>], d: &aramhex::Dataset, hero: i64) -> Self {
         let ids: Vec<i64> = offer.iter().flatten().copied().collect();
         let judged = rules::evaluate(d, hero, &ids);
-        let mut cards: [Option<CardVerdict>; 3] = [None, None, None];
         let mut next = judged.iter();
-        for (slot, id) in offer.iter().enumerate() {
-            if id.is_some() {
-                cards[slot] = next.next().cloned();
-            }
-        }
-        let slots = [0, 1, 2].map(|i| cards[i].as_ref().map(|c| c.verdict));
+        let cards: Vec<Option<CardVerdict>> = offer
+            .iter()
+            .map(|id| id.and_then(|_| next.next().cloned()))
+            .collect();
+        let slots: Vec<Option<Verdict>> = cards
+            .iter()
+            .map(|c| c.as_ref().map(|c| c.verdict))
+            .collect();
         Self {
             best: slots.iter().position(|s| *s == Some(Verdict::Best)),
             weak: rules::all_weak(&judged),
@@ -207,9 +290,9 @@ impl View {
         }
     }
 
-    /// 卡片的数据（页面 `ui://kotone/lol/augment-pick`）：从左到右三格，每格 `{id, name, rarity, icon, grade, verdict,
-    /// few}`（`few`：样本偏少）或 `{unread: true}`；首选在第几格、是不是都不好；`ended`：这一次三选一结束了（选好了）。
-    /// 来源标签是 aramhex-data（ADR 043 D8），带数据的版本。
+    /// 卡片的数据（页面 `ui://kotone/lol/augment-pick`）：`count` 一共几格（3 或 4），`slots` 从左到右每格
+    /// `{id, name, rarity, icon, grade, verdict, few}`（`few`：样本偏少）或 `{unread: true}`；首选在第几格、是不是都不好；
+    /// `ended`：这一次结束了（选好了）。来源标签是 aramhex-data（ADR 043 D8），带数据的版本。
     pub fn card(
         &self,
         d: &aramhex::Dataset,
@@ -238,6 +321,7 @@ impl View {
             .collect();
         json!({
             "champion": champion,
+            "count": slots.len(),
             "slots": slots,
             "best": self.best,
             "weak": self.weak,
@@ -247,43 +331,43 @@ impl View {
         })
     }
 
-    /// 三格的判断写成字（卡片上的字由页面照 `verdict` 画；这里给测试）：首选 / 可选 / 可刷新 / 没数据 / 没认出。
+    /// 每格的判断写成字（卡片上的字由页面照 `verdict` 画；这里给测试）：首选 / 可选 / 可刷新 / 没数据 / 没认出。
     #[cfg(test)]
-    pub fn cells(&self) -> [&'static str; 3] {
-        self.slots.map(|slot| match slot {
-            Some(Verdict::Best) => "首选",
-            Some(Verdict::Ok) => "可选",
-            Some(Verdict::Reroll) => "可刷新",
-            Some(Verdict::NoData) => "没数据",
-            None => "没认出",
-        })
+    pub fn cells(&self) -> Vec<&'static str> {
+        self.slots
+            .iter()
+            .map(|slot| match slot {
+                Some(Verdict::Best) => "首选",
+                Some(Verdict::Ok) => "可选",
+                Some(Verdict::Reroll) => "可刷新",
+                Some(Verdict::NoData) => "没数据",
+                None => "没认出",
+            })
+            .collect()
     }
 
-    /// 她说的那句（几个说法，宿主轮着用）：首选在哪一格；三张都不好时说可以刷新。一张有数据的都没有时不说。
-    /// 说法只跟结论走（首选在哪、是不是都不好）：刷新以后结论没变，说法就一样，宿主不再说。
+    /// 她说的那句（几个说法，宿主轮着用）：首选是从左数第几个（三张、四张都这样说）；都不好时说可以刷新。一张有数据的
+    /// 都没有时不说。说法只跟结论走（首选在第几个、是不是都不好），不提一共几张：刷新以后结论没变，说法就一样，宿主不再说
+    /// （三张、四张之间认变了也一样）。
     pub fn voice(&self) -> Vec<String> {
         let Some(best) = self.best else {
             return Vec::new();
         };
-        let place = PLACES[best];
+        let nth = ORDINALS[best.min(ORDINALS.len() - 1)];
         if self.weak {
             vec![
-                format!("都一般，可以刷新，非要选就{place}"),
-                format!("这三张都不太好，刷新吧，不然拿{place}的"),
+                "都一般，可以刷新".to_string(),
+                format!("这几张都不太好，刷新吧，不然选{nth}"),
             ]
         } else {
-            vec![
-                format!("{place}那个"),
-                format!("选{place}那张"),
-                format!("拿{place}的"),
-            ]
+            vec![format!("选{nth}"), format!("{nth}最好"), format!("拿{nth}")]
         }
     }
 }
 
-/// 画面上认出来的三选一（[`offer_of`] 的规矩）。
+/// 画面上认出来的三选一 / 四选一（[`offer_of`] 的规矩）。
 pub fn view_of(lines: &[ScreenText], d: &aramhex::Dataset, hero: i64) -> Option<View> {
-    offer_of(lines, d).map(|offer| View::new(offer, d, hero))
+    offer_of(lines, d).map(|offer| View::new(&offer, d, hero))
 }
 
 // ---------- 一帧一帧地看 ----------
@@ -534,13 +618,18 @@ fn pushed(what: &str, result: Result<PushOutcome, String>) -> bool {
     }
 }
 
-/// 三选一的卡片（同一个 key 再推就是原地更新）。
+/// 三选一的卡片（同一个 key 再推就是原地更新）：四格时卡片叫“海克斯四选一”。
 fn pick_push(key: String, card: Value, voice: Vec<String>) -> Push {
+    let title = if card["count"] == 4 {
+        PICK_CARD_TITLE_FOUR
+    } else {
+        PICK_CARD_TITLE
+    };
     Push {
         trigger: PUSH_AUGMENT_PICK.into(),
         key,
         card: Some(PushCard {
-            title: PICK_CARD_TITLE.into(),
+            title: title.into(),
             uri: PAGE_AUGMENT_PICK.into(),
             params: Value::Null,
             data: card,
@@ -945,6 +1034,20 @@ mod tests {
         ]
     }
 
+    /// 16:9 的四选一（AramHex 4K 实录：标题框左边在 13.1%、32.3%、51.5%、70.7% 屏宽，框宽约 16.1%，卡心约 21.2%、40.4%、
+    /// 59.6%、78.8%）：四个名字在同一行，下面是说明的第一行。
+    const FOUR: [f64; 4] = [0.2121, 0.4039, 0.5957, 0.7877];
+    fn ocr4(names: [&str; 4]) -> Vec<ScreenText> {
+        let mut lines: Vec<ScreenText> = names
+            .iter()
+            .zip(FOUR)
+            .map(|(name, cx)| line(name, cx - 0.05, 0.395))
+            .collect();
+        lines.reverse();
+        lines.push(line("每次攻击……", FOUR[1] - 0.05, 0.44));
+        lines
+    }
+
     #[test]
     fn three_cards_are_found_and_judged_left_to_right() {
         let d = dataset();
@@ -952,7 +1055,7 @@ mod tests {
         let found = match_augments(&lines, &d);
         let ids: Vec<i64> = found.iter().map(|(_, id)| *id).collect();
         assert_eq!(ids, vec![2, 4, 3], "从左到右，长名字优先");
-        assert_eq!(offer_of(&lines, &d), Some([Some(2), Some(4), Some(3)]));
+        assert_eq!(offer_of(&lines, &d), Some(vec![Some(2), Some(4), Some(3)]));
         let view = view_of(&lines, &d, 39).unwrap();
         // 首选是终极九头蛇（5800/10000 = 58%，平滑后 +7.8，也比 17000/30000 的 +6.6 高），在最右边；
         // 鼓声暴起 低音轰鸣低不到 2 个点：可选；弹跳蜜蜂比平均低：可刷新
@@ -967,9 +1070,132 @@ mod tests {
         assert_eq!(view.best, Some(2));
         assert!(!view.weak);
         assert_eq!(view.cells(), ["可选", "可刷新", "首选"]);
-        assert_eq!(view.voice(), ["右边那个", "选右边那张", "拿右边的"]);
+        // 玩家 2026-11-27：“选第一个、选第二个、选第三个、选第四个”——三张时也按第几个说，不说左边 / 中间 / 右边
+        assert_eq!(view.voice(), ["选第三个", "第三个最好", "拿第三个"]);
         for v in view.voice() {
             assert!(v.chars().count() <= Push::VOICE_MAX, "{v}");
+            assert!(!["左", "中间", "右"].iter().any(|w| v.contains(w)), "{v}");
+        }
+    }
+
+    /// 玩家 2026-11-27：“现在的海斗有时候会是四选一”。四个名字同一行、以中线对称等距排开：四格，从左到右；首选在第几个就说
+    /// 第几个。
+    #[test]
+    fn four_cards_are_found_left_to_right_and_said_by_number() {
+        let d = dataset();
+        let lines = ocr4(["弹跳蜜蜂", "终极九头蛇", "鼓声暴起 低音轰鸣", "冰川之心"]);
+        assert_eq!(
+            offer_of(&lines, &d),
+            Some(vec![Some(4), Some(3), Some(2), Some(6)])
+        );
+        let view = view_of(&lines, &d, 39).unwrap();
+        // 终极九头蛇 +7.8 首选；鼓声暴起 低音轰鸣 +6.6 低不到 2 个点：可选；弹跳蜜蜂、冰川之心比平均低：可刷新
+        assert_eq!(view.cells(), ["可刷新", "首选", "可选", "可刷新"]);
+        assert_eq!(view.best, Some(1));
+        assert_eq!(view.voice(), ["选第二个", "第二个最好", "拿第二个"]);
+        // 首选在最右边：第四个
+        let right = view_of(
+            &ocr4(["弹跳蜜蜂", "冰川之心", "终极九头蛇", "珠光护手"]),
+            &d,
+            39,
+        )
+        .unwrap();
+        assert_eq!(right.best, Some(3));
+        assert_eq!(right.voice()[0], "选第四个");
+        // 四张里有一张没认出（新海克斯、名字被挡住）：哪一张都行，那一格写“没认出”，别的位置不乱
+        for missing in 0..4 {
+            let mut names = ["弹跳蜜蜂", "终极九头蛇", "鼓声暴起 低音轰鸣", "冰川之心"];
+            names[missing] = "？？新的";
+            let mut want = vec![Some(4), Some(3), Some(2), Some(6)];
+            want[missing] = None;
+            assert_eq!(
+                offer_of(&ocr4(names), &d),
+                Some(want),
+                "第 {missing} 格没认出"
+            );
+        }
+        // 只认出两张（最外两张、中间两张、挨着的两张），别的格子有字：照样认得出是四张
+        for (names, want) in [
+            (
+                ["终极九头蛇", "看不清", "糊了", "珠光护手"],
+                vec![Some(3), None, None, Some(5)],
+            ),
+            (
+                ["看不清", "终极九头蛇", "珠光护手", "糊了"],
+                vec![None, Some(3), Some(5), None],
+            ),
+            (
+                ["终极九头蛇", "珠光护手", "看不清", "糊了"],
+                vec![Some(3), Some(5), None, None],
+            ),
+        ] {
+            assert_eq!(offer_of(&ocr4(names), &d), Some(want), "{names:?}");
+        }
+        // 四张卡片只认出两张、别的格子没字（刷新的动画里）：不算
+        let two = vec![
+            line("终极九头蛇", FOUR[0] - 0.05, 0.395),
+            line("珠光护手", FOUR[3] - 0.05, 0.395),
+        ];
+        assert_eq!(offer_of(&two, &d), None);
+    }
+
+    /// 三张、四张都是以画面中线对称、等距（卡距约 0.342 个窗口高度）：从 5:4 到 32:9 的窗口，三张认成三张、四张认成四张，
+    /// 只认出两张时也不弄混（左右对称的两张：三选一中间那格在中线上，四选一中间两格在 ±1/3 的地方）；名字都在横条里。
+    #[test]
+    fn three_or_four_by_layout_on_every_aspect_ratio() {
+        let d = dataset();
+        let names = ["终极九头蛇", "珠光护手", "冰川之心", "弹跳蜜蜂"];
+        let ids = [3, 5, 6, 4];
+        let [x, y, w, h] = NAME_STRIP;
+        assert!(y >= 0.30 && y + h <= 0.5 && h <= 0.15, "{NAME_STRIP:?}");
+        for aspect in [
+            5.0 / 4.0,
+            4.0 / 3.0,
+            16.0 / 10.0,
+            16.0 / 9.0,
+            21.0 / 9.0,
+            32.0 / 9.0,
+        ] {
+            let spacing = 0.3416 / aspect;
+            for offsets in LAYOUTS {
+                let centers: Vec<f64> = offsets.iter().map(|o| 0.5 + o * spacing).collect();
+                // 名字（宽约 0.05）整个在横条里
+                assert!(
+                    centers[0] - 0.025 >= x && centers[centers.len() - 1] + 0.025 <= x + w,
+                    "宽高比 {aspect:.2}、{} 张：{centers:?}",
+                    centers.len()
+                );
+                let at = |i: usize, text: &str| ScreenText {
+                    text: text.into(),
+                    rect: [centers[i] - 0.025, 0.395, 0.05, 0.03],
+                };
+                let all: Vec<ScreenText> = (0..centers.len()).map(|i| at(i, names[i])).collect();
+                let want: Vec<Option<i64>> = (0..centers.len()).map(|i| Some(ids[i])).collect();
+                assert_eq!(offer_of(&all, &d), Some(want), "宽高比 {aspect:.2}");
+                // 只认出最外两张、别的格子有字但没认出
+                let last = centers.len() - 1;
+                let mut outer: Vec<ScreenText> = vec![at(0, names[0]), at(last, names[last])];
+                outer.extend((1..last).map(|i| at(i, "看不清")));
+                let mut want = vec![None; centers.len()];
+                want[0] = Some(ids[0]);
+                want[last] = Some(ids[last]);
+                assert_eq!(
+                    offer_of(&outer, &d),
+                    Some(want),
+                    "宽高比 {aspect:.2}、只认出最外两张"
+                );
+                // 只认出最左边两张
+                let mut left: Vec<ScreenText> = vec![at(0, names[0]), at(1, names[1])];
+                left.extend((2..centers.len()).map(|i| at(i, "看不清")));
+                let mut want = vec![None; centers.len()];
+                want[0] = Some(ids[0]);
+                want[1] = Some(ids[1]);
+                assert_eq!(
+                    offer_of(&left, &d),
+                    Some(want),
+                    "宽高比 {aspect:.2}、只认出左边两张"
+                );
+            }
         }
     }
 
@@ -996,6 +1222,7 @@ mod tests {
             false,
         );
         assert_eq!(card["slots"].as_array().unwrap().len(), 3);
+        assert_eq!(card["count"], 3);
         assert_eq!(card["slots"][0]["name"], "鼓声暴起 低音轰鸣");
         assert_eq!(card["slots"][0]["verdict"], "ok");
         assert_eq!(card["slots"][0]["rarity"], "prismatic");
@@ -1016,6 +1243,42 @@ mod tests {
             !text.contains("winRate") && !text.contains("delta"),
             "卡片上不放胜率：{text}"
         );
+        assert_eq!(
+            pick_push("k".into(), card, view.voice())
+                .card
+                .unwrap()
+                .title,
+            "海克斯三选一"
+        );
+        // 四选一：四格（一共几格写在 count 里），卡片叫“海克斯四选一”
+        let four = view_of(
+            &ocr4(["弹跳蜜蜂", "终极九头蛇", "？？", "冰川之心"]),
+            &d,
+            39,
+        )
+        .unwrap();
+        let card = four.card(
+            &d,
+            Some(&data),
+            json!({"id": 39, "short": "艾瑞莉娅"}),
+            false,
+        );
+        assert_eq!(card["count"], 4);
+        assert_eq!(card["slots"].as_array().unwrap().len(), 4);
+        assert_eq!(card["slots"][2], json!({"unread": true}));
+        assert_eq!(card["slots"][1]["verdict"], "best");
+        assert!(card["slots"][1]["icon"]
+            .as_str()
+            .unwrap()
+            .ends_with("Hydra_small.png"));
+        assert_eq!(card["best"], 1);
+        assert_eq!(
+            pick_push("k".into(), card, four.voice())
+                .card
+                .unwrap()
+                .title,
+            "海克斯四选一"
+        );
     }
 
     #[test]
@@ -1034,19 +1297,20 @@ mod tests {
         assert_eq!(view.cells()[1], "没认出");
     }
 
-    /// 玩家 2026-11-26：“队友有时候聊天框发送了海克斯也会触发海克斯推荐”。现在只截名字那一横条，而且三个名字要在同一行、
-    /// 左 / 中 / 右三段里各一个：聊天里的名字（都在左边一段、一行一个）、同一行写了好几个名字、不在同一行的，都不算。
+    /// 玩家 2026-11-26：“队友有时候聊天框发送了海克斯也会触发海克斯推荐”。现在只截名字那一横条，而且名字要在同一行、
+    /// 以中线对称等距排开：聊天里的名字（挤在左边、一行一个）、同一行写了好几个名字、不在同一行的（两行的）、排不齐的，都不算。
     #[test]
     fn chat_lines_and_stray_names_are_not_an_offer() {
         let d = dataset();
-        // 聊天框（左下角，就算截到了也都在左边一段）：队友一行一个海克斯名
+        // 聊天框（左下角，就算截到了也都挤在左边一处）：队友一行一个海克斯名
         let chat = vec![
             line("[队伍] 甲: 终极九头蛇", 0.13, 0.40),
             line("[队伍] 乙: 珠光护手", 0.13, 0.42),
             line("[队伍] 丙: 冰川之心", 0.13, 0.44),
+            line("[队伍] 丁: 弹跳蜜蜂", 0.13, 0.46),
         ];
-        assert_eq!(match_augments(&chat, &d).len(), 3, "名字都认得出");
-        assert_eq!(offer_of(&chat, &d), None, "都在左边一段：不算");
+        assert_eq!(match_augments(&chat, &d).len(), 4, "名字都认得出");
+        assert_eq!(offer_of(&chat, &d), None, "都挤在左边一处：不算");
         // 一行里写了三个名字：一行只认一个
         assert_eq!(
             offer_of(&[line("终极九头蛇 珠光护手 冰川之心", 0.3, 0.40)], &d),
@@ -1059,33 +1323,42 @@ mod tests {
             line("冰川之心", 0.65, 0.36),
         ];
         assert_eq!(offer_of(&scattered, &d), None);
-        // 只认出两个、剩下那一段什么字都没有（卡片说明里提到了两个名字这类）：不算
+        // 四张分成两行（上面两个、下面两个，比如卡片说明里提到了别的名字）：一行只有两个、哪一行都排不成四张，不算
+        let rows = vec![
+            line("终极九头蛇", FOUR[0] - 0.05, 0.395),
+            line("珠光护手", FOUR[1] - 0.05, 0.395),
+            line("冰川之心", FOUR[2] - 0.05, 0.45),
+            line("弹跳蜜蜂", FOUR[3] - 0.05, 0.45),
+        ];
+        assert_eq!(offer_of(&rows, &d), None);
+        // 只认出两个、剩下那一格什么字都没有（卡片说明里提到了两个名字这类）：不算
         let two = vec![
             line("终极九头蛇", 0.26, 0.395),
             line("珠光护手", 0.65, 0.395),
         ];
         assert_eq!(offer_of(&two, &d), None);
+        // 同一行三个名字，但没以中线对称（都偏在左边）：不是三选一也不是四选一
+        let lopsided = vec![
+            line("终极九头蛇", 0.10, 0.395),
+            line("珠光护手", 0.25, 0.395),
+            line("冰川之心", 0.40, 0.395),
+        ];
+        assert_eq!(offer_of(&lopsided, &d), None);
         // 真的三选一 + 聊天里的名字：照样认出三选一，聊天那行不进来
         let mut both = ocr("鼓声暴起 低音轰鸣", "弹跳蜜蜂", "终极九头蛇");
         both.push(line("[队伍] 甲: 珠光护手", 0.13, 0.46));
-        assert_eq!(offer_of(&both, &d), Some([Some(2), Some(4), Some(3)]));
-        // 区域本身：只截名字那一横条（不是原来的中间一大块），左下角的聊天框（55% 以下）不在里面
-        let [x, y, w, h] = NAME_STRIP;
-        assert!(y >= 0.30 && y + h <= 0.5 && h <= 0.15, "{NAME_STRIP:?}");
-        assert!(
-            x <= 0.25 && x + w >= 0.75,
-            "4:3 到 21:9 的三张卡片名字都在里面"
+        assert_eq!(offer_of(&both, &d), Some(vec![Some(2), Some(4), Some(3)]));
+        // 真的三选一 + 同一行别处的字碰巧对上了一个名字：去掉排不进的那个，还是三选一
+        let mut stray = ocr("鼓声暴起 低音轰鸣", "弹跳蜜蜂", "终极九头蛇");
+        stray.push(line("冰川之心", 0.86, 0.40));
+        assert_eq!(offer_of(&stray, &d), Some(vec![Some(2), Some(4), Some(3)]));
+        // 真的四选一 + 聊天里的名字：四张，聊天那行不进来
+        let mut four = ocr4(["弹跳蜜蜂", "终极九头蛇", "鼓声暴起 低音轰鸣", "冰川之心"]);
+        four.push(line("[队伍] 甲: 珠光护手", 0.13, 0.46));
+        assert_eq!(
+            offer_of(&four, &d),
+            Some(vec![Some(4), Some(3), Some(2), Some(6)])
         );
-        // 左中右三段：16:9 的三个名字中点（AramHex DEFAULT_BOXES 换算）各在一段，21:9 的也是
-        let at = |cx: f64| line("x", cx - 0.05, 0.4);
-        for k in [1.0, 16.0 / 9.0 / (21.0 / 9.0), 16.0 / 9.0 / (4.0 / 3.0)] {
-            let centers = [0.3116, 0.5038, 0.6960].map(|c| 0.5 + (c - 0.5) * k);
-            assert_eq!(
-                centers.map(|c| third_of(&at(c))),
-                [0, 1, 2],
-                "宽高比系数 {k}"
-            );
-        }
     }
 
     #[test]
@@ -1100,20 +1373,27 @@ mod tests {
         let view = view_of(&lines, &d, 39).unwrap();
         assert_eq!(view.best, Some(1));
         assert!(view.weak);
+        // “都一般，可以刷新”不说位置；“刷新吧，不然选第几个”按第几个说，也不说一共几张（三张、四张一样）
         assert_eq!(
             view.voice(),
-            [
-                "都一般，可以刷新，非要选就中间",
-                "这三张都不太好，刷新吧，不然拿中间的"
-            ]
+            ["都一般，可以刷新", "这几张都不太好，刷新吧，不然选第二个"]
         );
         for v in view.voice() {
             assert!(v.chars().count() <= Push::VOICE_MAX, "{v}");
         }
+        // 四张都不好（四选一的最后一个是首选）：一样的说法
+        let four = view_of(
+            &ocr4(["冰川之心", "看不清", "糊了的字", "弹跳蜜蜂"]),
+            &d,
+            39,
+        )
+        .unwrap();
+        assert!(four.weak);
+        assert_eq!(four.voice()[1], "这几张都不太好，刷新吧，不然选第四个");
         // 一张有数据的都没有：不说
         let none = View {
-            slots: [Some(Verdict::NoData), Some(Verdict::NoData), None],
-            cards: [None, None, None],
+            slots: vec![Some(Verdict::NoData), Some(Verdict::NoData), None],
+            cards: vec![None, None, None],
             best: None,
             weak: false,
         };
@@ -1127,7 +1407,8 @@ mod tests {
     }
 
     /// ADR 043 D7 的一次三选一，一帧一帧（中间夹着聊天框里的海克斯名，一律不算）：出现 → 卡片 + 语音；刷新了一张、首选没变
-    /// → 原地换那一格、不说；首选变了 → 说；卡片没了 4 秒 → 收起；之后再出来是新的一次（新的 key）。
+    /// → 原地换那一格、不说；首选变了 → 说；认成了四张 → 同一个 key 原地换成四格；卡片没了 4 秒 → 收起；之后再出来是新的
+    /// 一次（新的 key）。
     #[test]
     fn one_offer_frame_by_frame() {
         let d = dataset();
@@ -1135,7 +1416,7 @@ mod tests {
         // 第 s 秒（从 -10 秒起都行：前面先看两帧聊天）
         let at = |s: f64| t0 + Duration::from_secs_f64(s + 10.0);
         let mut tracker = Tracker::default();
-        let mut pushes: Vec<(String, [&str; 3], Vec<String>)> = Vec::new();
+        let mut pushes: Vec<(String, Vec<&str>, Vec<String>)> = Vec::new();
         let mut done: Vec<String> = Vec::new();
         let frame_of = |lines: Option<Vec<ScreenText>>| match lines {
             None => Frame::Unknown,
@@ -1165,7 +1446,7 @@ mod tests {
             "聊天里的名字不是三选一"
         );
         let first = ocr("鼓声暴起 低音轰鸣", "弹跳蜜蜂", "终极九头蛇");
-        // 出现：第一帧先记下，第二帧一样才推（卡片 + 说“右边那个”）
+        // 出现：第一帧先记下，第二帧一样才推（卡片 + 说“选第三个”）
         run!(&mut tracker, Some(first.clone()), 0.0);
         assert!(pushes.is_empty(), "只看到一次，不推");
         let mut noisy = first.clone();
@@ -1210,14 +1491,25 @@ mod tests {
             !says(Some(&pushes[1].2), &pushes[2].2),
             "首选还在右边：不说"
         );
-        // 再刷新左边、右边：左边成了首选 → 说“左边那个”
+        // 再刷新左边、右边：左边成了首选 → 说“选第一个”
         let r3 = ocr("珠光护手", "鼓声暴起", "冰川之心");
         run!(&mut tracker, Some(r3.clone()), 8.0);
         run!(&mut tracker, Some(r3.clone()), 9.0);
         assert_eq!(pushes.len(), 4);
         assert_eq!(pushes[3].0, key);
-        assert_eq!(pushes[3].2[0], "左边那个");
+        assert_eq!(pushes[3].2[0], "选第一个");
         assert!(says(Some(&pushes[2].2), &pushes[3].2), "首选变了：说");
+        // 认成了四张（三张、四张之间变了）：还是这一次，同一个 key 原地换成四格；首选还是第一个 → 说法一样，不说
+        let four = ocr4(["珠光护手", "鼓声暴起", "冰川之心", "弹跳蜜蜂"]);
+        run!(&mut tracker, Some(four.clone()), 9.5);
+        run!(&mut tracker, Some(four.clone()), 9.8);
+        assert_eq!(pushes.len(), 5);
+        assert_eq!(pushes[4].0, key, "三张 ↔ 四张：同一个 key");
+        assert_eq!(pushes[4].1, ["首选", "没数据", "可刷新", "可刷新"]);
+        assert!(
+            !says(Some(&pushes[3].2), &pushes[4].2),
+            "首选还是第一个：不说"
+        );
         // 游戏切走了一下（没截成）：什么都不改
         run!(&mut tracker, None, 10.0);
         assert!(tracker.is_open());
@@ -1225,16 +1517,16 @@ mod tests {
         run!(&mut tracker, Some(chat("珠光护手")), 11.0);
         run!(&mut tracker, Some(Vec::new()), 12.0);
         assert!(done.is_empty());
-        run!(&mut tracker, Some(Vec::new()), 13.0);
+        run!(&mut tracker, Some(Vec::new()), 14.0);
         assert_eq!(done, std::slice::from_ref(&key));
         assert!(!tracker.is_open());
         // 过一会儿又出三选一：新的一次，新的 key
         run!(&mut tracker, Some(first.clone()), 300.0);
         run!(&mut tracker, Some(first.clone()), 301.0);
-        assert_eq!(pushes.len(), 5);
-        assert_eq!(pushes[4].0, "augment:9100001:301000");
-        assert_ne!(pushes[4].0, key);
-        assert!(says(None, &pushes[4].2));
+        assert_eq!(pushes.len(), 6);
+        assert_eq!(pushes[5].0, "augment:9100001:301000");
+        assert_ne!(pushes[5].0, key);
+        assert!(says(None, &pushes[5].2));
         // 这局结束了：开着的那一次收起（带着最后推出去的样子，卡片标“选好了”）
         match tracker.close() {
             Some(Step::Done { key, last }) => {

@@ -58,8 +58,8 @@ struct Run {
 
 /// 取不到的块（结果是 null）多久以后再试；取到的这一次选人里一直用。
 const MEMO_RETRY: Duration = Duration::from_secs(15);
-/// 英雄池看自己最近多少局。
-const POOL_GAMES: u32 = 40;
+/// 英雄池看自己最近多少局（向客户端要的是同一段最近 50 局，见 [`paths::matches`]）。
+const POOL_GAMES: usize = 40;
 
 /// 选人接口里我方的人（英雄 id、分路、是不是我；还没选的不算）和备选席。
 pub fn seats(session: &Value) -> (Vec<(i64, String, bool)>, Vec<i64>) {
@@ -707,10 +707,13 @@ impl LolPlugin {
         let games = if puuid.is_empty() {
             Vec::new()
         } else {
-            lcu.get(&paths::matches(&puuid, POOL_GAMES))
+            let mut games = lcu
+                .get(&paths::matches(&puuid))
                 .await
                 .map(|list| history::parse_match_list(&list))
-                .unwrap_or_default()
+                .unwrap_or_default();
+            games.truncate(POOL_GAMES);
+            games
         };
         if let Some(run) = self.pushes.lock().unwrap().champ_select.run.as_mut() {
             run.games = Some(games.clone());

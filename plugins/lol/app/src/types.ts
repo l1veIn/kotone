@@ -182,6 +182,8 @@ export function isPlayerData(value: unknown): value is PlayerData {
   return !!v && typeof v.puuid === "string" && Array.isArray(v.games);
 }
 
+/** 分页的战绩（`lol.history`）：`offset` 是第几局（重开、自定义不算）；`clientGames` 是客户端一共给了几局记录
+ * （客户端按人只给一段，翻到头时写清，plugins/lol/src/watcher/history_page.rs）。 */
 export interface HistoryPage {
   puuid: string;
   offset: number;
@@ -189,12 +191,13 @@ export interface HistoryPage {
   games: PlayerGame[];
   hasMore: boolean;
   nextOffset: number | null;
+  clientGames: number;
 }
 
 export function isHistoryPage(value: unknown): value is HistoryPage {
   const v = value as Partial<HistoryPage> | null;
   return !!v && typeof v.puuid === "string" && typeof v.offset === "number" && Number.isSafeInteger(v.offset)
-    && (v.pageSize === 10 || v.pageSize === 20) && Array.isArray(v.games)
+    && (v.pageSize === 10 || v.pageSize === 20) && Array.isArray(v.games) && typeof v.clientGames === "number"
     && typeof v.hasMore === "boolean" && (v.hasMore
       ? typeof v.nextOffset === "number" && Number.isSafeInteger(v.nextOffset) && v.nextOffset > v.offset
       : v.nextOffset === null);
@@ -210,7 +213,6 @@ export interface GamePlayer {
   assists: number;
   damage: number;
   dpm: number;
-  taken: number;
   gold: number;
   cs: number;
   items: Item[];

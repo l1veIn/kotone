@@ -169,6 +169,8 @@ pub fn last_event_id(all_game_data: &Value) -> i64 {
 pub struct Seen {
     pub level: i64,
     pub dead: bool,
+    /// 还要几秒复活（死着时；“对面阵亡”的提醒只数复活得慢的）。
+    pub respawn: f64,
     /// 身上装备的 id（原样，海斗的 `22xxxx` 这类也照原样）。
     pub items: Vec<i64>,
 }
@@ -193,6 +195,7 @@ impl Roster {
                         Seen {
                             level: p.level,
                             dead: p.dead,
+                            respawn: p.respawn,
                             items: p.items.iter().map(|i| i.id).collect(),
                         },
                     )
@@ -257,8 +260,9 @@ pub fn base_item(id: i64) -> i64 {
     }
 }
 
-/// 没读到客户端的装备资料时，装备事件只认这几件（和推送“对面的关键装备”同一张表：复活甲、中娅、水银、女妖）。
-pub const KEY_ITEM_IDS: [i64; 6] = [3026, 3157, 3140, 3139, 6035, 3102];
+/// 没读到客户端的装备资料时，装备事件只认这几件（和推送“对面的关键装备”同一张表：复活甲、中娅、水银、女妖、
+/// 巨蛇之牙，都是成装；推送里的重伤小件不在这里，事件照旧只报成装）。
+pub const KEY_ITEM_IDS: [i64; 7] = [3026, 3157, 3140, 3139, 6035, 3102, 6695];
 
 /// 这件算不算成装（装备事件只报成装）。
 pub fn completed(id: i64, data: Option<&GameData>) -> bool {

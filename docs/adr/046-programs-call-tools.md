@@ -131,3 +131,15 @@ ADR 045 之后，自动化的动作就是程序，通知、交给她都是程序
 - D6 里照接口推的说法，没录到：守护天使、基兰大招、赛恩被动、艾尼维亚的蛋、扎克被动时 `isDead` 会不会闪一下（要每 0.5 秒读一次局内接口录一局）；塔、小兵、野怪杀的和处决时 `ChampionKill` 是什么样（`KillerName` 写什么、`killer` 是不是空的）；隐藏身份的佛耶戈附身后阵亡；观战（应该不报）和斗魂竞技场（几队人时 `alliesAlive` 怎么算）。
 - 验收场景真机跑一遍：最后一个队友倒下、我还活着时真的放歌；网易云没登录时出弹幕“网易云音乐还没登录，没放成”。
 - 真 DeepSeek：跟她说“队友都倒了给我放首歌”，看她写的程序（`team: "ally"` 有没有省）；存了调要确认的工具时她会不会叫玩家去「自动化」页点“允许”。
+
+## 2026-11-27 修订：能写进 `on.match` 的条件写进去（rc.14 试玩）
+
+玩家让她写了“队友都倒了、我还活着时放首歌”，她存的触发只有 `match: {team: "ally"}`，开了一局一次和 120 秒冷却，“只剩我”写在程序里（`if args.allies_alive > 1 then return end`，参数由 `lol.death` 的 `alliesAlive` 自动填）。第一个倒下的队友就触发了：程序 return 了，可这一局的一次和冷却已经用掉，真到只剩玩家一个时不再触发；也没看 `meAlive`。`tool("lol.match")` 和它的字段都用对了。
+
+不改 `on.match` 的匹配规则（不加大于小于），改给她的说明：
+
+- `lol.death` 的 `alliesAlive` 说明（`plugins/lol/plugin.toml`，经 `game.state` 的事件目录给她）带上配方：“队友都倒了、只剩我”= `match {team: ally, alliesAlive: 1, meAlive: true}`。
+- 共用规矩（`prompt.rs`）加一条：按游戏事件触发的，能写进 `on.match` 的条件都写进去（子集匹配，数组表示“或”，如 `alliesAlive: [0, 1]`）；程序里判断不满足就 return 的那一次也算触发，会占掉“一局一次”和冷却；保存结果里的 `triggerNotes` 看一眼再决定改不改。`automation.save` 的工具说明和 `on.match` 的字段说明（`catalog_host.rs`）同样写上。
+- 保存时提醒一句（不拦）：触发开了 `oncePerMatch` 或 `cooldownSeconds`，程序里又读了由事件自动填的参数（`args.<名字>`，名字照 `event_args` 的规矩对上触发里那几种事的 `data` 字段；字段已经写进 `match` 的、只在注释和字符串里的不算）。判定是 `kotone_core::automation::library::trigger_hints`（事件的字段由新的 `EventCatalog::data_fields` 给），桌面端把它放进保存结果的 `triggerNotes`——和“触发里的事现在不会发生”同一项，没有另加字段；她的工具结果、工具服务、「自动化」页的保存都走同一处（`automation::store`）。读事件的值只拿来说话（`say(args.champion .. "倒了")`）的也会提醒，所以话说成“要是程序拿它判断……只是拿来说话的不用改”，让她自己判断。
+- 测试：core 1 个（玩家那份有提醒，写着一局一次和冷却、`args.allies_alive（alliesAlive）`；条件都在 `match` 里的、没开次数和冷却的、读的参数不是事件字段的、只在注释和字符串里的、字段已经在 `match` 里的、触发关着的都没有；只开冷却的有）；英雄联盟插件 1 个（照玩家那份：一波里队友一个个倒下，错的那份在还剩 4 个人时就触发、最后一个倒下时不再触发，改过的只在最后一个触发；`alliesAlive` 的说明里有配方）；她的规矩、工具说明的测试各加几句。
+- 玩家机器上已经存的那一份不动（主会话告诉玩家怎么改）。

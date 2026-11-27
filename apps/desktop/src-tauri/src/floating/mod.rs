@@ -1,10 +1,11 @@
 //! 悬浮窗（ADR 043 D6，2026-11-26 晚修订）：游戏所在屏幕上的一个小窗。出现时角上一定是她的头像（外面一圈进度条），
-//! 旁边是**气泡**（一条简单的：她在听、在想、说了一句短话，推送的一行）或**聊天小窗**（复杂的：卡片、工具调用、长回答、
-//! 同时来了几条；就是聊天页那段对话最近的几条，用聊天页的组件）。原来的说话气泡（ADR 018，窗口 `companion`）和右下角的
-//! 消息提示（ADR 039 D4，窗口 `message-popup`）都并进了它。
+//! 旁边是**气泡**（简单的：她在听、在想、说了一句短话，推送的一行——几行推送和她那一句都在气泡里）或**聊天小窗**
+//! （复杂的：弹出的卡片、工具调用、长回答、她答了不止一轮；就是聊天页那段对话最近的几条，用聊天页的组件）。原来的说话
+//! 气泡（ADR 018，窗口 `companion`）和右下角的消息提示（ADR 039 D4，窗口 `message-popup`）都并进了它。
 //!
-//! - **显示不显示、进度条**：纯状态在 [`model`]（气泡 6 秒、聊天小窗 10 秒，从最后一次变化算；鼠标在上面、她在听 / 在想 /
-//!   在说时不走，移开接着走；走完整个收起；× 收到下一条推送）。旁边放气泡还是聊天小窗由界面按内容定，量好大小时一起报上来
+//! - **显示不显示、进度条**：纯状态在 [`model`]（气泡、聊天小窗各走设置里的秒数——`assistant.bubble.bubbleSeconds` /
+//!   `miniSeconds`，缺省 3 秒、5 秒——从最后一次变化算；鼠标在上面、她在听 / 在想 / 在说时不走，移开接着走；走完整个收起；
+//!   × 收到下一条推送）。改状态前照设置给模型一次停留时间（[`timing`]）。旁边放气泡还是聊天小窗由界面按内容定，量好大小时一起报上来
 //!   （[`floating_layout`] 的 `mini`）。她这一行的内容照旧是 `bubble.rs` 的状态机，它每次改状态都调 [`her`]（带上她在不在忙）；
 //!   推送由 `agent/push.rs` 调 [`pushed`] / [`done`]。
 //! - **在哪**：游戏（前台窗口）在哪块屏，就在哪块屏。没拖过贴着设置里的角，让开同一个角上的输入条（屏幕角落分配，
@@ -37,7 +38,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::bubble::Phase;
 use crate::SharedState;
-use model::{Line, Model, View};
+use model::{Line, Model, Timing, View};
 
 pub const LABEL: &str = "floating";
 /// 给界面的样子（[`Shown`]）。
@@ -112,6 +113,12 @@ fn config(app: &AppHandle) -> BubbleConfig {
     app.try_state::<SharedState>()
         .map(|state| state.settings.read().unwrap().assistant.bubble.clone())
         .unwrap_or_default()
+}
+
+/// 设置里的停留时间（气泡、聊天小窗各几秒）。在锁住悬浮窗的状态之前读（不在持锁时读设置）。
+fn timing(app: &AppHandle) -> Timing {
+    let config = config(app);
+    Timing::from_seconds(config.bubble_seconds, config.mini_seconds)
 }
 
 fn compose(app: &AppHandle, view: View) -> Shown {
@@ -408,7 +415,12 @@ fn clip(
 /// 她这一行变了（`bubble.rs` 每次改状态、念完一句都调；`None` = 那边收起了）。`active`：她在听 / 在想 / 在说 / 等你回答
 /// （进度条停着）。内容在 `kotone://bubble` 里，界面自己听。
 pub fn her(app: &AppHandle, phase: Option<Phase>, active: bool) {
-    let changed = state().lock().unwrap().model.her(phase, active, now_ms());
+    let timing = timing(app);
+    let changed = {
+        let mut s = state().lock().unwrap();
+        s.model.set_timing(timing);
+        s.model.her(phase, active, now_ms())
+    };
     if changed {
         publish(app);
     }
@@ -439,11 +451,13 @@ pub fn pushed(app: &AppHandle, push: Pushed) {
     let Some(state_handle) = app.try_state::<SharedState>() else {
         return;
     };
-    let (enabled, popup) = {
+    let (enabled, popup, timing) = {
         let settings = state_handle.settings.read().unwrap();
+        let bubble = &settings.assistant.bubble;
         (
-            settings.assistant.bubble.enabled,
+            bubble.enabled,
             settings.agent.auto_cards.popup,
+            Timing::from_seconds(bubble.bubble_seconds, bubble.mini_seconds),
         )
     };
     let pop = push.card && popup && (push.posted || push.alert);
@@ -452,7 +466,11 @@ pub fn pushed(app: &AppHandle, push: Pushed) {
     }
     if push.line.is_none() && !pop {
         // 没弹出的原地更新：聊天小窗开着时小窗里那张变了
-        let changed = !push.posted && state().lock().unwrap().model.updated(now_ms());
+        let changed = !push.posted && {
+            let mut s = state().lock().unwrap();
+            s.model.set_timing(timing);
+            s.model.updated(now_ms())
+        };
         if changed {
             publish(app);
         }
@@ -468,6 +486,7 @@ pub fn pushed(app: &AppHandle, push: Pushed) {
     let now = now_ms();
     let changed = {
         let mut s = state().lock().unwrap();
+        s.model.set_timing(timing);
         let mut changed = false;
         if let Some(line) = push.line {
             changed |= s.model.line(
@@ -535,8 +554,10 @@ pub fn floating_layout(
     mini: Option<bool>,
     boxes: Option<Vec<[f64; 4]>>,
 ) {
+    let timing = timing(&app);
     let reshaped = {
         let mut s = state().lock().unwrap();
+        s.model.set_timing(timing);
         if boxes.as_ref().is_some_and(Vec::is_empty) {
             if s.visible || s.exiting != Some(revision) {
                 return;

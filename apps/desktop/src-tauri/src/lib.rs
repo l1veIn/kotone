@@ -48,6 +48,7 @@ mod runtime;
 mod runtime_cmd;
 mod screen_corner;
 mod settings_cmd;
+mod speech_cmd;
 mod speech_models;
 mod speech_screen;
 mod startup;
@@ -199,7 +200,19 @@ pub fn run() {
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
             let loaded_settings = settings::load_with_diagnostic();
             let settings_load_warning = loaded_settings.warning;
-            let settings = loaded_settings.settings;
+            let mut settings = loaded_settings.settings;
+            // 她的声音（ADR 048）：模型配置里的明文 Key（火山 Access Token、讯飞 APISecret）挪进凭据库，
+            // 自定义语音接口以前的隐含默认值写明；改了就存盘。凭据库装给 kotone-core，引擎查“配好没有”时用。
+            kotone_core::model_secrets::install(Arc::new(kotone_ai::secrets::KeyringSecretStore));
+            let secrets_moved = kotone_core::model_secrets::migrate(
+                &mut settings,
+                &kotone_ai::secrets::KeyringSecretStore,
+            );
+            if (secrets_moved | tts_online::migrate_settings(&mut settings))
+                && settings::save(&settings).is_err()
+            {
+                log::log("迁移语音设置以后没能存盘，下次启动再试");
+            }
             process_log::set_recording_enabled(settings.diagnostics.recording);
             let mut app_started =
                 process_log::ProcessEvent::new(process_log::app_session_id(), "app_started");
@@ -523,6 +536,12 @@ pub fn run() {
             runtime_cmd::voice_input_trial_cancel,
             assistant::list_speech_voices,
             assistant::preview_reminder,
+            speech_cmd::speech_providers,
+            speech_cmd::speech_key_save,
+            speech_cmd::speech_key_clear,
+            speech_cmd::speech_check,
+            speech_cmd::speech_voices,
+            speech_cmd::speech_try_voice,
             assistant::assistant_call,
             assistant::stop_speech,
             assistant::get_danmaku,

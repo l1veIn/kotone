@@ -159,6 +159,11 @@ pub struct BubbleConfig {
     pub also_danmaku: bool,
     /// 玩家把悬浮窗拖到的地方（新字段，缺省 null = 没拖过，摆在 `corner` 上）。“位置还原”就是把它改回 null。
     pub position: Option<FloatingPosition>,
+    /// 气泡停留多久（秒，从最后一次变化算；鼠标停在上面、她在听 / 在想 / 在说时不走）。新字段，缺省 3（rc.14 试玩：
+    /// “气泡类消息 3 秒就可以了”）。
+    pub bubble_seconds: u32,
+    /// 聊天小窗停留多久（秒，同上）。新字段，缺省 5（“默认小窗显示 5 秒”）。
+    pub mini_seconds: u32,
 }
 
 /// 悬浮窗拖到的地方，按屏幕工作区（去掉任务栏）记，换一块屏幕、换分辨率照样用：窗口的哪个角（`corner`，拖完时窗口在
@@ -178,6 +183,12 @@ impl FloatingPosition {
 }
 
 pub const BUBBLE_OFFSET_RANGE: std::ops::RangeInclusive<u32> = 0..=800;
+/// 气泡停留的缺省秒数。
+pub const DEFAULT_BUBBLE_SECONDS: u32 = 3;
+/// 聊天小窗停留的缺省秒数。
+pub const DEFAULT_MINI_SECONDS: u32 = 5;
+/// 气泡、聊天小窗停留的秒数范围（设置页给 2–15 / 3–30 几档，她照玩家的话改也在这个范围里）。
+pub const FLOATING_STAY_RANGE_SECONDS: std::ops::RangeInclusive<u32> = 1..=60;
 
 impl Default for BubbleConfig {
     fn default() -> Self {
@@ -187,6 +198,8 @@ impl Default for BubbleConfig {
             offset_y: 0,
             also_danmaku: false,
             position: None,
+            bubble_seconds: DEFAULT_BUBBLE_SECONDS,
+            mini_seconds: DEFAULT_MINI_SECONDS,
         }
     }
 }
@@ -270,18 +283,27 @@ impl Default for WakeConfig {
 pub enum TtsEngine {
     System,
     Kokoro,
-    /// OpenAI 兼容的在线语音合成（`/audio/speech`），绑定 AI 连接。
+    /// 自定义（OpenAI 兼容接口，`/audio/speech`）：地址、模型、声音自己填。
     Openai,
     /// 火山语音合成（在线）。
     Volcano,
     /// DeepSeek 官方语音合成（在线，`/v1/tools/tts`），复用 DeepSeek 连接的 API key。
     Deepseek,
+    /// MiniMax 语音合成（在线，`/v1/t2a_v2`），ADR 048。
+    Minimax,
+    /// 阿里云百炼 Qwen3-TTS-Flash（在线），ADR 048。
+    Dashscope,
+    /// 硅基流动（在线，OpenAI 兼容接口的预设），ADR 048。
+    Siliconflow,
 }
 
 /// 在线语音合成的清单 ID（与 `kotone_tts::catalog` 一致）。
 pub const OPENAI_TTS_MODEL_ID: &str = "openai-compat-tts";
 pub const VOLCANO_TTS_MODEL_ID: &str = "volcano-tts";
 pub const DEEPSEEK_TTS_MODEL_ID: &str = "deepseek-tts";
+pub const MINIMAX_TTS_MODEL_ID: &str = "minimax-tts";
+pub const DASHSCOPE_TTS_MODEL_ID: &str = "dashscope-tts";
+pub const SILICONFLOW_TTS_MODEL_ID: &str = "siliconflow-tts";
 /// `ttsModelId` 写这个值 = 用户明确选了本地语音（`speechEngine`），不参与“自动”。
 pub const LOCAL_TTS_MODEL_ID: &str = "local";
 
@@ -454,6 +476,10 @@ impl AssistantConfig {
             OPENAI_TTS_MODEL_ID => TtsEngine::Openai,
             VOLCANO_TTS_MODEL_ID => TtsEngine::Volcano,
             DEEPSEEK_TTS_MODEL_ID => TtsEngine::Deepseek,
+            MINIMAX_TTS_MODEL_ID => TtsEngine::Minimax,
+            DASHSCOPE_TTS_MODEL_ID => TtsEngine::Dashscope,
+            SILICONFLOW_TTS_MODEL_ID => TtsEngine::Siliconflow,
+            // 不认识的值（更新的版本写的）照旧版本的读法：用本地引擎，不把配置当成坏的
             _ => self.legacy_tts_engine(),
         }
     }
@@ -470,14 +496,14 @@ impl AssistantConfig {
         self.tts_model_id.trim().is_empty() && self.speech_engine == SpeechEngine::System
     }
 
-    /// 实际使用的引擎：“自动”时，能用 DeepSeek 语音（琴音的连接是 DeepSeek 且有密钥）
-    /// 就用它，否则用系统语音。`deepseek_ready` 只在“自动”时才调用（要查凭据库）。
-    pub fn tts_engine_auto(&self, deepseek_ready: impl FnOnce() -> bool) -> TtsEngine {
-        if self.tts_is_auto() && deepseek_ready() {
-            TtsEngine::Deepseek
-        } else {
-            self.tts_engine()
+    /// 实际使用的引擎：“自动”时跟着她用的模型走（ADR 048）——她的 API 连接那一家有声音、而且有 Key，
+    /// 就用那家（[`crate::voice_vendor::voice_of_connection`]），否则用系统语音。`her_voice` 只在“自动”时
+    /// 才调用（要查凭据库）。
+    pub fn tts_engine_auto(&self, her_voice: impl FnOnce() -> Option<TtsEngine>) -> TtsEngine {
+        if !self.tts_is_auto() {
+            return self.tts_engine();
         }
+        her_voice().unwrap_or(TtsEngine::System)
     }
 
     /// 声音编号在界面与接口上写成 `提供方/声音`，落盘时还原成旧写法
@@ -542,6 +568,9 @@ impl AssistantConfig {
                 | OPENAI_TTS_MODEL_ID
                 | VOLCANO_TTS_MODEL_ID
                 | DEEPSEEK_TTS_MODEL_ID
+                | MINIMAX_TTS_MODEL_ID
+                | DASHSCOPE_TTS_MODEL_ID
+                | SILICONFLOW_TTS_MODEL_ID
         ) {
             return Err("在线语音合成模型无效".into());
         }
@@ -554,6 +583,12 @@ impl AssistantConfig {
             .is_some_and(|p| p.x > FloatingPosition::SCALE || p.y > FloatingPosition::SCALE)
         {
             return Err("悬浮窗拖到的位置 x / y 必须在 0 到 10000 之间（工作区的万分之一）".into());
+        }
+        if !FLOATING_STAY_RANGE_SECONDS.contains(&self.bubble.bubble_seconds) {
+            return Err("悬浮窗气泡停留的时间必须在 1 到 60 秒之间".into());
+        }
+        if !FLOATING_STAY_RANGE_SECONDS.contains(&self.bubble.mini_seconds) {
+            return Err("悬浮窗聊天小窗停留的时间必须在 1 到 60 秒之间".into());
         }
         if !WAKE_NO_SPEECH_RANGE_MS.contains(&self.wake.no_speech_timeout_ms) {
             return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());
@@ -834,15 +869,23 @@ mod tests {
     fn deepseek_speech_is_the_automatic_default() {
         let auto = AssistantConfig::default();
         assert!(auto.tts_is_auto());
-        assert_eq!(auto.tts_engine_auto(|| true), TtsEngine::Deepseek);
-        assert_eq!(auto.tts_engine_auto(|| false), TtsEngine::System);
+        assert_eq!(
+            auto.tts_engine_auto(|| Some(TtsEngine::Deepseek)),
+            TtsEngine::Deepseek
+        );
+        // 跟着她用的模型走（ADR 048）：她用 MiniMax / 百炼时就是那家的声音
+        assert_eq!(
+            auto.tts_engine_auto(|| Some(TtsEngine::Minimax)),
+            TtsEngine::Minimax
+        );
+        assert_eq!(auto.tts_engine_auto(|| None), TtsEngine::System);
         // 明确选了系统语音 / Kokoro / 别的在线引擎：不被“自动”换掉，也不去查凭据库
         let explicit = |tts: &str, engine: SpeechEngine| AssistantConfig {
             tts_model_id: tts.into(),
             speech_engine: engine,
             ..AssistantConfig::default()
         };
-        let unused = || -> bool { panic!("不是自动时不该查 DeepSeek") };
+        let unused = || -> Option<TtsEngine> { panic!("不是自动时不该查她的连接") };
         assert_eq!(
             explicit(LOCAL_TTS_MODEL_ID, SpeechEngine::System).tts_engine_auto(unused),
             TtsEngine::System
@@ -862,6 +905,26 @@ mod tests {
         for value in [LOCAL_TTS_MODEL_ID, DEEPSEEK_TTS_MODEL_ID] {
             assert!(explicit(value, SpeechEngine::System).validate().is_ok());
         }
+        // ADR 048 的三家：选了就是它；旧字段 speechEngine 不写新值
+        for (id, engine) in [
+            (MINIMAX_TTS_MODEL_ID, TtsEngine::Minimax),
+            (DASHSCOPE_TTS_MODEL_ID, TtsEngine::Dashscope),
+            (SILICONFLOW_TTS_MODEL_ID, TtsEngine::Siliconflow),
+        ] {
+            let config = explicit(id, SpeechEngine::System);
+            assert_eq!(config.tts_engine_auto(unused), engine);
+            assert!(config.validate().is_ok());
+            assert_eq!(
+                serde_json::to_value(&config).unwrap()["speechEngine"],
+                "system"
+            );
+        }
+        // 更新的版本写的、这一版不认识的 ttsModelId：照旧版本的读法用本地引擎，配置照常能读
+        let newer: AssistantConfig = serde_json::from_value(serde_json::json!({
+            "ttsModelId": "some-future-tts", "speechEngine": "kokoro"
+        }))
+        .unwrap();
+        assert_eq!(newer.tts_engine(), TtsEngine::Kokoro);
     }
 
     #[test]
@@ -922,6 +985,29 @@ mod tests {
                 serde_json::json!({"danmakuTopOffsetPx":offset})
             )
             .is_err());
+        }
+    }
+
+    /// 悬浮窗停留多久（rc.14 试玩）：新字段，旧配置没有时气泡 3 秒、小窗 5 秒；1–60 秒以外不收。
+    #[test]
+    fn floating_stay_times_are_new_fields_with_short_defaults() {
+        let old: AssistantConfig = serde_json::from_value(serde_json::json!({
+            "bubble": {"enabled": true, "corner": "top-left", "offsetY": 120, "alsoDanmaku": false}
+        }))
+        .unwrap();
+        assert_eq!(old.bubble.bubble_seconds, DEFAULT_BUBBLE_SECONDS);
+        assert_eq!(old.bubble.mini_seconds, DEFAULT_MINI_SECONDS);
+        assert_eq!((DEFAULT_BUBBLE_SECONDS, DEFAULT_MINI_SECONDS), (3, 5));
+        assert_eq!(old.bubble.corner, BubbleCorner::TopLeft);
+        old.validate().unwrap();
+        let json = serde_json::to_value(&old).unwrap();
+        assert_eq!(json["bubble"]["bubbleSeconds"], 3);
+        assert_eq!(json["bubble"]["miniSeconds"], 5);
+        for (bubble, mini, ok) in [(1, 60, true), (15, 30, true), (0, 5, false), (3, 61, false)] {
+            let mut config = AssistantConfig::default();
+            config.bubble.bubble_seconds = bubble;
+            config.bubble.mini_seconds = mini;
+            assert_eq!(config.validate().is_ok(), ok, "{bubble} / {mini}");
         }
     }
 }

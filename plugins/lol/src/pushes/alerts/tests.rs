@@ -57,7 +57,7 @@ fn data() -> GameData {
     )
 }
 
-/// 压过的一帧 → 局内接口 `allgamedata` 的样子 → [`LiveGame`]。`me_as`：把“我”换成这个英雄（测回血英雄）。
+/// 压过的一帧 → 局内接口 `allgamedata` 的样子 → [`LiveGame`]。`me_as`：把“我”换成这个英雄（测重伤不看你玩什么英雄）。
 fn frames(me_as: Option<&str>) -> Vec<LiveGame> {
     let f = fixture();
     let people = f["people"].as_array().unwrap();
@@ -232,8 +232,9 @@ fn level_and_item_events_over_a_whole_mayhem_game() {
         .all(|id| crate::client::events::KEY_ITEM_IDS.contains(&base_item(*id))));
 }
 
-/// 那一把海斗里的提醒：对面岩雀（塔莉垭，远距离大招）到 6 级说一次；维克托出了中娅说一次；没有峡谷资源；
-/// 对面死了 3 个以上说过几次、两次之间至少 45 秒；我每次阵亡同一张卡片原地更新，第二次起再弹一次。
+/// 那一把海斗里的提醒：对面岩雀（塔莉垭，远距离大招）到 6 级说一次；维克托出了中娅、岩雀（湮灭宝珠）和蕾欧娜
+/// （棘刺背心）第一次有了重伤各说一次；没有峡谷资源；对面同时死 3 个的时候很多，但还要 30 秒以上才复活的到 3 个只有
+/// 17 分钟那一次（以前的规矩“同时死了 3 个、45 秒一次”在这把里说了 9 次）；我每次阵亡同一张卡片原地更新，第二次起再弹一次。
 #[test]
 fn alerts_over_a_whole_mayhem_game() {
     let data = data();
@@ -250,7 +251,15 @@ fn alerts_over_a_whole_mayhem_game() {
     assert_eq!(ults[0].1.voice[0], "对面岩雀 6 级了");
     assert_eq!(ults[0].1.line.as_ref().unwrap().cells[0].text, "对面岩雀");
     let items = pushes_of(&outs, PUSH_ENEMY_ITEM);
-    assert_eq!(items.len(), 1, "{items:?}");
+    let said: Vec<&str> = items.iter().map(|(_, p)| p.voice[0].as_str()).collect();
+    assert_eq!(
+        said,
+        [
+            "对面维克托出了中娅",
+            "对面岩雀出了重伤",
+            "对面蕾欧娜出了重伤"
+        ]
+    );
     assert_eq!(
         items[0].1.voice,
         ["对面维克托出了中娅", "维克托出了中娅", "对面维克托有中娅了"],
@@ -262,12 +271,16 @@ fn alerts_over_a_whole_mayhem_game() {
     );
     assert!(pushes_of(&outs, PUSH_SPELL_READY).is_empty());
     let down = pushes_of(&outs, PUSH_ENEMIES_DOWN);
-    assert!(down.len() >= 3, "{}", down.len());
-    for w in down.windows(2) {
-        assert!(w[1].0 - w[0].0 >= DOWN_GAP, "{} → {}", w[0].0, w[1].0);
-    }
+    assert_eq!(down.len(), 1, "{down:?}");
+    assert!((1020.0..1040.0).contains(&down[0].0), "{}", down[0].0);
     let first = down[0].1;
-    assert_eq!(first.voice[0], "对面死了 3 个，最快 3 秒复活", "{first:?}");
+    assert_eq!(first.voice[0], "对面死了 3 个，最快 32 秒复活", "{first:?}");
+    // 照以前的规矩（死着的都算），这把里同时死 3 个以上的有 25 份
+    let crowded = games
+        .iter()
+        .filter(|g| g.enemies().filter(|p| p.dead).count() >= DOWN_AT)
+        .count();
+    assert_eq!(crowded, 25);
     // 阵亡：一局一张（同一个 key），第一次不带 alert，之后每次带
     let deaths = pushes_of(&outs, PUSH_MY_DEATH);
     assert!(deaths.len() >= 10, "{}", deaths.len());
@@ -414,21 +427,63 @@ fn death_events_over_a_whole_mayhem_game() {
     assert!(out.events.is_empty() && out.pushes.is_empty());
 }
 
-/// 你玩回血英雄时对面出了重伤：每个人只说一次（升级成荆棘之甲不再说）；不是回血英雄不说。
+/// 重伤（2026-11-27 rc.14 试玩后改）：不管你玩什么英雄（我是佛耶戈、换成索拉卡都一样），对面谁身上第一次有了带重伤的
+/// 装备就说一次——湮灭宝珠、棘刺背心这样的小件也算；之后升级成荆棘之甲不再说。
 #[test]
-fn grievous_wounds_only_when_you_play_a_healer() {
+fn grievous_wounds_whatever_you_play() {
     let data = data();
-    let outs = run(&frames(Some("Soraka")), Some(&data), &[]);
-    let items = pushes_of(&outs, PUSH_ENEMY_ITEM);
-    let said: Vec<&str> = items.iter().map(|(_, p)| p.voice[0].as_str()).collect();
-    assert!(said.contains(&"对面维克托出了中娅"), "{said:?}");
-    assert!(said.contains(&"对面岩雀出了重伤"), "湮灭宝珠：{said:?}");
-    assert!(said.contains(&"对面蕾欧娜出了重伤"), "棘刺背心：{said:?}");
-    assert_eq!(
-        said.iter().filter(|s| s.contains("蕾欧娜")).count(),
-        1,
-        "升级成荆棘之甲不再说：{said:?}"
-    );
+    for me in [None, Some("Soraka")] {
+        let outs = run(&frames(me), Some(&data), &[]);
+        let items = pushes_of(&outs, PUSH_ENEMY_ITEM);
+        let said: Vec<&str> = items.iter().map(|(_, p)| p.voice[0].as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                "对面维克托出了中娅",
+                "对面岩雀出了重伤",
+                "对面蕾欧娜出了重伤"
+            ],
+            "{me:?}"
+        );
+        assert_eq!(
+            items[2].1.voice,
+            ["对面蕾欧娜出了重伤", "蕾欧娜出了重伤", "对面蕾欧娜有重伤了"]
+        );
+    }
+}
+
+/// 巨蛇之牙和复活甲一级，出了就说（海斗的 id 前面多两位也认得）；刚连上时身上已经有棘刺背心的，之后合成荆棘之甲
+/// 不算“第一次有重伤”。
+#[test]
+fn serpents_fang_is_a_key_item_and_an_upgrade_is_not_new_grievous() {
+    let item = |id: i64, name: &str| crate::client::live::LiveItem {
+        id,
+        name: name.into(),
+    };
+    // 对面：慎、亚索、卢锡安（rift 的第 3、4、5 个人）
+    let mut g0 = rift(900.0, 11, json!([]));
+    g0.players[3].items = vec![item(3076, "棘刺背心")];
+    let mut g1 = g0.clone();
+    g1.time = 902.0;
+    g1.players[2].items = vec![item(226695, "巨蛇之牙")];
+    g1.players[3].items = vec![item(3075, "荆棘之甲")];
+    let mut alerts = Alerts::default();
+    alerts.step(7, &g0, None, &[]);
+    let out = alerts.step(7, &g1, None, &[]);
+    let items: Vec<&Push> = out
+        .pushes
+        .iter()
+        .filter(|p| p.trigger == PUSH_ENEMY_ITEM)
+        .collect();
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_well_formed(items[0]);
+    assert_eq!(items[0].voice[0], "对面慎出了巨蛇之牙");
+    // 再下一份：亚索又出了一件死刑宣告，也不算第一次
+    let mut g2 = g1.clone();
+    g2.time = 904.0;
+    g2.players[3].items.push(item(3123, "死刑宣告"));
+    let out = alerts.step(7, &g2, None, &[]);
+    assert!(out.pushes.is_empty(), "{:?}", out.pushes);
 }
 
 // ---------- 峡谷（拼的） ----------
@@ -605,7 +660,7 @@ fn a_teamfight_tick_brings_one_push_per_kind_ranked_by_priority() {
     let mut g1 = rift(602.0, 6, json!([]));
     for p in g1.players.iter_mut().filter(|p| p.team == "CHAOS") {
         p.dead = true;
-        p.respawn = 12.0;
+        p.respawn = 40.0;
         p.items = vec![crate::client::live::LiveItem {
             id: 3157,
             name: "中娅沙漏".into(),
@@ -623,7 +678,7 @@ fn a_teamfight_tick_brings_one_push_per_kind_ranked_by_priority() {
         .max_by_key(|p| priority(&p.trigger))
         .unwrap();
     assert_eq!(loudest.trigger, PUSH_ENEMIES_DOWN, "同一时刻宿主只说这一句");
-    assert_eq!(loudest.voice[0], "对面死了 3 个，最快 12 秒复活");
+    assert_eq!(loudest.voice[0], "对面死了 3 个，最快 40 秒复活");
     let items = out
         .pushes
         .iter()
@@ -640,6 +695,83 @@ fn a_teamfight_tick_brings_one_push_per_kind_ranked_by_priority() {
     // 换了一局（对局 id 变了）：从头来，第一份只记下样子
     let out = alerts.step(8, &g1, None, &[]);
     assert!(out.pushes.is_empty() && out.events.is_empty());
+}
+
+/// 峡谷一份（第 `time` 秒）：我是中单阿狸，对面五个人各还要几秒复活（`None` = 活着）。
+fn rift_down(time: f64, respawns: [Option<f64>; 5]) -> LiveGame {
+    let enemies = ["Shen", "Yasuo", "Lucian", "LeeSin", "Thresh"];
+    let mut players = vec![rift_player("玩家", "Ahri", "ORDER", "MIDDLE", 16)];
+    for (i, (alias, respawn)) in enemies.iter().zip(respawns).enumerate() {
+        let mut p = rift_player(&format!("敌人{i}"), alias, "CHAOS", "NONE", 16);
+        if let Some(r) = respawn {
+            p["isDead"] = json!(true);
+            p["respawnTimer"] = json!(r);
+        }
+        players.push(p);
+    }
+    parse_all_game_data(&json!({
+        "activePlayer": {"riotId": "玩家#1"},
+        "allPlayers": players,
+        "events": {"Events": []},
+        "gameData": {"gameMode": "CLASSIC", "gameTime": time},
+    }))
+    .unwrap()
+}
+
+/// 对面阵亡（2026-11-27 rc.14 试玩后改：海斗里一直在报）：只数还要 30 秒以上才复活的；这一份刚到 3 个（上一份不到）才说，
+/// 几个、最快几秒都按这几个算；上一份已经 3 个的不再说；两次之间至少 60 秒。
+#[test]
+fn enemies_down_counts_only_long_respawns() {
+    let mut alerts = Alerts::default();
+    let mut said = |time: f64, respawns: [Option<f64>; 5]| -> Option<String> {
+        let out = alerts.step(7, &rift_down(time, respawns), None, &[]);
+        let push = out
+            .pushes
+            .into_iter()
+            .find(|p| p.trigger == PUSH_ENEMIES_DOWN)?;
+        assert_well_formed(&push);
+        Some(push.voice[0].clone())
+    };
+    assert_eq!(said(1500.0, [None; 5]), None);
+    // 死了三个，有一个 25 秒就复活：不算
+    assert_eq!(
+        said(1502.0, [Some(40.0), Some(38.0), Some(25.0), None, None]),
+        None
+    );
+    // 又死一个（45 秒）：够久的刚到 3 个。那个 23 秒的不算进人数和“最快”
+    assert_eq!(
+        said(
+            1504.0,
+            [Some(38.0), Some(36.0), Some(23.0), Some(45.0), None]
+        ),
+        Some("对面死了 3 个，最快 36 秒复活".to_string())
+    );
+    // 上一份已经 3 个：再死一个也不说
+    assert_eq!(
+        said(
+            1506.0,
+            [Some(36.0), Some(34.0), Some(21.0), Some(43.0), Some(50.0)]
+        ),
+        None
+    );
+    // 都复活了，46 秒后又倒了三个：离上次不到 60 秒，不说
+    assert_eq!(
+        said(1540.0, [None, None, None, Some(9.0), Some(16.0)]),
+        None
+    );
+    assert_eq!(
+        said(1550.0, [Some(40.0), Some(40.0), Some(40.0), None, None]),
+        None
+    );
+    // 一分半以后一下倒了四个：说，人数是四个
+    assert_eq!(said(1590.0, [None; 5]), None);
+    assert_eq!(
+        said(
+            1602.0,
+            [Some(31.0), Some(33.0), Some(35.0), Some(44.0), None]
+        ),
+        Some("对面死了 4 个，最快 31 秒复活".to_string())
+    );
 }
 
 /// 清单：六条提醒都声明了（名字、时机、做什么、样子、多要紧），都要“读客户端数据”、默认开；阵亡的卡片页面在清单里。

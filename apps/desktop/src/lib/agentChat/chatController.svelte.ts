@@ -165,13 +165,17 @@ export class AgentChat {
           if (id) this.#held.delete(id);
           break;
         }
-        // 推送：排着的那条记进对话了（它已经显示着，可能已经原地更新过）——同一个标识的原地换成存盘的这条，不再加一条
+        // 推送：排着的那条记进对话了（它已经显示着，可能已经原地更新过）——同一个标识的原地换成存盘的这条，不再加一条；
+        // 时间变了的是挪到了最后（ADR 043 D5 修订）：从原处拿掉，下面照新来的放
         const id = pushId(event.message);
         const at = id ? messages.findIndex((m) => pushId(m) === id) : -1;
         if (id && at >= 0) {
-          messages[at] = event.message;
           this.#held.delete(id);
-          break;
+          if (messages[at].atMs === event.message.atMs) {
+            messages[at] = event.message;
+            break;
+          }
+          messages.splice(at, 1);
         }
         // 这一轮新来的消息插在排着的推送前面（这一轮结束后推送才记进对话，排在这一轮后面）
         let end = messages.length;
@@ -202,27 +206,35 @@ export class AgentChat {
   }
 
   /**
-   * 推送的界面事件（ADR 043，`kotone://push`）：新的一条、原地更新都按标识（`plugin:key`）放——对话里已经有这一条就原地换掉
-   * （位置不动、不多一条），没有就放在最后面（还排着的，这一轮结束后端才记进对话）。`done` 只给悬浮窗（聊天里的记录留着）。
+   * 推送的界面事件（ADR 043，`kotone://push`）：新的一条、原地更新、挪到最后都按标识（`plugin:key`）放——不带提醒的更新
+   * 原地换掉（位置不动、不多一条，不滚过去）；带提醒的更新（`moved`）从原处拿掉、放到最后；没有的放在最后面（还排着的，这一轮
+   * 结束后端才记进对话）。`done` 只给悬浮窗（聊天里的记录留着）。滚不滚由聊天页的“跟着最新的”管：玩家在最下面就跟到最下面，
+   * 往上翻着看就不动。
    */
   #onPush(event: PushEvent) {
     if (this.#disposed || event.kind === "done") return;
     if (this.#buffer) { this.#buffer.push({ push: event }); return; }
     if (event.conversationId !== this.conversation?.id) return;
-    this.#showHeld(event.message, event.held);
+    this.#showHeld(event.message, event.held, event.kind === "moved");
   }
 
-  /** 一条推送放进当前对话：同一个标识的原地换掉；没有的放在最后面（`held`：还没记进对话，这一轮新来的消息插在它前面）。 */
-  #showHeld(message: AgentMessage, held = true) {
+  /**
+   * 一条推送放进当前对话：同一个标识、同一个时间的原地换掉；挪了的（`moved`，或者时间变了——推送那条的时间就是它在对话里
+   * 那个位置的时间，原地改不变、挪到最后换成挪的那一刻，读对话时排着的挪动靠它认出来）从原处拿掉、放到最后；没有的放在
+   * 最后面。`held`：还没记进对话，这一轮新来的消息插在它前面。
+   */
+  #showHeld(message: AgentMessage, held = true, moved = false) {
     const id = pushId(message);
     if (!id || !this.conversation) return;
     const messages = this.conversation.messages;
     const at = messages.findIndex((m) => pushId(m) === id);
-    if (at >= 0) {
+    if (at >= 0 && !moved && messages[at].atMs === message.atMs) {
       messages[at] = message;
       return;
     }
+    if (at >= 0) messages.splice(at, 1);
     if (held) this.#held.add(id);
+    else this.#held.delete(id);
     messages.push(message);
   }
 

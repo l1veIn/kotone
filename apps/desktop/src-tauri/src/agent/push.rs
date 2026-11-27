@@ -2,13 +2,16 @@
 //! **不叫模型**。以前叫自动卡片（ADR 039 D3）。开关和清单的核对在 `plugins.rs`（`DesktopHost::push`），这里管：
 //!
 //! - **新的还是更新**（`kotone_agent::push::decide`）：同一个 `插件:key` 内容一样什么都不做；变了就原地改那条（D5），
-//!   位置不动；新的追加。上一次的内容记在内存里，Kotone 重启以后去当前对话里找。一次只处理一条推送（[`serial`]）。
+//!   位置不动、哪里都不滚过去；**带 `alert` 的更新挪到那段对话的最后**（D5 修订，2026-11-27，[`move_to_bottom`]：
+//!   原地改在最早那条的位置，悬浮窗弹出来定位到它就跳回开局附近）；新的追加。上一次的内容记在内存里，Kotone 重启以后去
+//!   当前对话里找。一次只处理一条推送（[`serial`]）。
 //! - **发到哪段对话**：新的发到当前对话（是主会话的话）；没有就最近的主会话；一段都没有就开一段新的
-//!   （[`target_conversation`]，和复盘那条同一个）。更新改在上一次那段对话里（那一条在哪就改哪）。
+//!   （[`target_conversation`]，和复盘那条同一个）。更新改在（挪到）上一次那段对话里（那一条在哪段对话就是哪段）。
 //! - **什么时候记进对话**：照“她正忙时插进来”的规矩（`when_free.rs`）：她空着就马上记；不空就排着，推送照样马上显示
-//!   （界面事件 [`PUSH_EVENT`]），空下来再把推送和给她的那句一起追加。原地更新：那段对话不在跑就马上改，在跑就排着、
-//!   这一轮结束再改；还排着的直接换掉。不插进正在跑的那一轮，也不叫她开口（ADR 039 D3）。
-//! - **界面事件** [`PUSH_EVENT`]（聊天页、悬浮窗都听；形状见 [`emit_push`]）：新的一条、更新了、结束了（`Host::push_done`）。
+//!   （界面事件 [`PUSH_EVENT`]），空下来再把推送和给她的那句一起追加。原地更新、挪到最后：那段对话不在跑就马上改，在跑
+//!   就排着、这一轮结束再改；还排着的直接换掉。不插进正在跑的那一轮，也不叫她开口（ADR 039 D3）。
+//! - **界面事件** [`PUSH_EVENT`]（聊天页、悬浮窗都听；形状见 [`emit_push`]）：新的一条、原地更新了、挪到最后了、
+//!   结束了（`Host::push_done`）。
 //! - **悬浮窗**（ADR 043 D6，`floating/mod.rs`）：一行显示在气泡里；卡片推送、开着“推送时弹出小窗”（`agent.autoCards.popup`）
 //!   就弹出小窗，带 `alert` 的更新再弹一次；`push_done` 收起那一行。点卡片上面那一行打开聊天、定位到这条（[`auto_card_open`]）。
 //! - **语音**：说法轮着用（每条推送一个计数），照 `kotone_agent::push_voice` 的规矩排（同一时刻只说最要紧的、20 秒冷却、
@@ -214,10 +217,13 @@ fn post_from(
     };
     let record = pushes::record(plugin, plugin_name, spec, &push, &said);
     let hash = pushes::content_hash(&record);
-    let posted = match pushes::decide(previous, hash) {
+    let posted = match pushes::decide(previous, hash, push.alert) {
         Decision::Unchanged => return Ok(PushOutcome::Unchanged),
         Decision::Post => post_new(app, from, plugin_name, &push, record, &id)?,
         Decision::Update(previous) => update(app, from, plugin_name, &push, record, &id, previous)?,
+        Decision::Move(previous) => {
+            move_to_bottom(app, from, plugin_name, &push, record, &id, previous)?
+        }
     };
     desk().lock().unwrap().remember(
         id,
@@ -258,6 +264,7 @@ fn post_from(
     log::log(&format!(
         "push: {plugin} {}「{title}」（{}，对话 {}{}）",
         match posted.outcome {
+            PushOutcome::Updated if posted.moved => "更新了（挪到最后）",
             PushOutcome::Updated => "更新了",
             _ => "推送",
         },
@@ -280,6 +287,8 @@ struct Pushed {
     notice: Message,
     /// 还排着（她在忙、那段对话在跑）。
     held: bool,
+    /// 带提醒的更新：挪到了那段对话的最后。
+    moved: bool,
 }
 
 fn push_record(notice: &Message) -> &Value {
@@ -336,10 +345,11 @@ fn post_new(
         at_ms,
         notice,
         held,
+        moved: false,
     })
 }
 
-/// 同一个 key、内容变了：原地改上一次那条（D5）。带了 note 再追加一条给她的；那段对话没了就当新的发。
+/// 同一个 key、内容变了、不带 alert：原地改上一次那条（D5），位置不动。带了 note 再追加一条给她的；那段对话没了就当新的发。
 fn update(
     app: &AppHandle,
     from: Sender,
@@ -377,6 +387,50 @@ fn update(
         at_ms: previous.at_ms,
         notice,
         held,
+        moved: false,
+    })
+}
+
+/// 同一个 key、内容变了、带 alert（插件要提醒玩家，例如又阵亡了一次）：挪到上一次那段对话的最后（D5 修订）——拿掉原来
+/// 那条和跟着它的那句，用新内容、新时间追加在末尾，同一个 `插件:key` 仍然只有一条；带了 note 就是这次的那句跟在后面，
+/// 没带就把原来那句挪过来（`kotone_agent::push::apply_move`）。于是聊天页、悬浮窗看到它都在最新的位置，不跳回原处。
+/// 那段对话没了就当新的发。
+fn move_to_bottom(
+    app: &AppHandle,
+    from: Sender,
+    plugin_name: &str,
+    push: &Push,
+    mut record: Value,
+    id: &str,
+    previous: Record,
+) -> Result<Pushed, String> {
+    let now = now_ms();
+    record["updatedAtMs"] = json!(now);
+    let title = pushes::shown_title(&record).to_string();
+    let notice = pushes::notice(plugin_name, record.clone(), now);
+    let mut moved = vec![notice.clone()];
+    if !push.note.is_empty() {
+        moved.push(note_for(from, plugin_name, &title, &push.note, true, now));
+    }
+    let conversation = previous.conversation;
+    let held = match move_to_end(app, &conversation, &moved)? {
+        Posted::Saved | Posted::Steered => false,
+        Posted::Held => true,
+        Posted::Gone => {
+            // 上一次那段对话被删了：当成新的一条发到当前对话
+            desk().lock().unwrap().forget(id);
+            record.as_object_mut().map(|r| r.remove("updatedAtMs"));
+            return post_new(app, from, plugin_name, push, record, id);
+        }
+    };
+    emit_push(app, "moved", &conversation, &notice, held, true);
+    Ok(Pushed {
+        outcome: PushOutcome::Updated,
+        conversation,
+        at_ms: now,
+        notice,
+        held,
+        moved: true,
     })
 }
 
@@ -392,15 +446,17 @@ pub fn push_done(app: &AppHandle, plugin: &str, trigger: &str, key: &str) {
 /// 推送的界面事件 [`PUSH_EVENT`]（聊天页、悬浮窗都听）：
 ///
 /// ```text
-/// { kind: "posted" | "updated", conversationId, plugin, trigger, key,
+/// { kind: "posted" | "updated" | "moved", conversationId, plugin, trigger, key,
 ///   held,      // 还排着没记进对话（她在忙）；界面照样马上显示
-///   alert,     // 带 alert 的更新：悬浮窗把卡片再弹一次
+///   alert,     // 带 alert 的更新（moved 总是 true）：悬浮窗把卡片再弹一次
 ///   message }  // 整条 Notice（role = notice，push 字段见 kotone_agent::push::record）
 /// { kind: "done", plugin, trigger, key }        // Host::push_done
 /// ```
 ///
 /// `posted`：这个 key 第一次推（记进对话时还会照常来一条 `kotone://agent-event` 的 `appended`，同一条，界面按标识去重）。
-/// `updated`：原地换掉同一个标识（`plugin:key`）的那条，位置不动。
+/// `updated`：原地换掉同一个标识（`plugin:key`）的那条，位置不动、时间不变，哪里都不滚过去。
+/// `moved`：带提醒的更新（D5 修订）：从原处拿掉同一个标识的那条，这条放在最后（`message` 的时间是挪的那一刻）。
+/// 记进对话以后不再来 `appended`（和 `updated` 一样）。
 fn emit_push(
     app: &AppHandle,
     kind: &str,

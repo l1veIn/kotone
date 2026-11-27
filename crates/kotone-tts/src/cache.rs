@@ -97,6 +97,17 @@ pub mod disk {
     }
 
     static CONFIG: Mutex<Option<Config>> = Mutex::new(None);
+    /// 另外登记的话（试听声音的那句，ADR 048）：[`configure`] 替换列表时也留着。
+    static EXTRA: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// 再登记一句要落盘的话（已经登记过就不重复）。落盘目录还是 [`configure`] 给的那个；没配置时只进内存缓存。
+    pub fn also(text: &str) {
+        let text = text.trim().to_string();
+        let mut extra = EXTRA.lock().unwrap();
+        if !text.is_empty() && !extra.contains(&text) {
+            extra.push(text);
+        }
+    }
 
     /// 打开落盘：`texts` 里的话存进 `dir`（再次调用就替换）。
     pub fn configure(dir: impl Into<PathBuf>, texts: &[&str]) {
@@ -116,10 +127,8 @@ pub mod disk {
     fn file(key: &str, text: &str) -> Option<PathBuf> {
         let config = CONFIG.lock().unwrap();
         let config = config.as_ref()?;
-        config
-            .texts
-            .iter()
-            .any(|t| t == text.trim())
+        let text = text.trim();
+        (config.texts.iter().any(|t| t == text) || EXTRA.lock().unwrap().iter().any(|t| t == text))
             .then(|| path_for(&config.dir, key))
     }
 
@@ -212,6 +221,13 @@ pub mod disk {
             std::fs::write(&path, b"not a wav").unwrap();
             assert!(load(&key, "我看看").is_none());
             assert!(!path.exists());
+            // 另外登记的话（试听声音那句）也落盘，重新 configure 也还在
+            let line = "你好呀，以后我就用这个声音跟你说话。";
+            also(line);
+            configure(dir.path(), &["我看看"]);
+            let preview = super::super::key("minimax/female-shaonv", 0, line);
+            store(&preview, line, &speech);
+            assert!(load(&preview, line).is_some());
             // 太多就删最旧的
             for i in 0..MAX_FILES + 5 {
                 std::fs::write(dir.path().join(format!("{i:04}.wav")), b"x").unwrap();

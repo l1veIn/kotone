@@ -4,6 +4,8 @@
 
 2026-11-25 修订（[ADR 039](039-desktop-companion-and-game-apps.md) D2、D7）：设置不再分“陪玩 / 通用”两组——陪玩那一组（怎么叫她 · 她怎么回答 · 权限 · 用量）搬进“游戏陪玩 → 角色”页，改叫 唤醒 · 交互 · 权限 · 用量，设置只剩原来的通用；选聊天模型回到聊天页输入框旁；语音识别的启动、启动快捷键、“打开时自动启动”从语音输入的识别卡片搬到“设置 → 模型 → 语音识别”，语音输入页只显示当前用的模型。下文 D12 和第三节里的设置结构是当时的样子，以 ADR 039 为准。
 
+2026-11-27 修订（[ADR 048](048-her-voice-in-one-place.md)）：语音合成的“自动”不再只认 DeepSeek，改成跟着她用的模型走——她的 API 连接是 DeepSeek / MiniMax / 阿里云百炼、那家有 Key 就用那家的声音，否则系统语音。填 DeepSeek Key 的引导照旧把语音合成换成 `deepseek-tts`。
+
 2026-11-25 修订（默认呼叫键，[共享资源评估](../research/2026-11-25-shared-resources-audit.md)第五节第 4 条：文档和代码对不上）：默认呼叫键从 2026-11-21 起是 `Ctrl+Backquote`（界面上写“Ctrl + ~”，`kotone-core/src/assistant.rs` 的 `DEFAULT_CALL_HOTKEY`），不再是单独的 `~`。原因：单独的 `~` 是英雄联盟默认的“只攻击英雄”键，Kotone 按下时吞掉它，游戏就收不到（玩家 2026-11-21 反馈，提交 `2fd7c2eb`，0.2.0-rc.2）。还停在旧默认 `~` 的配置，读取时升级一次（`settings.rs` 的 `migrate_call_hotkey_json`，`assistant.callHotkeyRevision` 记下版本；之后玩家自己设回 `~` 就不再改）；0.1.x 升级用户的 `assistant.hotkey` 是他自己设的提醒键，不动，呼叫键在 `companionBindings.hotkey`。下文 A 第 3 步、B 第 3 步、第三节聊天页的例子、D3 已改成现在的值；末尾的真机验收记录（2026-11-20）是当时的样子，不改。
 
 ## 背景

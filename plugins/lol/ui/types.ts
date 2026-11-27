@@ -93,12 +93,12 @@ export interface PlayerData {
 
 export interface HistoryPage {
   puuid: string; offset: number; pageSize: 10 | 20; games: PlayerGame[];
-  hasMore: boolean; nextOffset: number | null;
+  hasMore: boolean; nextOffset: number | null; clientGames: number;
 }
 
 export interface GamePlayer {
   puuid: string; riotId: string; champion: Champion; level: number;
-  kills: number; deaths: number; assists: number; damage: number; dpm: number; taken: number; gold: number; cs: number;
+  kills: number; deaths: number; assists: number; damage: number; dpm: number; gold: number; cs: number;
   items: (Named & Partial<Item>)[]; augments: (Named & Partial<Augment>)[];
   profileIconId?: number | null; profileIcon?: string; spells?: Iconed[]; perks?: Perks | null;
 }

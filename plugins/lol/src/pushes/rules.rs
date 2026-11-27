@@ -3,8 +3,8 @@
 //!
 //! - **评级 S–D**（`lolhex/engine.py` 的 `GRADES`、`rank_grade`、`hero_brief`）：按国服胜率排名，前 10% S、30% A、
 //!   60% B、85% C、其余 D。名次只按胜率排（腾讯英雄榜自带的名次掺了选用率）。
-//! - **三选一的判断**（`lolhex/recommend.py` 的 `evaluate`）：分数是这个英雄拿这个海克斯、平滑后的胜率比英雄平均高几个百分点
-//!   （平滑和 AramHex 一样 k = 300，在 [`aramhex::score`]）；
+//! - **三选一（四选一一样）的判断**（`lolhex/recommend.py` 的 `evaluate`）：分数是这个英雄拿这个海克斯、平滑后的胜率
+//!   比英雄平均高几个百分点（平滑和 AramHex 一样 k = 300，在 [`aramhex::score`]）；
 //!   - 本英雄不到 1000 局的“样本偏少”；同屏最多的那张够 1000 局时，不到 1000 局的不当首选（`Few`），
 //!     不到它十分之一的“样本太少”、建议刷新（`TooFew`）；
 //!   - 首选在样本够的里面挑分最高的（都不够就在全部里挑）；
@@ -374,6 +374,11 @@ mod tests {
             [Verdict::Reroll, Verdict::Reroll, Verdict::Best]
         );
         assert_eq!(cards[0].grade, Some("D"));
+        // 四选一：规则一样，只是多一张（AramHex 的推荐文案也按实际卡数，“四张都不理想”）
+        assert_eq!(
+            verdicts(&evaluate(&d, 39, &[2, 1, 3, 5])),
+            [Verdict::Reroll, Verdict::Best, Verdict::Ok, Verdict::Reroll]
+        );
         // 三张都比平均低：分最高的还是首选（AramHex：非要选就拿它）
         let d = dataset(json!({"39": {
             "1": {"games": 20000, "wins": 9000}, "2": {"games": 20000, "wins": 9400}, "3": {"games": 20000, "wins": 9200}

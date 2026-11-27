@@ -283,15 +283,17 @@ pub mod paths {
     pub const PERKS: &str = "/lol-game-data/assets/v1/perks.json";
     pub const PERK_STYLES: &str = "/lol-game-data/assets/v1/perkstyles.json";
 
-    /// 这个人最近 `count` 局（新的在前）。
-    pub fn matches(puuid: &str, count: u32) -> String {
-        match_range(puuid, 0, count.saturating_sub(1))
-    }
+    /// 读一个人的战绩一律要这一段：最近 [`MATCH_WINDOW`] 局（`begIndex=0`）。
+    pub const MATCH_WINDOW: u32 = 50;
 
-    /// 起止索引都包含在 LCU 返回的区间中。
-    pub fn match_range(puuid: &str, begin: u32, end: u32) -> String {
+    /// 这个人最近 [`MATCH_WINDOW`] 局（新的在前，起止索引都含）。客户端按人缓存**第一次被请求的那一段**，之后不管
+    /// 要哪一段都给那一份（国服 2026-11-27 实测；rank-analysis #103 / #115 也这样测到，照它所有地方都要 0..49、
+    /// 自己切页）。所以插件里读战绩的地方（主页、战绩页、`lol.scout`、`lol.player`、自动卡片、选人的英雄池）
+    /// 都用这一个地址；别的工具先要过小的一段时，客户端给的会少，照给的用。
+    pub fn matches(puuid: &str) -> String {
         format!(
-            "/lol-match-history/v1/products/lol/{puuid}/matches?begIndex={begin}&endIndex={end}"
+            "/lol-match-history/v1/products/lol/{puuid}/matches?begIndex=0&endIndex={}",
+            MATCH_WINDOW - 1
         )
     }
 
@@ -342,10 +344,10 @@ mod tests {
     }
 
     #[test]
-    fn match_path_counts_from_zero() {
+    fn every_match_history_read_asks_for_the_same_window() {
         assert_eq!(
-            paths::matches("p", 20),
-            "/lol-match-history/v1/products/lol/p/matches?begIndex=0&endIndex=19"
+            paths::matches("p"),
+            "/lol-match-history/v1/products/lol/p/matches?begIndex=0&endIndex=49"
         );
     }
 }

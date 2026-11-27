@@ -1,8 +1,8 @@
 //! 英雄联盟插件的后台和工具（ADR 035）：读本机的客户端接口（LCU）和局内接口（Live Client Data），都只读。
 //! （原来是桌面端的 `lol.rs`，ADR 038 第 1 步搬进插件：`AppHandle` 换成了宿主 [`Host`]。）
 //!
-//! - 客户端开着时每 2 秒看一次对局阶段；进加载界面就在后台查这局 10 个人的战绩（同时 2 个、每人 20 局），
-//!   她问“查战绩”时多半已经查好；
+//! - 客户端开着时每 2 秒看一次对局阶段；进加载界面就在后台查这局 10 个人的战绩（同时 2 个；客户端那一段最近 50 局里每人看最近 20 局，
+//!   见 [`paths::matches`]），她问“查战绩”时多半已经查好；
 //! - `lol.match` / `lol.spell` 读局内接口（马上返回）；召唤师技能是玩家说了才记，这局结束清掉；
 //! - 端口和令牌从 `LeagueClientUx.exe` 的命令行读（不用管理员）；令牌不进日志。
 //! - 插件或它的“读客户端数据”开关（`plugins.lol.sources.client`）关着时什么都不读（D5）。
@@ -62,8 +62,8 @@ const RESULT_WAIT_MS: i64 = 60_000;
 /// 客户端开着时多久看一次阶段；没开时多久看一次进程。
 const POLL: Duration = Duration::from_secs(2);
 const IDLE_POLL: Duration = Duration::from_secs(5);
-/// 每人查几局。
-const HISTORY_GAMES: u32 = 20;
+/// 每人看几局（她的字、战绩卡片、这局页面都是“近 20 局”；向客户端要的是同一段最近 50 局，见 [`paths::matches`]）。
+const HISTORY_GAMES: usize = 20;
 /// 同时查几个人（照 LeagueAkari）。
 const CONCURRENCY: usize = 2;
 /// 她问的时候还没查完，最多等多久。
@@ -735,7 +735,7 @@ async fn prefetch(state: Arc<Mutex<State>>, lcu: Lcu, game_id: i64, puuids: Vec<
     ));
 }
 
-/// 一个人：隐私设置、最近 20 局、单双排段位。隐藏战绩的照样读（D6）。
+/// 一个人：隐私设置、最近 20 局（重开、自定义不算）、单双排段位。隐藏战绩的照样读（D6）。
 async fn fetch_history(lcu: &Lcu, puuid: &str) -> PlayerHistory {
     let mut h = PlayerHistory::default();
     if let Ok(summoner) = lcu.get(&paths::summoner(puuid)).await {
@@ -752,9 +752,10 @@ async fn fetch_history(lcu: &Lcu, puuid: &str) -> PlayerHistory {
             };
         }
     }
-    match lcu.get(&paths::matches(puuid, HISTORY_GAMES)).await {
+    match lcu.get(&paths::matches(puuid)).await {
         Ok(list) => {
             h.games = history::parse_match_list(&list);
+            h.games.truncate(HISTORY_GAMES);
             if h.riot_id.is_empty() {
                 h.riot_id = history::riot_id_from_match_list(&list).unwrap_or_default();
             }

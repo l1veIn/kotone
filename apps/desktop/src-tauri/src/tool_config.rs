@@ -37,6 +37,13 @@ fn to_json<T: serde::Serialize>(value: T) -> HostResult {
 #[serde(deny_unknown_fields)]
 struct NoArgs {}
 
+/// `speech.status` 的参数（ADR 048）：`check` = 用现在的设置试一下这一家（模型 ID，如 `minimax-tts`）。
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+struct SpeechStatusArgs {
+    check: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 struct RecapArgs {
@@ -578,7 +585,7 @@ pub async fn invoke_until(
             to_json(crate::get_model_install_guide(id).map_err(HostError::InvalidArguments)?)
         }
         c::TOOL_SPEECH_STATUS => {
-            let _: NoArgs = parse(tool, args)?;
+            let SpeechStatusArgs { check } = parse(tool, args)?;
             let package = crate::speech_models::get_speech_model_status(app.clone());
             let (voices, voices_error) =
                 match crate::assistant::list_speech_voices(app.clone(), None).await {
@@ -588,7 +595,19 @@ pub async fn invoke_until(
                     ),
                     Err(error) => (json!([]), json!(error)),
                 };
-            Ok(json!({"package": package, "voices": voices, "voicesError": voices_error}))
+            // 她现在用哪家、怎么计费、Key 从哪来，以及每一家的状态（ADR 048；不含 Key）
+            let mut result = json!({
+                "package": package, "voices": voices, "voicesError": voices_error,
+                "engine": crate::speech_cmd::current(app),
+                "providers": crate::speech_cmd::providers(app),
+            });
+            if let Some(model_id) = check.filter(|id| !id.trim().is_empty()) {
+                let outcome = crate::speech_cmd::check(app, &model_id)
+                    .await
+                    .map_err(HostError::InvalidArguments)?;
+                result["check"] = to_json(outcome)?;
+            }
+            Ok(result)
         }
         c::TOOL_SPEECH_MODEL_DOWNLOAD => {
             let _: NoArgs = parse(tool, args)?;

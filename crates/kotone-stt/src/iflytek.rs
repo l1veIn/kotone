@@ -87,11 +87,15 @@ impl SttEngine for IflytekAsrEngine {
     }
 
     fn is_ready(&self) -> bool {
-        kotone_core::settings::load()
+        let mut cfg = kotone_core::settings::load()
             .model_configs
             .get(IFLYTEK_ASR_STT_ID)
             .and_then(|cfg| cfg.as_object())
-            .is_some_and(Self::keys_complete)
+            .cloned()
+            .unwrap_or_default();
+        // APISecret 在凭据库里（ADR 048），不在配置里
+        kotone_core::model_secrets::fill_installed(&mut cfg, IFLYTEK_ASR_STT_ID);
+        Self::keys_complete(&cfg)
     }
 
     fn start_session(

@@ -45,7 +45,7 @@ export type PushTone = "good" | "ok" | "bad";
 export interface PushCell { text: string; tone?: PushTone }
 /**
  * 推送（ADR 043 D3，后端 `kotone_agent::push::record`）：Notice 的 `push`。哪个插件、哪条推送（`trigger`，清单 `[[pushes]]`
- * 的 id；`title` 是它的名字）、`key`（同一个 `plugin:key` 再推一次就是更新，原地重画）；卡片 / 一行 / 语音至少一样：
+ * 的 id；`title` 是它的名字）、`key`（同一个 `plugin:key` 再推一次就是更新，原地重画；带提醒的挪到最后）；卡片 / 一行 / 语音至少一样：
  * `card` 和工具结果的 `display` 同一个形状（聊天里用同一个卡片组件）；`voice` 是几个说法、`said` 是这次说的那句。
  */
 export interface PushRecord {
@@ -63,11 +63,13 @@ export interface PushRecord {
 }
 /**
  * 推送的界面事件（`kotone://push`，后端 `agent/push.rs` 的 `emit_push`）：聊天页和悬浮窗都听。
- * `posted`：这个 key 第一次推；`updated`：原地换掉同一个 `plugin:key` 的那条（位置不动）；`held` = 还没记进对话（她在忙），
- * 界面照样马上显示；`alert` = 带“要提醒”的更新（悬浮窗再弹一次）。`done`：这条推送结束了（悬浮窗收起那一行，聊天里留着）。
+ * `posted`：这个 key 第一次推；`updated`：原地换掉同一个 `plugin:key` 的那条（位置不动、时间不变，哪里都不滚过去）；
+ * `moved`：带“要提醒”的更新（ADR 043 D5 修订）——从原处拿掉同一个 `plugin:key` 的那条，这条（时间是挪的那一刻）放在最后；
+ * `held` = 还没记进对话（她在忙），界面照样马上显示；`alert` = 带“要提醒”的更新（悬浮窗再弹一次；`moved` 总是 true）。
+ * `done`：这条推送结束了（悬浮窗收起那一行，聊天里留着）。
  */
 export type PushEvent =
-  | { kind: "posted" | "updated"; conversationId: string; plugin: string; trigger: string; key: string; held: boolean; alert: boolean; message: AgentMessage }
+  | { kind: "posted" | "updated" | "moved"; conversationId: string; plugin: string; trigger: string; key: string; held: boolean; alert: boolean; message: AgentMessage }
   | { kind: "done"; plugin: string; trigger: string; key: string };
 
 /** 聊天里画推送用的样子：新的推送照原样；旧的自动卡片换成一条只有卡片的推送。不是推送时 null。 */

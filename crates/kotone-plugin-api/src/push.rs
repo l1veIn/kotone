@@ -92,7 +92,8 @@ pub struct Push {
     /// 要少给：只在关键时刻带（选人锁定、选人结束），中间的变化只更新卡片。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
-    /// 更新时让悬浮窗把卡片再弹一次（这张卡片上面已经有别的消息时，插件用它提醒玩家，D5）。
+    /// 更新时要提醒玩家（这张卡片上面已经有别的消息时，D5）：宿主把它挪到聊天最下面（2026-11-27 修订，同一个 key
+    /// 仍然只有一条），悬浮窗再弹一次。不带就原地改、位置不动。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub alert: bool,
 }
@@ -146,7 +147,7 @@ pub enum PushTone {
 pub enum PushOutcome {
     /// 新的一条（这个 key 第一次推）。
     Posted,
-    /// 同一个 key、内容变了：原地更新了。
+    /// 同一个 key、内容变了：更新了（原地；带 `alert` 的挪到了聊天最下面）。
     Updated,
     /// 同一个 key、内容一样：什么都没做。
     Unchanged,

@@ -2,7 +2,7 @@
   // 单局详情（`ui://kotone/lol/game`，`lol.game` 的页面，只给页面用；docs/design/lol-app.md 第三节 3，调研 G29、G34）。
   // 全屏：标题行（刚结束的小牌、胜利 / 失败、模式、时长、开局时间）；两队各一块（我方 / 对面，看别人的对局时是胜方 / 负方、
   // 灰边条），表头有击杀、伤害合计；每人一行 44 px：英雄（右下英雄等级）· 技能 · 符文 · 名字（点开看战绩）·
-  // KDA · 伤害条（按这一局最高伤害）· 承伤 · 经济 · 补刀 · 装备 6 + 1。我那一行淡蓝底 + “我”。海斗、斗魂竞技场每队下面
+  // KDA · 伤害条（按这一局最高伤害）· 伤转（伤害 ÷ 经济）· 经济 · 补刀 · 装备 6 + 1。我那一行淡蓝底 + “我”。海斗、斗魂竞技场每队下面
   // 一块“海克斯”：一人一行，图标 + 名字（AugmentRows，ADR 043 B 轮第 3 条）。
   // 卡片（inline）“这局总结”（推送、`justEnded`）：我这一局的数 + 两队每人一格（头像、K/D/A、伤害短条）；有海克斯的模式
   // 再加一块“海克斯”，先显示对面每个人的，点“我方”换成我方的（讨论记录第二节：“再加一行对面每个人的海克斯”）。
@@ -18,7 +18,7 @@
   import Spells from "../components/Spells.svelte";
   import StateBlock from "../components/StateBlock.svelte";
   import TopBar, { tabLabel, type PageId } from "../components/TopBar.svelte";
-  import { duration, kdaOf, kdaTone, num, one, splitRiotId, when } from "../format";
+  import { duration, kdaOf, kdaTone, num, one, ratio, splitRiotId, when } from "../format";
   import { resultStatus, TOOL_GAME, type DisplayMode, type Session, type ToolResult } from "../host";
   import { m } from "../i18n.svelte";
   import type { ToolState } from "../status";
@@ -111,6 +111,11 @@
   const teamName = (t: GameTeam) =>
     !mine ? (t.win ? m.plugin_lol_team_win() : m.plugin_lol_team_loss()) : t === mine ? m.plugin_lol_allies() : m.plugin_lol_enemies();
   const sum = (t: GameTeam, f: (p: GamePlayer) => number) => t.players.reduce((a, p) => a + f(p), 0);
+  /** “伤转 152% · 经济 …”：经济是 0 时没有伤转那一段。 */
+  const more = (p: GamePlayer, rest: string) => {
+    const r = ratio(p.damage, p.gold);
+    return r ? `${m.plugin_lol_stat_ratio({ ratio: r })} · ${rest}` : rest;
+  };
   /** 我的伤害在我们队排第几。 */
   const myDamageRank = $derived(
     me && mine ? [...mine.players].sort((a, b) => b.damage - a.damage).findIndex((p) => p.puuid === me.puuid) + 1 : 0,
@@ -148,14 +153,14 @@
             </div>
             <div class="grid cols">
               <span></span><span>{m.plugin_lol_col_player()}</span><span>KDA</span><span>{m.plugin_lol_col_damage()}</span>
-              <span class="r xcol">{m.plugin_lol_col_taken()}</span><span class="r xcol">{m.plugin_lol_col_gold()}</span><span class="r xcol">{m.plugin_lol_col_cs()}</span>
+              <span class="r xcol" title={m.plugin_lol_col_ratio_hint()}>{m.plugin_lol_col_ratio()}</span><span class="r xcol">{m.plugin_lol_col_gold()}</span><span class="r xcol">{m.plugin_lol_col_cs()}</span>
               <span>{m.plugin_lol_col_items()}</span>
             </div>
             {#each t.players as p, i (p.puuid || i)}
               {@const k = kdaOf(p.kills, p.deaths, p.assists)}
               {@const [nm, tag] = splitRiotId(p.riotId)}
               <div class="grid row" class:me={p.me} data-testid="lol-game-player"
-                title={m.plugin_lol_game_more({ taken: num(p.taken), gold: num(p.gold), cs: p.cs })}>
+                title={more(p, m.plugin_lol_game_more({ gold: num(p.gold), cs: p.cs }))}>
                 <span class="pics">
                   <ChampIcon id={p.champion.id} icon={p.champion.icon} name={p.champion.short} size={32} level={p.level} />
                   <span class="wide"><Spells spells={p.spells} size={15} /></span>
@@ -169,7 +174,7 @@
                 </span>
                 <span class="kda num"><b>{p.kills}/<span class="bad">{p.deaths}</span>/{p.assists}</b> <span class={kdaTone(k)}>{one(k)}</span></span>
                 <span class="dmg num"><span class="bar"><span style:width="{Math.round((p.damage / top) * 100)}%"></span></span>{num(p.damage)}</span>
-                <span class="r num muted xcol">{num(p.taken)}</span>
+                <span class="r num muted xcol" data-testid="lol-game-ratio">{ratio(p.damage, p.gold)}</span>
                 <span class="r num muted xcol">{num(p.gold)}</span>
                 <span class="r num muted xcol">{p.cs}</span>
                 <span class="gear">
@@ -210,7 +215,7 @@
             <p><b>{me.champion.short}</b> <span class="num">{me.kills}/{me.deaths}/{me.assists} · KDA {one(k)}</span></p>
             <p class="muted num">
               {myDamageRank ? m.plugin_lol_card_damage_rank({ damage: num(me.damage), rank: myDamageRank }) : m.plugin_lol_damage_short({ damage: num(me.damage) })}
-              · {m.plugin_lol_card_more_stats({ taken: num(me.taken), gold: num(me.gold), cs: one(me.cs / minutes) })}
+              · {more(me, m.plugin_lol_card_more_stats({ gold: num(me.gold), cs: one(me.cs / minutes) }))}
             </p>
             <p class="gear-line">
               {#if me.augments.length}{#each me.augments as a (a.id)}<Augment augment={a} size={20} />{/each}{:else}<Perks perks={me.perks} size={20} sub={16} />{/if}

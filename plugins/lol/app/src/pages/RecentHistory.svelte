@@ -11,6 +11,7 @@
   import { tick, untrack } from "svelte";
   import ChampIcon from "../components/ChampIcon.svelte";
   import Icon from "../components/Icon.svelte";
+  import Pager from "../components/Pager.svelte";
   import { duration, when } from "../format";
   import { resultStatus, TOOL_HISTORY, type Session } from "../host";
   import { m } from "../i18n.svelte";
@@ -26,7 +27,7 @@
     onHistory: () => void;
   } = $props();
 
-  // 偏移由客户端返回：重开和其他被过滤的记录也会占用原始索引。
+  // 下一页从第几局开始由 lol.history 给（客户端给的那一段里切页，重开、自定义不算）。
   const saved = untrack(() => restore?.puuid === player.puuid ? restore : undefined);
   let offsets = $state<number[]>(saved?.offsets ?? [0]);
   let pageSize = $state<10 | 20>(saved?.pageSize ?? 10);
@@ -149,20 +150,14 @@
       <p class="notice" role="status">{loading ? m.plugin_lol_loading() : player.hidden ? m.plugin_lol_hidden() : m.plugin_lol_no_games()}</p>
     {/if}
   </div>
-  <nav class="pager" aria-label={m.plugin_lol_home_recent()}>
-    <button type="button" class="btn" data-testid="lol-home-prev" disabled={loading || offsets.length === 1} onclick={previous}>
-      <Icon name="back" />{m.plugin_lol_history_prev()}
-    </button>
-    <span class="num" data-testid="lol-home-page" aria-live="polite">{m.plugin_lol_history_page({ page: offsets.length })}</span>
-    <button type="button" class="btn" data-testid="lol-home-next" disabled={loading || !!failure || !page?.hasMore} onclick={next}>
-      {m.plugin_lol_history_next()}<span class="forward"><Icon name="back" /></span>
-    </button>
-  </nav>
+  <Pager id="home" label={m.plugin_lol_home_recent()} page={offsets.length} canPrev={!loading && offsets.length > 1}
+    canNext={!loading && !failure && !!page?.hasMore} clientGames={!loading && !failure && page && !page.hasMore && page.games.length ? page.clientGames : 0}
+    onPrev={previous} onNext={next} />
 </section>
 
 <style>
   .history { margin-top: 22px; scroll-margin-top: 48px; }
-  .section-head, .history-link, .forward, .pick, .pager { display: flex; align-items: center; }
+  .section-head, .history-link, .forward, .pick { display: flex; align-items: center; }
   .section-head { gap: 12px; padding-bottom: 10px; }
   h2 { flex: 1; margin: 0; font-size: var(--lol-fs-md); font-weight: var(--lol-fw-strong); }
   .history-link { gap: 3px; padding: 4px 0; color: var(--lol-text-2); border: 0; background: transparent; cursor: pointer; font-size: var(--lol-fs-xs); }
@@ -185,7 +180,6 @@
   .pick small, .started, .length { font-size: var(--lol-fs-xs); }
   .score { white-space: nowrap; }
   .score i { font-style: normal; font-weight: var(--lol-fw-normal); }
-  .pager { justify-content: flex-end; gap: 14px; padding-top: 10px; color: var(--lol-text-2); font-size: var(--lol-fs-xs); }
   .notice { display: flex; align-items: center; gap: 12px; margin: 0; padding-block: 16px; }
   @container (max-width: 590px) {
     .columns { display: none; }

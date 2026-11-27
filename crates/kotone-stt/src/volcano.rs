@@ -77,11 +77,15 @@ impl SttEngine for VolcanoAsrEngine {
     }
 
     fn is_ready(&self) -> bool {
-        kotone_core::settings::load()
+        let mut cfg = kotone_core::settings::load()
             .model_configs
             .get(VOLCANO_ASR_STT_ID)
             .and_then(|cfg| cfg.as_object())
-            .is_some_and(Self::keys_complete)
+            .cloned()
+            .unwrap_or_default();
+        // Access Token 在凭据库里（ADR 048），不在配置里
+        kotone_core::model_secrets::fill_installed(&mut cfg, VOLCANO_ASR_STT_ID);
+        Self::keys_complete(&cfg)
     }
 
     fn start_session(
@@ -354,5 +358,24 @@ mod tests {
             .unwrap()
             .clone();
         assert!(!VolcanoAsrEngine::keys_complete(&incomplete));
+    }
+
+    /// 在线识别 schema 里标成 `secret` 的字段，正是 `kotone_core::model_secrets` 存进凭据库的那几个（ADR 048）。
+    #[test]
+    fn secret_schema_fields_are_the_ones_kept_in_the_credential_store() {
+        for model in crate::model::list().unwrap() {
+            for field in model.config_schema.iter().filter(|f| f.kind == "secret") {
+                let stored = kotone_core::model_secrets::field_of(&model.id)
+                    .unwrap_or_else(|| panic!("{} 的 {} 没登记进凭据库", model.id, field.key));
+                assert_eq!(stored.field, field.key, "{}", model.id);
+                assert_eq!(stored.category, "asr");
+            }
+        }
+        assert_eq!(
+            kotone_core::model_secrets::field_of(VOLCANO_ASR_STT_ID)
+                .unwrap()
+                .field,
+            "accessToken"
+        );
     }
 }

@@ -3,13 +3,15 @@
   // 全屏：搜人；头部（召唤师头像 56 圆形 + 等级、名字#编号、隐藏战绩、单双排 / 灵活组排的段位和胜负、最高段位）；
   // 近 20 局的胜负、KDA、场均死、连胜连败；常玩的英雄（最多 5 个）；每局一行 44 px（有海克斯 52 px）：
   // 结果格 · 英雄（右下英雄等级）· 两个召唤师技能 · 符文 · KDA · 伤害 · 装备 6 + 1（下面一排海克斯）· 模式和时间。
-  // 窄时每局两行。点一局看单局详情。卡片（inline，她调 `lol.player` 时）：头部 + 最近 5 局。
+  // 窄时每局两行。点一局看单局详情。下面翻页（`lol.history`，每页 20 局；第一页先显示 `lol.player` 带来的那 20 局）。
+  // 卡片（inline，她调 `lol.player` 时）：头部 + 最近 5 局。
   import { onMount } from "svelte";
   import Augment from "../components/Augment.svelte";
   import ChampIcon from "../components/ChampIcon.svelte";
   import Footer from "../components/Footer.svelte";
   import Icon from "../components/Icon.svelte";
   import Items from "../components/Items.svelte";
+  import Pager from "../components/Pager.svelte";
   import Perks from "../components/Perks.svelte";
   import Pic from "../components/Pic.svelte";
   import RankBadge from "../components/RankBadge.svelte";
@@ -18,10 +20,10 @@
   import TopBar, { type PageId } from "../components/TopBar.svelte";
   import { profileIconPath } from "../assets";
   import { duration, kdaOf, kdaTone, num, one, pctOf, rateTone, splitRiotId, tierName, when } from "../format";
-  import { PAGE_SETTINGS, resultStatus, TOOL_PLAYER, type DisplayMode, type Session, type ToolResult } from "../host";
+  import { PAGE_SETTINGS, resultStatus, TOOL_HISTORY, TOOL_PLAYER, type DisplayMode, type Session, type ToolResult } from "../host";
   import { m } from "../i18n.svelte";
   import { stateView, type ToolState } from "../status";
-  import { isPlayerData, type PlayerData, type Ranked } from "../types";
+  import { isHistoryPage, isPlayerData, type HistoryPage, type PlayerData, type Ranked } from "../types";
 
   let {
     session,
@@ -52,6 +54,10 @@
 
   function show(result: ToolResult) {
     if (isPlayerData(result.structuredContent)) {
+      if (result.structuredContent.puuid !== player?.puuid) {
+        offsets = [0];
+        page = null;
+      }
       player = result.structuredContent;
       status = null;
     } else {
@@ -100,6 +106,40 @@
       .filter(Boolean)
       .join(" · ");
   const CARD_GAMES = 5;
+
+  /** 翻页：每页 20 局（和“近 20 局”一样多）；`offsets` 是每一页从第几局开始，下一页的由 lol.history 给。 */
+  const PAGE_SIZE = 20;
+  let offsets = $state<number[]>([0]);
+  let page = $state<HistoryPage | null>(null);
+  let paging = $state(false);
+  let pageError = $state<ToolState | null>(null);
+  let historyEl = $state<HTMLElement>();
+  /** 列出来的局：读到的那一页（翻页时先留着上一页，变淡），还没读到时是 lol.player 带来的。 */
+  const shown = $derived(page && page.puuid === player?.puuid ? page.games : (player?.games ?? []));
+
+  $effect(() => {
+    const current = player;
+    const offset = offsets[offsets.length - 1];
+    if (!full || !current?.puuid || !current.games.length) return;
+    let live = true;
+    paging = true;
+    pageError = null;
+    session.call(TOOL_HISTORY, { puuid: current.puuid, offset, pageSize: PAGE_SIZE })
+      .then((result) => {
+        if (!live) return;
+        const data = result.structuredContent;
+        if (isHistoryPage(data) && data.puuid === current.puuid && data.offset === offset) page = data;
+        else pageError = resultStatus(result);
+      })
+      .catch((e: unknown) => { if (live) pageError = { status: "error", text: e instanceof Error ? e.message : String(e) }; })
+      .finally(() => { if (live) paging = false; });
+    return () => { live = false; };
+  });
+
+  function turn(next: number[]) {
+    offsets = next;
+    historyEl?.scrollIntoView({ block: "start" });
+  }
 </script>
 
 {#snippet avatar(size: number)}
@@ -163,7 +203,7 @@
             {/if}
           </aside>
         {/if}
-        <div class="history">
+        <div class="history" bind:this={historyEl}>
           {#if error}<p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_failed({ error })}</p>{/if}
           {#if status}
             {#if player}
@@ -175,8 +215,8 @@
           {#if player}
             {#if player.error && !player.games.length}<p class="banner" title={player.error}><Icon name="info" />{m.plugin_lol_lookup_failed({ error: player.error })}</p>{/if}
             {#if player.games.length}
-              <ol class="games" data-testid="lol-player-games">
-                {#each player.games as g (g.gameId)}
+              <ol class="games" class:pending={paging} data-testid="lol-player-games">
+                {#each shown as g (g.gameId)}
                   {@const k = kdaOf(g.kills, g.deaths, g.assists)}
                   <li>
                     <button type="button" class="game" onclick={() => onGame(g.gameId)} data-testid="lol-player-game" data-game-id={g.gameId}
@@ -204,6 +244,11 @@
                   </li>
                 {/each}
               </ol>
+              {#if pageError}<p class="banner" title={pageError.text}><Icon name="info" />{stateView(pageError).text}</p>{/if}
+              <Pager id="player" label={m.plugin_lol_page_player()} page={offsets.length} canPrev={!paging && offsets.length > 1}
+                canNext={!paging && !pageError && !!page?.hasMore}
+                clientGames={!paging && !pageError && page && !page.hasMore && page.games.length ? page.clientGames : 0}
+                onPrev={() => turn(offsets.slice(0, -1))} onNext={() => page?.nextOffset != null && turn([...offsets, page.nextOffset])} />
             {:else if !player.error}
               <p class="banner"><Icon name="info" />{m.plugin_lol_no_games()}</p>
             {/if}
@@ -438,6 +483,12 @@
   }
   .games li + li {
     border-block-start: 1px solid var(--lol-line);
+  }
+  .games.pending {
+    opacity: 0.6;
+  }
+  .history {
+    scroll-margin-top: 48px;
   }
   .game {
     display: grid;

@@ -4,10 +4,11 @@
   export type PickSlot =
     | { id: number; name: string; rarity?: string; icon?: string; grade?: string | null; verdict: "best" | "ok" | "reroll" | "noData"; few?: boolean }
     | { unread: true };
-  /** 海克斯三选一卡片的数据（推送 `augment-pick`，后端 plugins/lol/src/pushes/augment_pick.rs 的 `View::card`）：
-   * 从左到右三格；`best` 首选在第几格；`weak` 三张都一般；`ended` 这一次选完了。 */
+  /** 海克斯三选一 / 四选一卡片的数据（推送 `augment-pick`，后端 plugins/lol/src/pushes/augment_pick.rs 的 `View::card`）：
+   * `count` 一共几格（3 或 4，没写按 `slots` 的长度）；从左到右每格；`best` 首选在第几格；`weak` 都一般；`ended` 这一次选完了。 */
   export interface AugmentPickData {
     champion?: { id: number; short: string } | null;
+    count?: number;
     slots: PickSlot[];
     best?: number | null;
     weak?: boolean;
@@ -24,9 +25,10 @@
   // 海克斯三选一（`ui://kotone/lol/augment-pick`，ADR 043 D7 的 2026-11-26 晚修订）：玩家说“不需要单独给海克斯做一个UI，
   // 就直接推卡片就行啊，就像战绩一样推送，卡片上写清楚三个海克斯推荐程度就行”。只在推送里出现：三选一出现时插件推来，
   // 刷新了哪张同一张卡片原地变（宿主再推一次结果，这里跟着重画），选完了标“选好了”。
-  // 三张从左到右，和游戏里的位置一样：图标、名字、评级（S–D）、判断（首选 绿 / 可选 蓝 / 可刷新 琥珀 / 没数据）。
+  // 三张（四选一时四张，2026-11-27 起）从左到右，和游戏里的位置一样：第几个（和她说的“选第二个”对得上）、图标、名字、
+  // 评级（S–D）、判断（首选 绿 / 可选 蓝 / 可刷新 琥珀 / 没数据）。四张时标题写“海克斯四选一”。
   // 不写胜率数字（拳头不许显示海克斯的胜率，ADR 043 D7；判断本身也在那条里，风险写在插件的“风险和许可”里）。
-  // 窄到悬浮窗的小窗（约 360 px）三列照样放得下。只学 AramHex 标什么，视觉是“记分纸”，不抄代码。
+  // 窄到悬浮窗的小窗（约 360 px）三列、四列都照样一排放得下。只学 AramHex 标什么，视觉是“记分纸”，不抄代码。
   import { onMount } from "svelte";
   import Augment from "../components/Augment.svelte";
   import SourceTag from "../components/SourceTag.svelte";
@@ -71,18 +73,21 @@
         return m.plugin_lol_pick_no_data();
     }
   }
-  const places = [m.plugin_lol_pick_place_left, m.plugin_lol_pick_place_middle, m.plugin_lol_pick_place_right];
-  const slots = $derived((pick?.slots ?? []).slice(0, 3));
+  /** 第几个（从左数）。 */
+  const places = [m.plugin_lol_pick_place_1, m.plugin_lol_pick_place_2, m.plugin_lol_pick_place_3, m.plugin_lol_pick_place_4];
+  /** 一共几格：三选一 3、四选一 4。 */
+  const count = $derived((pick?.count ?? pick?.slots.length ?? 3) >= 4 ? 4 : 3);
+  const slots = $derived((pick?.slots ?? []).slice(0, count));
 </script>
 
 <div class="app" data-testid="lol-app-augment-pick" data-ended={pick?.ended ? "true" : "false"}>
   {#if pick}
     <div class="pick" class:full>
       <div class="card-head">
-        <span class="t">{m.plugin_lol_page_augment_pick()}</span>
+        <span class="t">{count === 4 ? m.plugin_lol_pick_title_four() : m.plugin_lol_pick_title_three()}</span>
         <span class="sub">{pick.ended ? m.plugin_lol_pick_ended() : pick.champion ? m.plugin_lol_pick_for({ champion: pick.champion.short }) : ""}</span>
       </div>
-      <div class="cols" data-testid="lol-augment-pick-cols">
+      <div class="cols" class:four={count === 4} style:--n={count} data-testid="lol-augment-pick-cols" data-count={count}>
         {#each slots as slot, i (i)}
           {#if "unread" in slot}
             <div class="col unread" data-testid="lol-augment-pick-slot" data-verdict="unread" data-best="false">
@@ -104,7 +109,7 @@
           {/if}
         {/each}
       </div>
-      {#if pick.weak && !pick.ended}<p class="weak" data-testid="lol-augment-pick-weak">{m.plugin_lol_pick_weak()}</p>{/if}
+      {#if pick.weak && !pick.ended}<p class="weak" data-testid="lol-augment-pick-weak">{count === 4 ? m.plugin_lol_pick_weak_four() : m.plugin_lol_pick_weak()}</p>{/if}
       <div class="card-foot"><SourceTag id="aramhex" date={pick.patch ?? ""} onLink={session.openLink} /></div>
     </div>
   {:else if loaded}
@@ -123,7 +128,7 @@
   }
   .cols {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr));
     gap: 6px;
     padding: 0 12px;
   }
@@ -237,6 +242,13 @@
     }
     .col {
       padding: 7px 4px 8px;
+    }
+    /* 四列（每格约 80 px）：格子里少留一点边，名字一行能放五六个字，评级和判断小牌还能并排 */
+    .cols.four {
+      padding: 0 6px;
+    }
+    .cols.four .col {
+      padding: 7px 2px 8px;
     }
   }
 </style>

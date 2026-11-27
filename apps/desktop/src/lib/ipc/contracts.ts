@@ -395,6 +395,10 @@ export interface BubbleConfig {
   alsoDanmaku: boolean;
   /** 玩家拖到的位置（后端拖完写；没拖过没有这一项，null = 位置还原） */
   position?: FloatingPosition | null;
+  /** 气泡停留几秒（1–60，缺省 3；从最后一次变化算）。浏览器预览的旧设置没有时按缺省。 */
+  bubbleSeconds?: number;
+  /** 聊天小窗停留几秒（1–60，缺省 5）。 */
+  miniSeconds?: number;
 }
 
 /** 悬浮窗拖到的位置：窗口的 `corner` 那个角贴在工作区里的 (x, y)，单位是工作区宽 / 高的万分之一。 */

@@ -27,7 +27,7 @@ export type Block =
   | { kind: "recap"; key: string; text: string; body: string };
 
 export interface Turn {
-  /** 稳定的标识（第一条消息的位置与时间），用于滚动锚点。 */
+  /** 稳定的标识（第一条消息的时间，同一毫秒的按先后编号），用于滚动锚点和列表的 key。 */
   id: string;
   user: UserMessage | null;
   blocks: Block[];
@@ -76,8 +76,16 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
 
   const turns: Turn[] = [];
   let turn: Turn | null = null;
+  // 每一轮的标识：第一条消息的时间（同一毫秒开始的几轮按先后加 -1、-2……）；块的标识：这一轮的标识 + 在这一轮里第几条。
+  // 不用在整段对话里的位置：带提醒的推送挪到最后时（ADR 043 D5 修订）它后面每一条的位置都变了，标识不变才不会整段重建
+  // （卡片里的 App 不重新加载，往上翻着看时不跳）。
+  const sameMs = new Map<number, number>();
+  let base = 0;
   const start = (user: UserMessage | null, index: number, atMs: number) => {
-    turn = { id: `${index}-${atMs}`, user, blocks: [], usage: null, answerText: "", active: false, endedAtMs: null, startedAtMs: atMs };
+    const n = sameMs.get(atMs) ?? 0;
+    sameMs.set(atMs, n + 1);
+    base = index;
+    turn = { id: n ? `${atMs}-${n}` : `${atMs}`, user, blocks: [], usage: null, answerText: "", active: false, endedAtMs: null, startedAtMs: atMs };
     turns.push(turn);
     return turn;
   };
@@ -96,8 +104,9 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
       return;
     }
     const current: Turn = turn ?? start(null, index, message.atMs);
+    const key = (kind: string) => `${kind}${current.id}.${index - base}`;
     if (message.role === "assistant") {
-      if (message.reasoning?.trim()) current.blocks.push({ kind: "thinking", key: `r${index}`, text: message.reasoning, streaming: false });
+      if (message.reasoning?.trim()) current.blocks.push({ kind: "thinking", key: key("r"), text: message.reasoning, streaming: false });
       const pushCall = (call: ToolCall) => {
         const result = results.get(call.id);
         const event = live?.tools[call.id];
@@ -117,19 +126,19 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
         if (written.trim()) current.answerText = current.answerText ? `${current.answerText}\n\n${written}` : written;
       }
       if (message.text.trim()) {
-        current.blocks.push({ kind: "text", key: `a${index}`, text: message.text, streaming: false });
+        current.blocks.push({ kind: "text", key: key("a"), text: message.text, streaming: false });
         current.answerText = current.answerText ? `${current.answerText}\n\n${message.text}` : message.text;
       }
       calls.filter((call) => call.name !== "speak").forEach(pushCall);
       current.usage = addUsage(current.usage, message.usage);
       current.endedAtMs = message.atMs;
     } else if (message.role === "notice" && message.recap) {
-      current.blocks.push({ kind: "recap", key: `p${index}`, text: message.text, body: message.recap });
+      current.blocks.push({ kind: "recap", key: key("p"), text: message.text, body: message.recap });
       current.endedAtMs = message.atMs;
     } else if (message.role === "notice" && message.compaction) {
-      current.blocks.push({ kind: "checkpoint", key: `k${index}`, text: message.text, summary: message.compaction });
+      current.blocks.push({ kind: "checkpoint", key: key("k"), text: message.text, summary: message.compaction });
     } else if (message.role === "notice") {
-      current.blocks.push({ kind: "notice", key: `n${index}`, text: message.text });
+      current.blocks.push({ kind: "notice", key: key("n"), text: message.text });
       current.endedAtMs = message.atMs;
     }
     // role === "tool"：结果已并入对应的工具卡片。

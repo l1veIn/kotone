@@ -16,9 +16,12 @@
 //! 5. **推送的原地更新**（ADR 043 D5，[`replace`]）：那段对话不在跑就马上换掉那一条（[`replace_locked`]，不用等她空：
 //!    改的是 Notice，不插进她的话里）；在跑（这一轮跑完会整段存回去，这时写进去的会被盖掉）就排一个“原地更新”
 //!    （同一条只留最新的），这一轮结束和别的排着的一起照先后记；推送还排着没记进对话的，直接换掉排着的那条。
+//! 6. **带提醒的更新挪到最后**（ADR 043 D5 修订，[`move_to_end`]）：和原地更新同一条规矩——那段对话不在跑、前面也没有
+//!    排着的，马上拿掉原来那条和跟着它的那句、接在末尾（[`move_locked`]）；否则排着，这一轮结束照先后再挪
+//!    （`Desk::hold_move`：这一条已经排着的被这次的换掉，排到最后）。
 //!
-//! 记进对话都经 [`append_locked`] / [`replace_locked`]（和认领主会话同一把锁，不会被正要开始的一轮盖掉）。排队用的是
-//! 推送的那张“桌子”（`kotone_agent::push::Desk`，推送记住的内容也在它上面）；盘上的文件名照旧是
+//! 记进对话都经 [`append_locked`] / [`replace_locked`] / [`move_locked`]（和认领主会话同一把锁，不会被正要开始的
+//! 一轮盖掉）。排队用的是推送的那张“桌子”（`kotone_agent::push::Desk`，推送记住的内容也在它上面）；盘上的文件名照旧是
 //! `agent/auto-cards-held.json`（名字是只有自动卡片时起的；里面就是对话消息，旧版本读得懂）。锁的先后：先“桌子”再
 //! `Inner`，反过来的地方没有。
 //!
@@ -104,7 +107,9 @@ pub(super) fn flush_locked(
             back.push(h);
             continue;
         }
-        let written = if h.replace {
+        let written = if h.moved {
+            move_locked(inner, store, &h.conversation, &h.messages)
+        } else if h.replace {
             match h.messages.first() {
                 Some(notice) => replace_locked(inner, store, &h.conversation, notice),
                 None => Ok(Appended::Saved),
@@ -175,6 +180,54 @@ pub(super) fn replace(app: &AppHandle, id: &str, notice: &Message) -> Result<Pos
     let posted = {
         let mut desk = desk().lock().unwrap();
         let posted = replace_queued_locked(&rt.inner, &store, &mut desk, id, notice);
+        if posted == Posted::Held {
+            save_held(&desk);
+        }
+        posted
+    };
+    if posted == Posted::Held {
+        schedule_flush(app);
+    }
+    Ok(posted)
+}
+
+/// 把对话 `id` 里的一条推送挪到最后（ADR 043 D5 修订，见模块说明第 6 条；纯逻辑，有单测）：`moved` 是推送那条（新内容、
+/// 新时间）+ 这次带的那句（有才有）。这一条还排着（没记进对话，或者排着一个更新、挪动）就照排着的挪；不在跑、前面也没有
+/// 排着的就马上挪；否则排一个“挪到最后”。返回 [`Posted::Saved`] / [`Posted::Held`] / [`Posted::Gone`]（那段对话被删了）。
+/// 排着的放进 `desk`，调用方存盘。
+pub(super) fn move_queued_locked(
+    inner: &Mutex<Inner>,
+    store: &ConversationStore,
+    desk: &mut Desk,
+    id: &str,
+    moved: &[Message],
+) -> Posted {
+    let held = moved
+        .first()
+        .and_then(pushes::push_id)
+        .is_some_and(|push| desk.is_held(&push));
+    // 那段对话前面还排着别的：照来的先后一起排
+    let queued = desk.held().iter().any(|h| h.conversation == id);
+    if !held && !queued {
+        match move_locked(inner, store, id, moved) {
+            Ok(Appended::Saved) => return Posted::Saved,
+            Ok(Appended::Gone) => return Posted::Gone,
+            // 那段对话正在跑一轮：排着，这一轮结束再挪
+            Ok(Appended::Busy) => {}
+            Err(e) => log::log(&format!("agent: 挪对话 {id} 里的推送失败，排着等下次：{e}")),
+        }
+    }
+    desk.hold_move(id, moved.to_vec());
+    Posted::Held
+}
+
+/// [`move_queued_locked`] 加上存盘和排着的循环。
+pub(super) fn move_to_end(app: &AppHandle, id: &str, moved: &[Message]) -> Result<Posted, String> {
+    let rt = runtime(app)?;
+    let store = store(app)?;
+    let posted = {
+        let mut desk = desk().lock().unwrap();
+        let posted = move_queued_locked(&rt.inner, &store, &mut desk, id, moved);
         if posted == Posted::Held {
             save_held(&desk);
         }
@@ -370,10 +423,12 @@ fn flush(app: &AppHandle) -> bool {
         (saved, !desk.has_held())
     };
     for h in &saved {
-        if h.replace {
-            // 原地更新：界面在推来的那一刻已经换过了（`kotone://push` 的 updated），对话里没有新的消息
+        if h.replace || h.moved {
+            // 原地更新、挪到最后：界面在推来的那一刻已经换过、挪过了（`kotone://push` 的 updated / moved；给她的那句界面
+            // 不显示），不再发 appended
             log::log(&format!(
-                "agent: 排着的推送更新记进对话 {}（那一轮结束了）",
+                "agent: 排着的推送{}记进对话 {}（那一轮结束了）",
+                if h.moved { "挪动" } else { "更新" },
                 h.conversation
             ));
             continue;
@@ -388,7 +443,7 @@ fn flush(app: &AppHandle) -> bool {
     done
 }
 
-/// 某段对话里排着、还没记进对话的推送（还没记的新推送、排着的原地更新；界面重新读对话时照样显示）。
+/// 某段对话里排着、还没记进对话的推送（还没记的新推送、排着的原地更新和挪动；界面重新读对话时照样显示）。
 pub(super) fn held_pushes(id: &str) -> Vec<Message> {
     desk().lock().unwrap().held_pushes(id)
 }
@@ -713,6 +768,116 @@ mod tests {
         f.store.delete(&gone.id).unwrap();
         assert_eq!(
             replace_queued_locked(&f.inner, &f.store, &mut f.desk, &gone.id, &pushed("x", 3)),
+            Posted::Gone
+        );
+    }
+
+    /// ADR 043 D5 修订：带提醒的更新挪到最后。那段对话没在跑：马上从原处拿掉（连同跟着它的那句）、接在末尾，只有一条；
+    /// 在跑：排着（同一条只留最新的），这一轮存盘以后再挪，接在这一轮后面、没被盖掉；推送还排着没记进对话：从排着的里
+    /// 拿掉、排到最后；那段对话被删了：Gone。
+    #[test]
+    fn push_moves_go_to_the_end_and_wait_for_a_running_turn() {
+        let mut f = Fixture::new();
+        let id = f.current();
+        let note = |at_ms| Message::User {
+            text: "给她的那句".into(),
+            attachments: Vec::new(),
+            source: pushes::SOURCE.into(),
+            at_ms,
+            context: String::new(),
+        };
+        let keyed = |mut m: Message, key: &str| {
+            if let Message::Notice { push: Some(p), .. } = &mut m {
+                p["key"] = serde_json::json!(key);
+            }
+            m
+        };
+        let first = [pushed("开局战绩", 1), note(1)];
+        assert_eq!(
+            post_locked(
+                &f.inner,
+                &f.store,
+                &mut f.desk,
+                &id,
+                &first,
+                IfBusy::Wait,
+                true
+            ),
+            Posted::Saved
+        );
+        assert_eq!(
+            f.post(&id, Message::user("对面谁最菜"), IfBusy::Wait, true),
+            Posted::Saved
+        );
+        let mv = |f: &mut Fixture, title: &str, at_ms: u64| {
+            move_queued_locked(
+                &f.inner,
+                &f.store,
+                &mut f.desk,
+                &id,
+                &[pushed(title, at_ms)],
+            )
+        };
+        assert_eq!(mv(&mut f, "开局战绩 2", 5), Posted::Saved, "没在跑：马上挪");
+        assert_eq!(
+            f.saved(&id),
+            [
+                "嗨",
+                "在呢",
+                "对面谁最菜",
+                "英雄联盟 推送：开局战绩 2",
+                "给她的那句"
+            ]
+        );
+
+        // 她开始跑一轮（读了对话）：挪动排着，最新的为准
+        f.inner.lock().unwrap().running = Some(running(&id, false));
+        let mut c = f.store.load(&id).unwrap().unwrap();
+        assert_eq!(mv(&mut f, "开局战绩 3", 6), Posted::Held);
+        assert_eq!(mv(&mut f, "开局战绩 4", 7), Posted::Held);
+        assert_eq!(f.desk.held().len(), 1, "同一条只留一个挪动");
+        assert!(f.desk.held()[0].moved);
+        assert_eq!(f.flush(), 0, "还在跑：不写");
+        // 这一轮存盘（拿的是旧的那份对话）、结束
+        c.messages.push(Message::user("后来的"));
+        c.messages.push(assistant("嗯", &[]));
+        f.store.save(&mut c).unwrap();
+        f.inner.lock().unwrap().running = None;
+        assert_eq!(f.flush(), 1);
+        assert_eq!(
+            f.saved(&id),
+            [
+                "嗨",
+                "在呢",
+                "对面谁最菜",
+                "后来的",
+                "嗯",
+                "英雄联盟 推送：开局战绩 4",
+                "给她的那句"
+            ],
+            "挪到这一轮后面，只有一条，没被这一轮盖掉"
+        );
+
+        // 还排着没记进对话的推送：从排着的里拿掉、排到最后（照旧追加）
+        let summary = keyed(pushed("这局总结", 8), "summary:42");
+        assert_eq!(f.post(&id, summary, IfBusy::Wait, false), Posted::Held);
+        assert_eq!(f.post(&id, recap(), IfBusy::Wait, false), Posted::Held);
+        let newer = keyed(pushed("这局总结（新）", 9), "summary:42");
+        assert_eq!(
+            move_queued_locked(&f.inner, &f.store, &mut f.desk, &id, &[newer]),
+            Posted::Held
+        );
+        assert_eq!(f.desk.held().len(), 2);
+        assert!(!f.desk.held()[1].moved, "还没记进对话：照旧追加");
+        assert_eq!(f.flush(), 2);
+        assert_eq!(f.saved(&id)[7..], [RECAP, "英雄联盟 推送：这局总结（新）"]);
+
+        // 那段对话被删了
+        let mut gone = f.store.create();
+        f.store.save(&mut gone).unwrap();
+        f.store.delete(&gone.id).unwrap();
+        assert_eq!(
+            move_queued_locked(&f.inner, &f.store, &mut f.desk, &gone.id, &[pushed("x", 3)]),
             Posted::Gone
         );
     }

@@ -119,7 +119,7 @@ needs = ["client"]
 # 只在推送里出现：海斗三选一的卡片（ADR 043 D7 的 2026-11-26 晚修订）、你阵亡时对面的装备（B 轮）
 [[pages]]
 uri = "ui://kotone/lol/augment-pick"
-title = "海克斯三选一"
+title = "海克斯三选一 / 四选一"
 needs = ["stats"]
 
 [[pages]]
@@ -209,8 +209,8 @@ needs = ["client", "stats"]
 [[pushes]]
 id = "augment-pick"
 title = "海克斯三选一"
-when = "海斗对局里三选一出现、每次刷新"
-what = "发一张卡片，三张从左到右各一个判断：首选 / 可选 / 可刷新（照 AramHex 的规则），刷新了原地更新；卡片刚出现、最好的那张变了时她说一句“中间那个”。要用本地文字识别：没装时问一句要不要下载，用不了时一行说清楚原因"
+when = "海斗对局里三选一（有时是四选一）出现、每次刷新"
+what = "发一张卡片，三张（四选一时四张）从左到右各一个判断：首选 / 可选 / 可刷新（照 AramHex 的规则），刷新了原地更新；卡片刚出现、最好的那张变了时她说一句“选第二个”。要用本地文字识别：没装时问一句要不要下载，用不了时一行说清楚原因"
 forms = ["card", "voice", "line"]
 priority = "high"
 needs = ["stats"]
@@ -227,7 +227,7 @@ needs = ["client"]
 [[pushes]]
 id = "enemy-item"
 title = "对面的关键装备"
-when = "对面出了复活甲、中娅沙漏、水银、女妖面纱；你玩回血的英雄时对面出了重伤装备"
+when = "对面出了复活甲、中娅沙漏、水银、女妖面纱、巨蛇之牙；对面谁第一次有了重伤装备（小件也算，不管你玩什么英雄）"
 what = "她说一句“对面亚索出了复活甲”，显示一行"
 forms = ["voice", "line"]
 priority = "low"
@@ -252,8 +252,8 @@ needs = ["client"]
 [[pushes]]
 id = "enemies-down"
 title = "对面阵亡"
-when = "对面同时死了 3 个以上"
-what = "她说一句“对面死了 3 个，最快 18 秒复活”，显示一行"
+when = "对面阵亡、还要 30 秒以上才复活的刚到 3 个（60 秒内只说一次）"
+what = "她说一句“对面死了 3 个，最快 35 秒复活”，显示一行"
 forms = ["voice", "line"]
 priority = "high"
 needs = ["client"]
@@ -340,7 +340,7 @@ data.champion = "阵亡的英雄（佛耶戈附身时阵亡也是佛耶戈）"
 data.me = "是不是自己"
 data.killer = "击杀者的英雄；塔、小兵、野怪杀的或对不上时是空的"
 data.respawnSeconds = "多少秒后复活"
-data.alliesAlive = "这一个阵亡之后我方还活着几个（含自己）"
+data.alliesAlive = "这一个阵亡之后我方还活着几个（含自己）。“队友都倒了、只剩我”= match {team: ally, alliesAlive: 1, meAlive: true}"
 data.enemiesAlive = "这一个阵亡之后对面还活着几个"
 data.meAlive = "这一个阵亡之后自己还活着没有"
 

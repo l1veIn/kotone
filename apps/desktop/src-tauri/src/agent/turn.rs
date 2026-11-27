@@ -346,6 +346,27 @@ pub(super) fn replace_locked(
     Ok(Appended::Saved)
 }
 
+/// 把对话里的一条推送挪到最后（ADR 043 D5 修订：带提醒的更新）：拿掉原来那条和跟着它的那句，`moved`（推送那条 +
+/// 最多一句）接在末尾（`kotone_agent::push::apply_move`，找不到原来那条也照样接上），不叫模型。规矩和
+/// [`replace_locked`] 一样：同一把锁；那段对话正在跑时不写，返回 [`Appended::Busy`]，调用方排着（`when_free.rs`）。
+pub(super) fn move_locked(
+    inner: &Mutex<Inner>,
+    store: &ConversationStore,
+    id: &str,
+    moved: &[Message],
+) -> Result<Appended, String> {
+    let inner = inner.lock().unwrap();
+    if running_in(&inner, id).is_some() {
+        return Ok(Appended::Busy);
+    }
+    let Some(mut conversation) = store.load(id)? else {
+        return Ok(Appended::Gone);
+    };
+    kotone_agent::push::apply_move(&mut conversation.messages, moved);
+    store.save(&mut conversation)?;
+    Ok(Appended::Saved)
+}
+
 /// 那段对话正有模型在跑一轮：作为插话交给它，返回 true。没在跑，或者在跑的是转到后台的工具（没有模型读收件箱，
 /// 插不进话）：false。
 pub(super) fn steer_locked(inner: &Mutex<Inner>, id: &str, messages: &[Message]) -> bool {

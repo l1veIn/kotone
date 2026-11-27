@@ -20,7 +20,12 @@
   // - 请求换显示方式：聊天卡片请求 fullscreen 时在右侧栏打开完整页面，自己还是 inline；pip 先不支持（方案第 4 期映射到覆盖层）；
   // - `ui/message`（替玩家往聊天里发话）：先不给，回 isError（往聊天和她的上下文里放东西是大权力，ADR 039 D3）；
   // - `ui/update-model-context`：接住、回成功，但不存、不进她的上下文（同上，以后再定；宿主能力里也不声明它）；
-  // - inline：进入可视区才加载（长对话里不一下子起一堆 iframe），高度跟 App 报的走（有上限）；
+  // - inline：进入可视区才加载（长对话里不一下子起一堆 iframe），高度跟 App 报的走；
+  // - **不在 iframe 里滚**（2026-11-27 rc.14 试玩：“卡片有最大高度，然后就出现了卡片内部一个滚动，小窗一个滚动，这种滚动
+  //   嵌套非常不好，很卡而且吃性能”）：iframe 一直是 App 报的整个高度（`scrolling="no"`，里面没有可滚的），滚轮落在卡片上时
+  //   滚的是外面（聊天页、小窗的列表；Chromium 把不能滚的 iframe 的滚轮交给外面）。外面这一块再按地方截：聊天页多高显示多高，
+  //   只留一个防呆上限 INLINE_CAP，超出底部渐隐 +“展开”；悬浮窗的小窗里最高到列表能放下的（FLOATING_CARD_MAX），超出底部
+  //   渐隐 +“在 Kotone 里看完整的”（交给 `onRequestFullscreen`：小窗里是打开 Kotone、定位到这一条）；
   // - 数据变了（推送同一个 key 再推一次，ADR 043 D5）：握手以后把新的结果再推给 App（MCP Apps 的 tool-result 通知可以来
   //   多次，App 照“宿主又推来一个结果”重画），iframe 不重新加载、App 里点到哪还在哪。
   import { getContext, onMount } from "svelte";
@@ -31,6 +36,7 @@
   import { currentLocale } from "$lib/locale";
   import { callAppTool, mcpToolName, openApp, parseAppLink, pluginInfo, readAppResource, toCallToolResult, type CallToolResult } from "$lib/mcpApps";
   import { pluginCall } from "$lib/plugins";
+  import { FLOATING_CARD_MAX, type FloatingCardMax } from "$lib/floating";
   import { FLOATING_PLUGIN_APP, FROM_PAGE } from "$lib/pluginUi";
   import { PAGE_MATCH } from "$plugins/lol/ui/types";
   import { m } from "$lib/paraglide/messages.js";
@@ -42,7 +48,7 @@
     uri: string;
     /** 知道是哪个插件的页面时写上（第三方插件的插件页）：两个服务器给了同一个地址时后端不猜。 */
     pluginId?: string | null;
-    /** fullscreen：插件页、右侧栏（宽度占满，高度跟 App 报的走、至少 22rem，外面的页面滚）；inline：聊天卡片（高度跟 App 报的走，有上限）。 */
+    /** fullscreen：插件页、右侧栏（宽度占满，高度跟 App 报的走、至少 22rem，外面的页面滚）；inline：聊天卡片（高度跟 App 报的走，不在里面滚；聊天页防呆上限 2000、小窗里到列表放得下的）。 */
     displayMode: "inline" | "fullscreen";
     /**
      * 工具结果给页面的数据（structuredContent）：有就在握手后推给 App。null 而 `params` 有东西（她 `ui.open` 带参数打开、
@@ -58,21 +64,43 @@
   } = $props();
 
   const inFloating = getContext<boolean | undefined>(FLOATING_PLUGIN_APP);
+  /** 悬浮窗的小窗里卡片最高多高（MiniChat 给）。 */
+  const floatingCap = getContext<FloatingCardMax | undefined>(FLOATING_CARD_MAX);
 
-  /** 高度范围（px）：卡片 120–520；完整页面至少 352（22rem），不设上限。 */
+  /** 高度（px）：卡片至少 120，聊天页里超过 INLINE_CAP（防呆）才截；完整页面至少 352（22rem），不设上限。 */
   const INLINE_MIN = 120;
-  const INLINE_MAX = 520;
+  const INLINE_CAP = 2_000;
   const FULL_MIN = 352;
   /** App 多久没完成握手算打不开。 */
   const HANDSHAKE_MS = 20_000;
 
   let container: HTMLDivElement;
+  let frameElement = $state<HTMLIFrameElement | null>(null);
   let phase = $state<"waiting" | "loading" | "ready" | "failed">("waiting");
   let error = $state("");
-  /** App 报的高度（0 = 还没报）；显示时按显示方式夹在范围里。 */
+  /** App 报的高度（0 = 还没报）。 */
   let height = $state(0);
-  const shownHeight = $derived(displayMode === "inline" ? Math.max(INLINE_MIN, Math.min(INLINE_MAX, height)) : Math.max(FULL_MIN, height));
+  /** 聊天页里点了“展开”（不再截）。 */
+  let expanded = $state(false);
+  const inline = $derived(displayMode === "inline");
+  /** iframe 的高：App 要多高给多高（里面就没有可滚的）。 */
+  const natural = $derived(inline ? Math.max(INLINE_MIN, height) : Math.max(FULL_MIN, height));
+  /** 外面这一块最高多高：小窗里到列表能放下的，聊天页里防呆上限（展开了不截），完整页面不截。 */
+  const cap = $derived(!inline ? Infinity : inFloating && floatingCap ? floatingCap.max : expanded ? Infinity : INLINE_CAP);
+  const shownHeight = $derived(Math.min(natural, cap));
+  /** App 比能放下的高：底部渐隐，给“展开 / 在 Kotone 里看完整的”。 */
+  const clipped = $derived(phase === "ready" && natural > cap + 1);
   let plugin = $state("");
+
+  $effect(() => {
+    if (frameElement) frameElement.style.height = `${natural}px`;
+  });
+
+  /** 截了一截的卡片：小窗里交给外面（打开 Kotone、定位到这一条），聊天页里原地展开。 */
+  function more() {
+    if (inFloating && onRequestFullscreen) onRequestFullscreen();
+    else expanded = true;
+  }
 
   const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value ?? null));
   /** 握手完的桥（之后数据变了用它再推结果）和最后推给 App 的数据。 */
@@ -102,9 +130,10 @@
     });
   }
 
-  const dimensions = () => {
-    const width = Math.round(container?.clientWidth ?? 0) || undefined;
-    return displayMode === "inline" ? { width, maxHeight: INLINE_MAX } : { width };
+  /** 容器尺寸：宽度固定，高度不限（App 要多高宿主给多高，宿主自己在外面截，App 不用在里面滚）。 */
+  const dimensions = (): McpUiHostContext["containerDimensions"] => {
+    const width = Math.round(container?.clientWidth ?? 0);
+    return width ? { width } : {};
   };
 
   async function start(): Promise<() => void> {
@@ -117,6 +146,7 @@
     const dispose = () => {
       disposed = true;
       live = null;
+      frameElement = null;
       linkAsk?.answer(false);
       for (const cleanup of cleanups) cleanup();
       if (bridge && initialized) void bridge.teardownResource({}).catch(() => {});
@@ -149,9 +179,12 @@
       frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
       frame.setAttribute("referrerpolicy", "no-referrer");
       frame.setAttribute("data-testid", "mcp-app-iframe");
+      // 卡片：iframe 一直是 App 的整个高度，自己不出滚动条，滚轮交给外面（完整页面不报高度的第三方 App 还能在里面滚）
+      if (displayMode === "inline") frame.setAttribute("scrolling", "no");
       frame.title = uri;
-      frame.style.cssText = "display:block;width:100%;height:100%;border:0;background:transparent;color-scheme:normal";
+      frame.style.cssText = `display:block;width:100%;height:${natural}px;border:0;background:transparent;color-scheme:normal`;
       container.appendChild(frame);
+      frameElement = frame;
 
       let context: McpUiHostContext = {
         theme: get(resolvedTheme),
@@ -234,6 +267,7 @@
           phase = "failed";
           error = "timeout";
           frame?.remove();
+          frameElement = null;
         }
       }, HANDSHAKE_MS);
       cleanups.push(() => clearTimeout(timer));
@@ -286,20 +320,19 @@
   });
 </script>
 
-<div
-  bind:this={container}
-  class="relative w-full overflow-hidden"
-  style:height={`${shownHeight}px`}
-  data-testid="mcp-app-frame"
-  data-uri={uri}
-  data-plugin={plugin}
-  data-display={displayMode}
-  data-phase={phase}
->
-  {#if phase === "waiting" || phase === "loading"}
-    <div class="pointer-events-none absolute inset-0 animate-pulse rounded-lg bg-muted/40"></div>
-  {:else if phase === "failed"}
-    <p class="m-0 px-1 py-6 text-center text-xs text-muted-foreground" data-testid="mcp-app-failed" title={error}>{m.chat_plugin_page_missing()}</p>
+<div class="relative w-full" data-testid="mcp-app-frame" data-uri={uri} data-plugin={plugin} data-display={displayMode}
+  data-phase={phase} data-clipped={clipped}>
+  <div bind:this={container} class="relative w-full overflow-hidden" class:clipped style:height={`${shownHeight}px`}>
+    {#if phase === "waiting" || phase === "loading"}
+      <div class="pointer-events-none absolute inset-0 animate-pulse rounded-lg bg-muted/40"></div>
+    {:else if phase === "failed"}
+      <p class="m-0 px-1 py-6 text-center text-xs text-muted-foreground" data-testid="mcp-app-failed" title={error}>{m.chat_plugin_page_missing()}</p>
+    {/if}
+  </div>
+  {#if clipped}
+    <!-- 截了一截：底部渐隐（上面 mask），中间一个按钮 -->
+    <Button size="sm" variant="secondary" class="absolute bottom-2 left-1/2 h-7 -translate-x-1/2 rounded-full px-3 text-xs shadow-sm"
+      data-testid="mcp-app-more" onclick={more}>{inFloating && onRequestFullscreen ? m.chat_plugin_card_full() : m.chat_plugin_card_expand()}</Button>
   {/if}
 </div>
 
@@ -316,3 +349,11 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<style>
+  /* 截了一截的卡片：底部渐隐（mask 不看底色，聊天页和小窗里都一样） */
+  .clipped {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent);
+  }
+</style>

@@ -444,6 +444,11 @@ fn the_prompt_says_which_automations_need_the_game_and_how_programs_notify() {
             "只拿得到 status",
             "needsConfirm",
             "「自动化」页点“允许”",
+            // ADR 046 的 2026-11-27 修订：条件写进 on.match，程序里 return 的那次也算触发
+            "能写进 on.match 的条件都写进去",
+            "数组表示“或”",
+            "return 的那一次也算触发",
+            "triggerNotes",
         ] {
             assert!(text.contains(rule), "{rule}");
         }

@@ -2,7 +2,7 @@
 // - 这局总结（推送 `summary`，页面 `ui://kotone/lol/game` 的卡片）：海斗、斗魂竞技场再加一块“海克斯”，先显示对面每个人的
 //   （一人一行，图标 + 名字），点“我方”换成我方的；没有海克斯的模式没有这一块。单局详情全屏每队下面也有这一块。
 // - 今天的状态（推送 `today`，页面 `ui://kotone/lol/today`）：进房间或排队时推来，一天一张；打完一局回到房间时同一张原地
-//   更新（App 收到新的数据重画，不重新加载）。窄的时候（悬浮窗的小窗约 360 px）也放得下。
+//   更新时挪到对话最后（带提醒的更新，ADR 043 D5 修订；卡片重新加载）。窄的时候（悬浮窗的小窗约 360 px）也放得下。
 // 用 @tauri-apps/api/mocks 模拟 agent_* 命令和 kotone://push 事件，插件的命令交给浏览器预览的 pluginsMock，卡片里是真的 App
 // （vite.config.ts 的 mcpAppsDevServer 给，test:e2e 先打包）。数据是 lolMock.ts 的 sampleSummary / sampleToday。
 import { expect, test, type Frame, type Page, type TestInfo } from "@playwright/test";
@@ -24,8 +24,8 @@ const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir
 
 interface Bridge {
   push(event: unknown): Promise<void>;
-  /** 今天的状态那条 Notice：今天打了几局（5 局；6 = 又赢了一局）。 */
-  today(games?: number): unknown;
+  /** 今天的状态那条 Notice：今天打了几局（5 局；6 = 又赢了一局）；`atMs` 是它在对话里的时间（挪到最后时换成挪的那一刻）。 */
+  today(games?: number, atMs?: number): unknown;
 }
 declare global {
   interface Window {
@@ -56,8 +56,8 @@ async function open(page: Page, which: "summary" | "today", options: { rift?: bo
         card: { title: "这局总结", ui: { uri: GAME, params: { gameId: summaryData.gameId } }, structuredContent: summaryData },
       },
     };
-    const today = (games = 5) => ({
-      role: "notice", text: "英雄联盟 推送：今天的状态", atMs: T - 20_000,
+    const today = (games = 5, atMs = T - 20_000) => ({
+      role: "notice", text: "英雄联盟 推送：今天的状态", atMs,
       push: {
         plugin: "lol", pluginName: "英雄联盟", trigger: "today", title: "今天的状态", key: TODAY_KEY,
         card: { title: "今天的状态", ui: { uri: TODAY }, structuredContent: sampleToday(games) },
@@ -179,7 +179,7 @@ test("a summary without augments (the Rift) has no augment block", async ({ page
   await expect(app.getByTestId("lol-game-augments")).toHaveCount(0);
 });
 
-test("the today card states today's games, the streak and the champions that lost twice; a new game updates it in place", async ({ page }, testInfo) => {
+test("the today card states today's games, the streak and the champions that lost twice; a new game moves it to the end of the chat", async ({ page }, testInfo) => {
   await open(page, "today");
   const card = pushAt(page, TODAY_KEY);
   await expect(card.getByTestId("push-from")).toContainText("英雄联盟 推送");
@@ -209,16 +209,16 @@ test("the today card states today's games, the streak and the champions that los
   await expect(root).not.toContainText("风险");
   await screenshot(page, { path: shot(testInfo, "today-card") });
 
-  // 又打了一局（赢了），回到房间：同一个 key 再推一次，原地重画，App 不重新加载
-  await app.evaluate(() => { (window as unknown as { __mark: number }).__mark = 7; });
-  await page.evaluate(async (key) => {
+  // 又打了一局（赢了），回到房间：同一个 key 带提醒再推一次，这张挪到对话最后（时间换成挪的那一刻），卡片重新加载
+  await page.evaluate(async ({ key, at }) => {
     const t = window.lolPostTest;
-    await t.push({ kind: "updated", conversationId: "c-1", plugin: "lol", trigger: "today", key, held: false, alert: true, message: t.today(6) });
-  }, TODAY_KEY);
-  await expect(app.getByTestId("lol-today-head")).toContainText("今天 6 局 · 3 胜 3 负", { timeout: 10_000 });
-  await expect(app.getByTestId("lol-today-streak")).toHaveText("上一局赢了");
-  await expect(app.getByTestId("lol-today-recent").locator(".rg")).toHaveCount(6);
-  expect(await app.evaluate(() => (window as unknown as { __mark?: number }).__mark)).toBe(7);
+    await t.push({ kind: "moved", conversationId: "c-1", plugin: "lol", trigger: "today", key, held: false, alert: true, message: t.today(6, at) });
+  }, { key: TODAY_KEY, at: T });
+  await expect.poll(() => app.isDetached(), { timeout: 10_000 }).toBe(true);
+  const moved = await appFrame(page, "today");
+  await expect(moved.getByTestId("lol-today-head")).toContainText("今天 6 局 · 3 胜 3 负", { timeout: 10_000 });
+  await expect(moved.getByTestId("lol-today-streak")).toHaveText("上一局赢了");
+  await expect(moved.getByTestId("lol-today-recent").locator(".rg")).toHaveCount(6);
   await expect(page.getByTestId("push-item")).toHaveCount(1);
 });
 

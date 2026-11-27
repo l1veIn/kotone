@@ -19,6 +19,8 @@ interface Bridge {
   /** 对话里那张开局战绩（新的推送格式），`update(name)` 是同一个 key、我那一行改了名字的版本。 */
   opening: { role: "notice"; atMs: number; push: Record<string, unknown> };
   update(name: string): unknown;
+  /** 带提醒的更新挪到最后的那条（ADR 043 D5 修订）：和 `update` 一样，时间是挪的那一刻。 */
+  moved(name: string, atMs: number): unknown;
 }
 declare global {
   interface Window {
@@ -36,8 +38,8 @@ const LEGACY_KEY = "opening:9000001";
 /** 截图放在仓库的 target/plugin-shots/round8/（实施记录用）。 */
 const shot = (name: string) => fileURLToPath(new URL(`../../../target/plugin-shots/round8/${name}.png`, import.meta.url));
 
-/** `held`：agent_held_cards 回什么（排着的推送：新的、排着的原地更新）。 */
-async function open(page: Page, options: { legacy?: boolean; held?: "update" } = {}) {
+/** `held`：agent_held_cards 回什么（排着的推送：新的、排着的原地更新、排着的挪动）。 */
+async function open(page: Page, options: { legacy?: boolean; held?: "update" | "move" } = {}) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("**/__push-test", (route) => route.fulfill({
     contentType: "text/html", body: '<!doctype html><html><body><div id="app"></div></body></html>',
@@ -82,6 +84,10 @@ async function open(page: Page, options: { legacy?: boolean; held?: "update" } =
       data.allies[0] = { ...data.allies[0], name, riotId: `${name}#1001` };
       return { ...opening, push: { ...record(KEY, "开局战绩", data), updatedAtMs: T } };
     };
+    const moved = (name: string, atMs: number) => {
+      const m = update(name);
+      return { ...m, atMs, push: { ...m.push, updatedAtMs: atMs } };
+    };
     // i18n-ignore-end
     const conversations: Record<string, typeof old> = { "c-old": old };
     const state = {
@@ -93,7 +99,7 @@ async function open(page: Page, options: { legacy?: boolean; held?: "update" } =
       push: record("summary:9100000", "这局总结", sampleMatch()), // i18n-ignore
     };
     const bridge = {
-      calls: [] as { command: string; args?: Record<string, unknown> }[], fresh, opening, update,
+      calls: [] as { command: string; args?: Record<string, unknown> }[], fresh, opening, update, moved,
       async event(conversationId: string, event: unknown) {
         const e = event as { kind: string; message?: unknown };
         if (e.kind === "appended") conversations[conversationId]?.messages.push(e.message as never);
@@ -117,7 +123,9 @@ async function open(page: Page, options: { legacy?: boolean; held?: "update" } =
       switch (command) {
         case "agent_state": return structuredClone({ ...state, permissions: { mode: "default", rules: {} } });
         case "agent_conversation": return structuredClone(conversations[(a as { id: string }).id] ?? null);
-        case "agent_held_cards": return options.held === "update" ? [update("排着的新名字")] : []; // i18n-ignore
+        case "agent_held_cards": // i18n-ignore-start
+          return options.held === "update" ? [update("排着的新名字")] : options.held === "move" ? [moved("排着挪的名字", T + 5_000)] : [];
+          // i18n-ignore-end
         case "automation_runs": return { runs: [] };
         case "usage_conversation": return null;
         case "list_connections": return [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: "test", hasApiKey: true }];
@@ -212,6 +220,95 @@ test("an update still waiting in the queue replaces the saved card when the chat
   await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   await expect.poll(() => page.frames().find((f) => /\/app\/lol\/match$/.test(f.url()))?.locator("body").textContent(), { timeout: 15_000 })
     .toContain("排着的新名字");
+});
+
+/** 聊天里某一条在可视区里的上沿（px，相对聊天那一块）：看页面有没有跳。 */
+const topIn = (page: Page, text: string) => page.getByTestId("agent-transcript").evaluate((viewport, text) => {
+  const el = [...viewport.querySelectorAll<HTMLElement>('[data-testid="agent-turn"]')].find((t) => t.textContent?.includes(text));
+  return el ? Math.round(el.getBoundingClientRect().top - viewport.getBoundingClientRect().top) : null;
+}, text);
+const atBottom = (page: Page) => page.getByTestId("agent-transcript").evaluate((v) => v.scrollHeight - v.scrollTop - v.clientHeight < 2);
+/** 等两帧（事件改完对话、页面画完、滚动事件到了）。 */
+const settle = (page: Page) => page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+
+// ADR 043 D5 修订（rc.14 实测：海斗里“你阵亡时对面的装备”一局更新十来次，每次都跳回开局附近）
+test("an update with alert moves the card to the bottom (still one card); one without alert stays in place and the chat does not scroll to it", async ({ page }) => {
+  await open(page);
+  // 开局战绩之后又来了几轮：卡片在上面，页面要往下翻
+  await page.evaluate(async (T) => {
+    const t = window.pushTest;
+    for (let i = 1; i <= 6; i += 1) {
+      // i18n-ignore-start：示例对话
+      await t.event("c-old", { kind: "appended", message: { role: "user", text: `第 ${i} 个问题`, source: "chat", atMs: T + i * 2_000 } });
+      await t.event("c-old", { kind: "appended", message: { role: "assistant", text: `${"这是一段比较长的回答。\n\n".repeat(6)}第 ${i} 个回答`, atMs: T + i * 2_000 + 1_000 } });
+      // i18n-ignore-end
+    }
+  }, T);
+  const card = pushAt(page, KEY);
+  await expect(page.getByTestId("agent-turn").filter({ hasText: "第 6 个回答" })).toBeVisible();
+  const keys = await turnKeys(page);
+  expect(keys.indexOf(KEY)).toBe(1);
+  expect(keys.length).toBe(9);
+
+  // 玩家往上翻着看（第 3 个问题在最上面，卡片在可视区上面）
+  await page.getByTestId("agent-turn").filter({ hasText: "第 3 个问题" }).evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await settle(page);
+  await expect(card).not.toBeInViewport();
+  expect(await atBottom(page)).toBe(false);
+  const before = await topIn(page, "第 3 个问题");
+
+  // 不带提醒的更新：原地换内容，位置不动，页面不滚
+  await page.evaluate(async (KEY) => {
+    const t = window.pushTest;
+    await t.push({ kind: "updated", conversationId: "c-old", plugin: "lol", trigger: "opening", key: KEY, held: false, alert: false,
+      message: t.update("改过的名字") }); // i18n-ignore
+  }, KEY);
+  await settle(page);
+  expect(await turnKeys(page)).toEqual(keys);
+  expect(await topIn(page, "第 3 个问题")).toBe(before);
+  await expect(card).not.toBeInViewport();
+
+  // 带提醒的更新：从原处拿掉、放到最后，只有一张；玩家往上翻着看：看着的那一段不动
+  await page.evaluate(async ({ KEY, T }) => {
+    const t = window.pushTest;
+    await t.push({ kind: "moved", conversationId: "c-old", plugin: "lol", trigger: "opening", key: KEY, held: false, alert: true,
+      message: t.moved("挪过来的名字", T + 20_000) }); // i18n-ignore
+  }, { KEY, T });
+  await expect.poll(async () => (await turnKeys(page)).indexOf(KEY)).toBe(8);
+  await settle(page);
+  await expect(page.getByTestId("push-item")).toHaveCount(1);
+  expect((await turnKeys(page)).length).toBe(9);
+  expect(await topIn(page, "第 3 个问题")).toBe(before);
+  await expect(card).not.toBeInViewport();
+
+  // 玩家翻回最下面，又来了一轮：跟着到最下面；再来一次带提醒的更新：卡片又在最后，页面跟到最下面、看得到它
+  await page.getByTestId("agent-transcript").evaluate((v) => { v.scrollTop = v.scrollHeight; v.dispatchEvent(new Event("scroll")); });
+  await page.evaluate(async (T) => {
+    const t = window.pushTest;
+    await t.event("c-old", { kind: "appended", message: { role: "user", text: "第 7 个问题", source: "chat", atMs: T + 30_000 } }); // i18n-ignore
+  }, T);
+  await expect.poll(async () => (await turnKeys(page)).indexOf(KEY)).toBe(8);
+  await expect.poll(() => atBottom(page)).toBe(true);
+  await page.evaluate(async ({ KEY, T }) => {
+    const t = window.pushTest;
+    await t.push({ kind: "moved", conversationId: "c-old", plugin: "lol", trigger: "opening", key: KEY, held: false, alert: true,
+      message: t.moved("又挪过来的名字", T + 40_000) }); // i18n-ignore
+  }, { KEY, T });
+  await expect.poll(async () => (await turnKeys(page)).at(-1)).toBe(KEY);
+  await expect(page.getByTestId("push-item")).toHaveCount(1);
+  await expect.poll(() => atBottom(page)).toBe(true);
+  await expect(card).toBeInViewport();
+  // 卡片里的 App 拿到的是最新的数据
+  await expect.poll(() => page.frames().find((f) => /\/app\/lol\/match$/.test(f.url()))?.locator("body").textContent(), { timeout: 15_000 })
+    .toContain("又挪过来的名字");
+  await screenshot(page, { path: shot("chat-push-moved") });
+});
+
+test("a move still waiting in the queue puts the card at the bottom when the chat loads", async ({ page }) => {
+  await open(page, { held: "move" });
+  await expect(page.getByTestId("push-item")).toHaveCount(1);
+  await expect.poll(async () => (await turnKeys(page)).at(-1)).toBe(KEY);
+  expect((await turnKeys(page)).filter(Boolean)).toEqual([KEY]);
 });
 
 test("a push that comes while she is answering shows at the bottom at once and stays after her answer", async ({ page }) => {

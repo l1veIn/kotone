@@ -106,7 +106,8 @@ readyAt（玩家报过、还没好的才有：游戏时间到几秒时好）}]�
         .untrusted(),
         ToolSpec::new(
             TOOL_HISTORY,
-            "召唤师主页的近期战绩。offset 使用上一页返回的 nextOffset，首页为 0。",
+            "主页、战绩页分页看一个人的战绩（客户端给的最近 50 局里切页，重开、自定义不算）。offset 用上一页返回的 nextOffset，首页为 0；\
+clientGames 是客户端一共给了几局记录（翻到头时页面写清）。",
             json!({"type": "object", "additionalProperties": false, "required": ["puuid", "offset", "pageSize"], "properties": {
                 "puuid": {"type": "string", "minLength": 1, "maxLength": 100},
                 "offset": {"type": "integer", "minimum": 0, "maximum": u32::MAX},

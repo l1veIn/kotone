@@ -5,10 +5,10 @@
 //! | 推送（清单 id） | 什么时候 | 样子 | 多要紧 |
 //! |---|---|---|---|
 //! | `enemy-ult` | 对面全图 / 远距离大招的英雄（[`LONG_ULTS`]）、峡谷里你的对线对手到 6 级 | 语音 + 一行 | 普通 |
-//! | `enemy-item` | 对面出了复活甲、中娅、水银、女妖（[`KEY_ITEMS`]）；你玩回血英雄（[`HEALERS`]）时对面出了重伤（[`GRIEVOUS`]） | 语音 + 一行 | 低 |
+//! | `enemy-item` | 对面出了复活甲、中娅、水银、女妖、巨蛇之牙（[`KEY_ITEMS`]）；对面谁身上第一次有了带重伤的装备（[`GRIEVOUS`]，小件也算；不管你玩什么英雄） | 语音 + 一行 | 低 |
 //! | `spell-ready` | 你或她记下的召唤师技能（`lol.spell`）转好了 | 语音 + 一行 | 普通 |
 //! | `objective` | 峡谷的小龙、远古龙、虚空巢虫、峡谷先锋、大龙刷新前 30 秒（[`RIFT_RULES`]，只在峡谷） | 语音 + 一行 | 普通 |
-//! | `enemies-down` | 对面同时死了 3 个以上（这一刻刚到 3 个，45 秒内只说一次） | 语音 + 一行 | 要紧 |
+//! | `enemies-down` | 对面阵亡、还要 30 秒以上才复活的（[`DOWN_RESPAWN`]）这一份刚到 3 个（60 秒内只说一次） | 语音 + 一行 | 要紧 |
 //! | `my-death` | 你阵亡时：对面每个人的等级、KDA、装备（按装备总价排），上次阵亡以后新出的标出来 | 卡片（一局一张，每次阵亡原地更新、再弹一次） | 普通 |
 //!
 //! 谁先说、20 秒冷却、过时不说由宿主管（`kotone_agent::push_voice`）：同一轮里来了几条，宿主只说最要紧的那句，别的只显示
@@ -69,7 +69,8 @@ pub(crate) const LONG_ULTS: &[(&str, &str)] = &[
     ("Smolder", "斯莫德"),
 ];
 
-/// 关键装备（装备 id 的后四位，说的时候的叫法）：复活甲、中娅、水银（饰带、弯刀、密银黎明都带净化）、女妖。
+/// 关键装备（装备 id 的后四位，说的时候的叫法）：复活甲、中娅、水银（饰带、弯刀、密银黎明都带净化）、女妖、
+/// 巨蛇之牙（破护盾）。出了就说，不管你玩什么英雄。
 pub(crate) const KEY_ITEMS: &[(i64, &str)] = &[
     (3026, "复活甲"),
     (3157, "中娅"),
@@ -77,39 +78,13 @@ pub(crate) const KEY_ITEMS: &[(i64, &str)] = &[
     (3139, "水银弯刀"),
     (6035, "密银黎明"),
     (3102, "女妖"),
+    (6695, "巨蛇之牙"),
 ];
 
-/// 带重伤的装备（后四位）：死刑宣告、凡性的提醒、炼金朋克链锯剑、湮灭宝珠、莫雷洛秘典、炼金科技纯化器、棘刺背心、荆棘之甲。
+/// 带重伤的装备（后四位）：死刑宣告、凡性的提醒、炼金朋克链锯剑、湮灭宝珠、莫雷洛秘典、炼金科技纯化器（已经不在商店里，
+/// 留着不碍事）、棘刺背心、荆棘之甲。2026-11-27 对过客户端的装备资料（2026-11-23 录的 `items.json`，863 件）：说明里
+/// 写着重伤的就这 8 件，海斗、斗魂竞技场的是同一件前面多两位（`base_item`）。
 pub(crate) const GRIEVOUS: &[i64] = &[3123, 3033, 6609, 3916, 3165, 3011, 3076, 3075];
-
-/// 回血的英雄（英文 id）：你玩这些时，对面出了重伤也提醒。
-pub(crate) const HEALERS: &[&str] = &[
-    "Aatrox",
-    "Alistar",
-    "Briar",
-    "DrMundo",
-    "Fiddlesticks",
-    "Fiora",
-    "Gwen",
-    "Illaoi",
-    "Maokai",
-    "Milio",
-    "Nami",
-    "Nasus",
-    "Olaf",
-    "Seraphine",
-    "Sona",
-    "Soraka",
-    "Swain",
-    "Sylas",
-    "Taric",
-    "Trundle",
-    "Vladimir",
-    "Volibear",
-    "Warwick",
-    "Yuumi",
-    "Zac",
-];
 
 /// 峡谷的分路（局内接口的 `position`）→ 说的时候的叫法。
 const POSITIONS: [(&str, &str); 5] = [
@@ -155,10 +130,13 @@ pub const RIFT_RULES: RiftRules = RiftRules {
 
 /// 资源刷新前多久提醒。
 pub const OBJECTIVE_LEAD: f64 = 30.0;
-/// 对面同时死了几个才提醒。
+/// “对面阵亡”只数还要这么久以上才复活的（局内接口的剩余复活秒数）：这时候我方才有空打大龙、推一波。复活得这么慢
+/// 本身就说明是后期，不另加游戏时间的门槛；峡谷、大乱斗、海斗同一条。
+pub const DOWN_RESPAWN: f64 = 30.0;
+/// 对面这样阵亡的有几个才提醒。
 pub const DOWN_AT: usize = 3;
-/// “对面死了几个”两次之间至少隔多久（游戏时间，秒）：一波团战只说一次。
-pub const DOWN_GAP: f64 = 45.0;
+/// “对面阵亡”两次之间至少隔多久（游戏时间，秒）：一波团战只说一次。
+pub const DOWN_GAP: f64 = 60.0;
 
 /// 峡谷（只有它有分路和峡谷资源；大乱斗是 `ARAM`、海斗是 `KIWI`）。
 pub fn is_rift(game: &LiveGame) -> bool {
@@ -368,7 +346,7 @@ impl Alerts {
         if let Some(push) = self.enemy_ults(&changes, game, data, key(PUSH_ENEMY_ULT)) {
             out.pushes.push(push);
         }
-        if let Some(push) = self.enemy_items(&changes, game, data, key(PUSH_ENEMY_ITEM)) {
+        if let Some(push) = self.enemy_items(&before, &changes, game, data, key(PUSH_ENEMY_ITEM)) {
             out.pushes.push(push);
         }
         out.pushes
@@ -448,17 +426,16 @@ impl Alerts {
         ))
     }
 
-    /// 对面出了关键装备（你玩回血英雄时还有重伤）。同一轮的并成一条，最多写三个。
+    /// 对面出了关键装备、身上第一次有了重伤（都不管你玩什么英雄）。同一轮的并成一条，最多写三个。
     fn enemy_items(
         &mut self,
+        before: &Roster,
         changes: &events::Changes,
         game: &LiveGame,
         data: Option<&GameData>,
         key: String,
     ) -> Option<Push> {
-        let healer = game
-            .me()
-            .is_some_and(|me| HEALERS.iter().any(|h| h.eq_ignore_ascii_case(&me.alias)));
+        let grievous = |items: &[i64]| items.iter().any(|i| GRIEVOUS.contains(&base_item(*i)));
         let mut found: Vec<(String, String)> = Vec::new();
         for bought in &changes.items {
             let p = bought.player;
@@ -470,10 +447,14 @@ impl Alerts {
                 self.item_said
                     .insert(format!("{}:{base}", p.key()))
                     .then(|| name.to_string())
-            } else if healer && GRIEVOUS.contains(&base) {
-                self.item_said
-                    .insert(format!("{}:grievous", p.key()))
-                    .then(|| "重伤".to_string())
+            } else if GRIEVOUS.contains(&base) {
+                // 第一次有才说：上一份身上已经有一件（小件合成大件、刚连上时就有）的只记下、不说
+                let had = before
+                    .players
+                    .get(&p.key())
+                    .is_some_and(|s| grievous(&s.items));
+                let first = self.item_said.insert(format!("{}:grievous", p.key()));
+                (first && !had).then(|| "重伤".to_string())
             } else {
                 None
             };
@@ -514,27 +495,34 @@ impl Alerts {
         ))
     }
 
-    /// 对面这一刻刚死到 [`DOWN_AT`] 个：几个、最快的几秒复活。[`DOWN_GAP`] 之内只说一次。
+    /// 对面阵亡、还要 [`DOWN_RESPAWN`] 秒以上才复活的（“够久的”），这一份刚到 [`DOWN_AT`] 个（上一份不到）：几个、
+    /// 最快的几秒复活，都按够久的那几个算。[`DOWN_GAP`] 之内只说一次。
     fn enemies_down(&mut self, before: &Roster, game: &LiveGame, key: String) -> Option<Push> {
         if game.my_team().is_empty() {
             return None;
         }
-        let dead: Vec<&LivePlayer> = game.enemies().filter(|p| p.dead).collect();
+        let long = |dead: bool, respawn: f64| dead && respawn >= DOWN_RESPAWN;
+        let down: Vec<&LivePlayer> = game.enemies().filter(|p| long(p.dead, p.respawn)).collect();
         let was = game
             .enemies()
-            .filter(|p| before.players.get(&p.key()).is_some_and(|s| s.dead))
+            .filter(|p| {
+                before
+                    .players
+                    .get(&p.key())
+                    .is_some_and(|s| long(s.dead, s.respawn))
+            })
             .count();
-        if dead.len() < DOWN_AT || was >= DOWN_AT {
+        if down.len() < DOWN_AT || was >= DOWN_AT {
             return None;
         }
         if self.down_at.is_some_and(|t| game.time - t < DOWN_GAP) {
             return None;
         }
         self.down_at = Some(game.time);
-        let n = dead.len();
-        let soonest = dead
+        let n = down.len();
+        let soonest = down
             .iter()
-            .map(|p| p.respawn.max(0.0))
+            .map(|p| p.respawn)
             .fold(f64::INFINITY, f64::min)
             .round() as i64;
         Some(line_push(

@@ -226,6 +226,31 @@ pub fn deepseek_tts_characters(text: &str) -> u64 {
     text.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum()
 }
 
+/// MiniMax 语音合成（按量）：人民币 / 万字符，汉字算 2 个字符（2026-11-27 官方价目：speech-2.8-turbo 2 元，
+/// speech-2.8-hd 3.5 元；2.6 / 02 同价）。
+pub const MINIMAX_TTS_TURBO_PER_10K_CHARS: f64 = 2.0;
+pub const MINIMAX_TTS_HD_PER_10K_CHARS: f64 = 3.5;
+/// 阿里云百炼 Qwen3-TTS-Flash（北京）：人民币 / 万字符，汉字算 2 个字符。
+pub const DASHSCOPE_TTS_PER_10K_CHARS: f64 = 0.8;
+
+/// 在线语音合成一次的计费字数和估算费用（人民币）；不知道价钱的服务商是 (字数, None)。
+pub fn tts_cost(provider: &str, model: &str, text: &str) -> (u64, Option<f64>) {
+    let per_10k = match provider {
+        "deepseek" => Some(DEEPSEEK_TTS_PER_10K_CHARS),
+        "minimax" if model.contains("hd") => Some(MINIMAX_TTS_HD_PER_10K_CHARS),
+        "minimax" => Some(MINIMAX_TTS_TURBO_PER_10K_CHARS),
+        "dashscope" => Some(DASHSCOPE_TTS_PER_10K_CHARS),
+        _ => None,
+    };
+    match per_10k {
+        Some(price) => {
+            let characters = deepseek_tts_characters(text);
+            (characters, Some(characters as f64 / 10_000.0 * price))
+        }
+        None => (text.chars().count() as u64, None),
+    }
+}
+
 /// DeepSeek 语音识别的计费秒数：按秒向上取整，至少 1 秒。
 pub fn deepseek_asr_cost(audio_ms: u64) -> f64 {
     let seconds = audio_ms.div_ceil(1000).max(1);
@@ -460,15 +485,10 @@ fn record_asr_record(record: UsageRecord) {
     }
 }
 
-/// 在线语音合成一次（真的发了请求才记；缓存命中不记）。只有 DeepSeek 有价格。
+/// 在线语音合成一次（真的发了请求才记；缓存命中不记）。DeepSeek、MiniMax、百炼有价格（[`tts_cost`]）。
 /// 归属按文字认领（[`claim_speech`]）；没登记的（预先生成的填充话）不归任何对话。
 pub fn record_tts(provider: &str, model: &str, text: &str) {
-    let deepseek = provider == "deepseek";
-    let characters = if deepseek {
-        deepseek_tts_characters(text)
-    } else {
-        text.chars().count() as u64
-    };
+    let (characters, cost) = tts_cost(provider, model, text);
     let at_ms = now();
     let owner = speech_owner(&mut ATTRIBUTION.lock().unwrap().speech, text, at_ms);
     write(with_owner(
@@ -478,8 +498,8 @@ pub fn record_tts(provider: &str, model: &str, text: &str) {
             provider: provider.to_string(),
             model: model.to_string(),
             characters: Some(characters),
-            cost: deepseek.then(|| characters as f64 / 10_000.0 * DEEPSEEK_TTS_PER_10K_CHARS),
-            currency: if deepseek {
+            cost,
+            currency: if cost.is_some() {
                 "CNY".into()
             } else {
                 String::new()
@@ -899,6 +919,31 @@ mod tests {
     #[test]
     fn tts_characters_count_cjk_twice() {
         assert_eq!(deepseek_tts_characters("好的 ok"), 2 + 2 + 1 + 2);
+    }
+
+    #[test]
+    fn tts_cost_follows_each_provider_price() {
+        let text = "好好好好好"; // 10 个计费字符
+        let close = |a: Option<f64>, b: f64| (a.unwrap() - b).abs() < 1e-12;
+        assert!(close(
+            tts_cost("deepseek", "", text).1,
+            10.0 / 10_000.0 * 1.5
+        ));
+        assert!(close(
+            tts_cost("minimax", "speech-2.8-turbo", text).1,
+            10.0 / 10_000.0 * 2.0
+        ));
+        assert!(close(
+            tts_cost("minimax", "speech-2.8-hd", text).1,
+            10.0 / 10_000.0 * 3.5
+        ));
+        assert!(close(
+            tts_cost("dashscope", "qwen3-tts-flash", text).1,
+            10.0 / 10_000.0 * 0.8
+        ));
+        assert_eq!(tts_cost("minimax", "speech-2.8-hd", text).0, 10);
+        // 不知道价钱的只记字数
+        assert_eq!(tts_cost("siliconflow", "x", text), (5, None));
     }
 
     fn owner(turn: u64) -> Owner {

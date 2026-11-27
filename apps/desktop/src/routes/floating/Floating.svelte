@@ -3,8 +3,10 @@
   // 有的时候是chat小窗，因为是复杂的消息……可以在右下角头像上放一圈进度条，走完了就自动消失，鼠标移动上去就保持”。
   //
   // - 角上一定是她的头像（Avatar：和聊天页同一个头像，外面一圈进度条）。
-  // - 旁边是气泡（她那句话 HerLine，或推送的一行）或聊天小窗（MiniChat）。选哪个只看 shape.ts 的 floatingShape；这一次出现里
-  //   换成了小窗就一直是小窗，收起以后再从头算。
+  // - 旁边是气泡（她那句话 HerLine，和推送的最新几行，2026-11-27 rc.14 试玩：“信息类的给个对话气泡就行”）或聊天小窗
+  //   （MiniChat）。选哪个只看 shape.ts 的 floatingShape；这一次出现里换成了小窗就一直是小窗，收起以后再从头算。
+  // - 聊天小窗最多先画最近 RECENT 轮（这一次来的 + 前面最多 OLDER 轮），滚到顶再往前加载（MiniChat）：一局几十条推送时
+  //   不一下子画一整段。
   // - 聊天小窗就是聊天页：同一个对话状态（AgentChat，同一套订阅：kotone://agent-event、kotone://push……）、同一个时间线
   //   （buildTurns）、同一套消息组件（ChatTurn 的紧凑样子）。原来只放推送的“推送流”去掉了。
   // - 显示不显示、进度条、摆在哪由后端 floating/mod.rs 定（kotone://floating）；这里画，量好大小报上去（floatingLayout，带上
@@ -35,7 +37,7 @@
   import Avatar from "./Avatar.svelte";
   import HerLine from "./HerLine.svelte";
   import MiniChat from "./MiniChat.svelte";
-  import { floatingShape, freshTurns, turnPushId, type FloatingShape } from "./shape";
+  import { bubbleLines, floatingShape, freshTurns, turnPushId, type FloatingShape } from "./shape";
   import { PAGE_MATCH } from "$plugins/lol/ui/types";
 
   /** 小窗上面那一行的高度、边框（px）：列表最高 = maxHeight 减掉它们。 */
@@ -44,8 +46,10 @@
   const MIN_LIST = 72;
   /** 挡鼠标的几块四周多留多少（px）：阴影画在这一圈里（整块四周也是留 8），窗口只留这几块，再外面就裁掉了。 */
   const HIT_PAD = 8;
-  /** 往回翻最多带上“这一次来的”前面几轮（更早的在 Kotone 里）。 */
+  /** 小窗一出来最多带上“这一次来的”前面几轮（更早的滚到顶再加载）。 */
   const OLDER = 10;
+  /** 小窗一出来最多画几轮（这一次来的就超过它时只画最后这么多）。 */
+  const RECENT = 20;
   /** 她在忙的几个状态（头像外面的圈满着、跟着动）。 */
   const BUSY = new Set(["listening", "recognizing", "thinking", "speaking", "asking"]);
   /** 聊天小窗最下面那一行显示的状态（对话里还没有的）。 */
@@ -69,7 +73,7 @@
   let surface = $state<HTMLDivElement>();
   let mounted = $state<FloatingShape | null>(null);
   let unfolded = $state(false);
-  let bubble = $state<{ her: BubbleSnapshot | null; line: FloatingLine | null }>({ her: null, line: null });
+  let bubble = $state<{ her: BubbleSnapshot | null; lines: FloatingLine[] }>({ her: null, lines: [] });
   let requested: FloatingShape | null = null;
   let motionRevision = 0;
 
@@ -87,16 +91,16 @@
     : []);
   const fresh = $derived(freshTurns(turns, displayView?.since ?? 0, focus));
   const computed = $derived<FloatingShape>(shown
-    ? floatingShape({ popped: !!view?.mini, her: herShown, lines: view?.lines.length ?? 0, fresh })
+    ? floatingShape({ popped: !!view?.mini, her: herShown, fresh })
     : "bubble");
   const shape = $derived<FloatingShape>(stuck ? "mini" : computed);
   $effect(() => { if (shown && shape === "mini" && !stuck) stuck = true; });
 
-  /** 小窗里画哪几轮：这一次来的，加上前面几轮（往回翻）。 */
+  /** 小窗里先从哪一轮画起：这一次来的第一轮往前 OLDER 轮，总数封顶 RECENT（更早的滚到顶再加载，MiniChat）。 */
   const anchor = $derived(fresh[0]?.id ?? turns[turns.length - 1]?.id ?? null);
-  const listed = $derived.by(() => {
+  const from = $derived.by(() => {
     const at = anchor ? turns.findIndex((t) => t.id === anchor) : turns.length;
-    return turns.slice(Math.max(0, (at < 0 ? turns.length : at) - OLDER));
+    return Math.max(0, (at < 0 ? turns.length : at) - OLDER, turns.length - RECENT);
   });
   /** 跟着时放进来的那一轮：弹出的那条推送，之后又有新的就是最新的那一轮。 */
   const target = $derived.by(() => {
@@ -107,7 +111,7 @@
     return at(popped) >= at(newest) ? popped.id : newest.id;
   });
   const status = $derived(herShown && STATUS.has(herShown.phase) ? herShown : null);
-  const line = $derived<FloatingLine | null>(view?.lines[view.lines.length - 1] ?? null);
+  const lines = $derived<FloatingLine[]>(bubbleLines(view?.lines ?? []));
   const maxList = $derived(Math.max(MIN_LIST, (displayView?.maxHeight ?? 400) - CHROME));
 
   function accept(next: FloatingView) {
@@ -177,7 +181,7 @@
 
   $effect(() => {
     const next = shown ? shape : null;
-    const incoming = next === "bubble" ? { her: herShown, line } : null;
+    const incoming = next === "bubble" ? { her: herShown, lines } : null;
     untrack(() => {
       if (incoming) bubble = incoming;
       if (next === requested) return;
@@ -288,21 +292,21 @@
     {#key mounted}
       {#if mounted === "mini"}
         <div bind:this={surface} class="surface" class:unfolded inert={!unfolded}>
-          <MiniChat turns={listed} {anchor} {target} pop={focus} {maxList} title={$companionName} {chat} {status}
+          <MiniChat {turns} {from} {anchor} {target} pop={focus} {maxList} title={$companionName} {chat} {status}
             active={shown && unfolded} conversationId={displayView?.mini?.conversationId ?? chat.conversation?.id ?? null}
             onOpen={openHere} onOpenPush={openPush} onClose={close} onDrag={drag} onLayout={() => void relayout()}
             onInputFocus={floatingInputFocus} onComposerActive={(active) => { composerActive = active; }} />
         </div>
-      {:else if bubble.her || bubble.line}
+      {:else if bubble.her || bubble.lines.length}
         <div bind:this={surface} class="surface side" class:unfolded inert={!unfolded} role="presentation" onpointerdown={drag}>
           <button type="button" class="close" aria-label={m.chat_floating_close()} title={m.chat_floating_close()} data-testid="floating-close"
             onclick={close}><X class="size-3" /></button>
           {#if bubble.her}
             <div data-testid="floating-her"><HerLine snap={bubble.her} /></div>
-          {:else if bubble.line}
-            {@const line = bubble.line}
+          {/if}
+          {#each bubble.lines as line (line.id)}
             {@const plugin = pushFromName(line.plugin, line.pluginName)}
-            <!-- 一行推送：点它打开 Kotone、定位到这一条；按住拖动 -->
+            <!-- 一行推送（旧的在上、新的在下，最多三行）：点它打开 Kotone、定位到这一条；按住拖动 -->
             <div class="line" class:single={line.cells.length === 1} role="button" tabindex="-1" data-testid="floating-line" data-id={line.id}
               aria-label={m.chat_floating_line_label({ plugin })} title={m.chat_floating_open()}
               onclick={(e) => openLine(e, line)} onkeydown={() => {}}>
@@ -311,7 +315,7 @@
                 <span class="cell {cell.tone ? TONES[cell.tone] : ''}" data-testid="floating-cell" data-tone={cell.tone ?? ""}>{cell.text}</span>
               {/each}
             </div>
-          {/if}
+          {/each}
         </div>
       {/if}
     {/key}
@@ -354,7 +358,9 @@
   .root.right .surface { margin-left: 0; margin-right: calc(0px - var(--floating-orb-overlap)); }
   .root.bottom .surface { margin-top: 0; margin-bottom: var(--surface-inset); --hinge-y: calc(100% - 28px + var(--surface-inset)); }
   .surface.unfolded { transform: none; opacity: 1; transition: transform 395ms cubic-bezier(.23, .65, .19, 1), opacity 145ms ease 18ms; }
-  .side { --surface-inset: 5px; display: flex; flex-direction: column; }
+  /* 气泡：她那一句和推送的几行一行一块，贴着头像那一边对齐 */
+  .side { --surface-inset: 5px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  .root.right .side { align-items: flex-end; }
 
   .close {
     position: absolute; top: -6px; z-index: 1; display: flex; width: 18px; height: 18px; align-items: center; justify-content: center;
@@ -371,6 +377,9 @@
     box-shadow: 0 6px 18px #0007; cursor: pointer;
   }
   .line:focus { outline: none; }
+  /* 下边的角：最下面那一行贴着头像、底色伸到头像下面，那一头多让开头像盖住的那一截，字不被挡住 */
+  .root.bottom.right .side > .line:last-child { padding-right: calc(10px + var(--floating-orb-overlap)); }
+  .root.bottom:not(.right) .side > .line:last-child { padding-left: calc(10px + var(--floating-orb-overlap)); }
   .cell { border-radius: 6px; padding: 2px 8px; font-size: 13px; font-weight: 600; line-height: 18px; background: rgba(255, 255, 255, .1); white-space: nowrap; }
   /* 只有一格的一行（同传的一句译文，最多 40 个字）：在 360 里折行；分了几格的（“对面寒冰 | 6 级了”）照旧一行 */
   .line.single { align-items: flex-start; }

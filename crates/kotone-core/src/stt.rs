@@ -194,6 +194,16 @@ pub fn add_remote_connection(
     cfg: &mut SessionConfig,
     secrets: Option<&dyn crate::connection::SecretStore>,
 ) {
+    // 模型配置里的 Key（火山 Access Token、讯飞 APISecret）在凭据库里，不在配置里（ADR 048）
+    if let Some(store) = secrets {
+        let model = cfg
+            .options
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        crate::model_secrets::fill(&mut cfg.options, [engine_id, model.as_str()], store);
+    }
     let configured = cfg
         .options
         .get("connectionId")

@@ -8,7 +8,7 @@
 //!   读不到每 5 秒再试，60 秒还没有就不发（调研 G29）。页面是“单局详情”（`ui://kotone/lol/game`，带 `justEnded`）；
 //!   海斗、斗魂竞技场的详情里有每个人的海克斯（`playerAugment1`–`6`），卡片上一人一行列出对面的（也能看我方的），
 //!   没有海克斯的模式不显示（ADR 043 B 轮第 3 条）。
-//! - **今天的状态**（[`today`]）：进房间或排队（`Lobby` / `Matchmaking` / `ReadyCheck`）时，用我自己最近 20 局的战绩
+//! - **今天的状态**（[`today`]）：进房间或排队（`Lobby` / `Matchmaking` / `ReadyCheck`）时，用我自己的战绩（和战绩页同一段）
 //!   发一张：今天几胜几负、现在几连胜 / 连败、今天输了 2 局以上的英雄。一天一个 key（`today:<本地日期>`），打完一局
 //!   回到房间时同一张原地更新、让悬浮窗再弹一次；今天还没打过不发。不给琴音留话：这张卡片一天里一直在变，
 //!   留一句很快就过时了，她要今天的战绩时自己查（`lol.player`）。
@@ -439,7 +439,7 @@ impl LolPlugin {
         }));
     }
 
-    /// 进房间或排队：推（或原地更新）今天的状态。读我自己最近 20 局；刚打完一局时等它出现在战绩里（每 5 秒看一次，
+    /// 进房间或排队：推（或原地更新）今天的状态。读我自己的战绩（和战绩页同一段）；刚打完一局时等它出现在战绩里（每 5 秒看一次，
     /// 最多 60 秒，到了照样用读到的发）。今天还没打过不发；推送关着时连战绩都不读。
     fn today_card(&self, host: &Arc<dyn Host>) {
         if !host.push_enabled(today::PUSH_TODAY) {
@@ -475,7 +475,7 @@ impl LolPlugin {
             let deadline = Instant::now() + SUMMARY_WAIT;
             let list = loop {
                 let late = Instant::now() >= deadline;
-                match lcu.get(&paths::matches(&me, today::GAMES)).await {
+                match lcu.get(&paths::matches(&me)).await {
                     // 刚打完的那一局已经在战绩里了（或者这次没有刚打完的）
                     Ok(list)
                         if late
@@ -524,9 +524,9 @@ pub(crate) fn today_push(
     if todays.is_empty() {
         return None;
     }
-    // 读到的最近 20 局全是今天的：今天可能还有更早的
-    let capped =
-        todays.len() == games.len() && today::listed_ids(list).len() >= today::GAMES as usize;
+    // 客户端给的这几局全是今天的：今天可能还有更早的
+    let listed = today::listed_ids(list).len();
+    let capped = (todays.len() == games.len() && listed >= today::CAPPED_FROM).then_some(listed);
     Some(Push {
         trigger: today::PUSH_TODAY.into(),
         key: format!("today:{date}"),
@@ -587,7 +587,7 @@ mod tests {
     }
 
     /// 今天的状态：一天一个 key、卡片、不给她留话、更新时再弹；同样的战绩推出来一模一样（宿主当成“没变”），
-    /// 多打一局内容才变、key 不变（原地更新）；今天还没打过不推；最近 20 局全是今天的时标出来。
+    /// 多打一局内容才变、key 不变（原地更新）；今天还没打过不推；客户端给的 20 局以上全是今天的时标出来。
     #[test]
     fn the_today_push_is_one_card_per_day_updated_in_place() {
         let day = 86_400_000;
@@ -627,12 +627,16 @@ mod tests {
         // 第二天还没打：不推
         assert!(today_push(&list, "2026-11-27", utc, None).is_none());
         assert!(today_push(&json!({}), "2026-11-26", utc, None).is_none());
-        // 20 局全是今天的：只看了最近 20 局
+        // 客户端给的 20 局全是今天的：只看了最近 20 局
         let busy: Vec<(i64, i64, i64, bool)> = (0..20)
             .map(|i| (100 - i, day + 3_000_000 - i * 60_000, 22, i % 2 == 0))
             .collect();
         let capped = today_push(&match_list(&busy), "2026-11-26", utc, None).unwrap();
-        assert_eq!(capped.card.unwrap().data["capped"], true);
+        let data = &capped.card.as_ref().unwrap().data;
+        assert_eq!(
+            (data["capped"].as_bool(), data["limit"].as_u64()),
+            (Some(true), Some(20))
+        );
     }
     use crate::client::history::{GameRecord, PlayerHistory};
 

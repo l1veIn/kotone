@@ -7,7 +7,9 @@ use serde_json::{json, Map, Value};
 
 use std::collections::HashMap;
 
-use kotone_core::automation::library::{AutomationDraft, AutomationLibrary, CreatedBy};
+use kotone_core::automation::library::{
+    trigger_hints, AutomationDraft, AutomationLibrary, CreatedBy,
+};
 use kotone_core::games::{
     trigger_matches, validate_trigger, Armed, EventCatalog, EventTrigger, GameEvent, Triggers,
 };
@@ -497,4 +499,77 @@ fn the_last_ally_down_trigger_fires_once() {
     assert_eq!(next.len(), 1);
     assert!(!trigger_matches(&trigger, &next[0]));
     assert!(trigger_matches(&loose, &next[0]), "所以 team 不能省");
+}
+
+/// 2026-11-27 玩家机器上她存的“队友都倒了放首歌”（摘要）：触发只写了 `team: ally`、开了一局一次和 120 秒冷却，“只剩我”
+/// 写在程序里。第一个倒下的队友就触发了（程序 return，可这一局的一次已经用掉），最后一个队友倒下时不再触发；保存时提醒
+/// 一句（`trigger_hints`，不拦）。照 `lol.death` 的 `alliesAlive` 说明里的配方写进 `on.match`，就只在最后一个倒下时
+/// 触发，保存时也没有提醒。
+#[test]
+fn a_condition_left_in_the_program_spends_the_once_per_match() {
+    let catalog = event_catalog([manifest()], &Settings::default());
+    let about = &catalog.get("lol.death").unwrap().spec.data["alliesAlive"];
+    assert!(
+        about.contains("“队友都倒了、只剩我”= match {team: ally, alliesAlive: 1, meAlive: true}"),
+        "{about}"
+    );
+    let dir = std::env::temp_dir().join(format!("kotone-lol-last-ally-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let library = AutomationLibrary::open(dir.join("automations.json")).unwrap();
+    let save = |value: Value| {
+        let draft: AutomationDraft = serde_json::from_value(value).unwrap();
+        library.save(draft, CreatedBy::Companion, &catalog).unwrap()
+    };
+    let wrong = save(json!({
+        "name": "队友都倒了放首歌",
+        "params": [{"name": "allies_alive", "type": "number", "default": 0}],
+        "action": {"kind": "program", "source": "if type(args.allies_alive) == \"number\" and args.allies_alive > 1 then return end\nlocal r = tool(\"music\", { action = \"play\", query = \"雨爱\" })"},
+        "on": {"event": ["lol.death"], "game": "lol", "match": {"team": "ally"}, "oncePerMatch": true, "cooldownSeconds": 120}
+    }));
+    let right = save(json!({
+        "name": "队友都倒了放首歌（改）",
+        "action": {"kind": "program", "source": "tool(\"music\", { action = \"play\", query = \"雨爱\" })"},
+        "on": {"event": ["lol.death"], "game": "lol", "match": {"team": "ally", "alliesAlive": 1, "meAlive": true}, "oncePerMatch": true}
+    }));
+    let hints = trigger_hints(&wrong, &catalog);
+    assert_eq!(hints.len(), 1, "{hints:?}");
+    assert!(
+        hints[0].contains("args.allies_alive（alliesAlive）"),
+        "{}",
+        hints[0]
+    );
+    assert!(trigger_hints(&right, &catalog).is_empty());
+    // 一波里队友一个个倒下（我还活着）：错的那份第一个倒下就触发、最后一个不触发；改过的只在最后一个触发
+    let events: Vec<GameEvent> = deaths(
+        &mayhem_with_dead(600.0, &[]),
+        &mayhem_with_dead(602.0, &["玩家乙", "玩家丙", "卡牌大师", "无极剑圣"]),
+    )
+    .into_iter()
+    .enumerate()
+    .map(|(n, e)| game_event(n, e))
+    .collect();
+    let (wrong_on, right_on) = (wrong.on.clone().unwrap(), right.on.clone().unwrap());
+    let armed = [
+        Armed {
+            id: "wrong",
+            trigger: &wrong_on,
+        },
+        Armed {
+            id: "right",
+            trigger: &right_on,
+        },
+    ];
+    let mut triggers = Triggers::default();
+    let fired: Vec<(String, i64)> = events
+        .iter()
+        .flat_map(|e| triggers.on_event(&armed, e, 1))
+        .map(|f| (f.automation, f.event.data["alliesAlive"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(
+        fired,
+        [("wrong".to_string(), 4), ("right".to_string(), 1)],
+        "错的那份在还剩 4 个人时就用掉了这一局的一次"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

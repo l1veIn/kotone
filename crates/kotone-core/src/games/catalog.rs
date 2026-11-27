@@ -262,6 +262,22 @@ impl EventCatalog {
         self.matching(pattern).next().is_some()
     }
 
+    /// 触发里那几种事的 `data` 字段（camelCase，去重，按出现的先后）：自动化里和它们同名的参数会自动填上
+    /// （[`crate::automation::library::event_args`]）。
+    pub fn data_fields<'a>(&'a self, trigger: &'a EventTrigger) -> Vec<&'a str> {
+        let mut out: Vec<&str> = Vec::new();
+        for pattern in &trigger.event {
+            for entry in self.matching(pattern) {
+                for field in entry.spec.data.keys() {
+                    if !out.contains(&field.as_str()) {
+                        out.push(field);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// `game.state` 里的事件目录：按适配器分组（本体的在前）；会发生的列在 `events`（类型、说明、`data` 字段和
     /// 说明），有现在不会发生的写一句 `off`（为什么、几种、怎么办），不列出来，免得她拿来写自动化。
     pub fn summary(&self) -> Value {

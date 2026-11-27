@@ -96,15 +96,10 @@ pub fn list_blocking(
                     active: crate::assistant::effective_engine(app, &settings.assistant),
                     kokoro_installed: installed,
                     system_error,
-                    openai: crate::tts_online::status(app, kotone_tts::online::OnlineKind::OpenAi),
-                    volcano: crate::tts_online::status(
-                        app,
-                        kotone_tts::online::OnlineKind::Volcano,
-                    ),
-                    deepseek: crate::tts_online::status(
-                        app,
-                        kotone_tts::online::OnlineKind::Deepseek,
-                    ),
+                    online: kotone_tts::online::OnlineKind::ALL
+                        .into_iter()
+                        .map(|kind| (kind, crate::tts_online::status(app, kind)))
+                        .collect(),
                 },
             ))
         }
@@ -384,9 +379,8 @@ pub fn activate(app: &AppHandle, category: ModelCategory, id: &str) -> Result<Se
                         next.assistant.speech_engine = SpeechEngine::Kokoro;
                         next.assistant.tts_model_id.clear();
                     }
-                    TtsEngine::Openai | TtsEngine::Volcano | TtsEngine::Deepseek => {
-                        next.assistant.tts_model_id = id.to_string();
-                    }
+                    // 在线的几家（ADR 048）：只写新字段
+                    _ => next.assistant.tts_model_id = id.to_string(),
                 }
             }
         }

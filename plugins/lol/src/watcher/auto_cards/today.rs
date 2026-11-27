@@ -1,5 +1,6 @@
 //! 今天的状态（ADR 043 B 轮第 3 条；讨论记录第二节推送清单“排队 / 房间”那一行：“今天的状态（几连胜 / 连败、
-//! 哪个英雄一直输）”）。只用我自己的战绩（客户端 `/lol-match-history/v1/products/lol/{我}/matches`，最近 20 局），
+//! 哪个英雄一直输）”）。只用我自己的战绩（客户端 `/lol-match-history/v1/products/lol/{我}/matches`，和战绩页同一段最近 50 局，
+//! 见 [`crate::client::http::paths::matches`]），
 //! 只说事实（D2）：今天几局、几胜几负、现在几连胜 / 连败、今天输了 2 局以上的英雄、各个模式几局。
 //!
 //! - **哪一天**：按每局的开局时间（`gameCreation`）、本地时间 0 点分界；推送的 key 是 `today:<本地日期>`，
@@ -20,8 +21,8 @@ pub(crate) const PUSH_TODAY: &str = "today";
 pub(crate) const TITLE_TODAY: &str = "今天的状态";
 /// 今天输了几局以上的英雄写出来（固定的规则，同样的战绩永远得到同样的结果）。
 pub(crate) const LOST_AT_LEAST: usize = 2;
-/// 查最近几局（够一天用；这些都是今天的时，卡片写“只看了最近 20 局”）。
-pub(crate) const GAMES: u32 = 20;
+/// 客户端给的至少这么多局、全是今天的时，卡片写“只看了最近 N 局”（N 是客户端给的局数；给得少的多半是这个人总共就打了这么多）。
+pub(crate) const CAPPED_FROM: usize = 20;
 
 /// 客户端的这几个阶段算“在房间里或排队”：从别的阶段进来时推一次今天的状态。
 pub(crate) fn lobby_phase(phase: &str) -> bool {
@@ -131,12 +132,12 @@ fn modes(games: &[&GameRecord], data: Option<&GameData>) -> Vec<Value> {
         .collect()
 }
 
-/// 页面数据（`ui://kotone/lol/today`）。`games` 是今天的（新的在前）；`capped`：查到的最近 [`GAMES`] 局全是今天的，
-/// 今天可能还有更早的。里面没有时间戳之类每次都变的东西：没打新的一局时内容一样，宿主什么都不做。
+/// 页面数据（`ui://kotone/lol/today`）。`games` 是今天的（新的在前）；`capped`：客户端给的这几局（[`CAPPED_FROM`] 局以上）
+/// 全是今天的，今天可能还有更早的。里面没有时间戳之类每次都变的东西：没打新的一局时内容一样，宿主什么都不做。
 pub(crate) fn today_page(
     date: &str,
     games: &[&GameRecord],
-    capped: bool,
+    capped: Option<usize>,
     data: Option<&GameData>,
 ) -> Value {
     let wins = games.iter().filter(|g| g.win).count();
@@ -146,8 +147,8 @@ pub(crate) fn today_page(
         "wins": wins,
         "losses": games.len() - wins,
         "streak": streak(games),
-        "capped": capped,
-        "limit": GAMES,
+        "capped": capped.is_some(),
+        "limit": capped.unwrap_or(0),
         "lostAtLeast": LOST_AT_LEAST,
         "lostOften": lost_often(games).iter().map(|d| json!({
             "champion": pages::champion(data, d.champion_id),
@@ -298,7 +299,7 @@ mod tests {
     fn the_page_states_the_day_and_is_the_same_until_a_new_game() {
         let all = history();
         let today = today_games(&all, "2026-11-26", beijing);
-        let v = today_page("2026-11-26", &today, false, None);
+        let v = today_page("2026-11-26", &today, None, None);
         assert_eq!(v["date"], "2026-11-26");
         assert_eq!(
             (
@@ -330,11 +331,11 @@ mod tests {
             "/lol-game-data/assets/v1/champion-icons/103.png"
         );
         // 同样的战绩 → 同样的数据（宿主按内容判断“没变”）；多了一局才不一样
-        assert_eq!(v, today_page("2026-11-26", &today, false, None));
+        assert_eq!(v, today_page("2026-11-26", &today, None, None));
         let mut more = all.clone();
         more.insert(0, game(10, MIDNIGHT + 23 * HOUR, 22, true));
         let after = today_games(&more, "2026-11-26", beijing);
-        let v2 = today_page("2026-11-26", &after, false, None);
+        let v2 = today_page("2026-11-26", &after, None, None);
         assert_ne!(v, v2);
         assert_eq!(v2["streak"], 1);
         assert_eq!(v2["games"], 7);

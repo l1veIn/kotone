@@ -9,6 +9,16 @@ import type { PushCell } from "./agent";
 
 export const FLOATING_EVENT = "kotone://floating";
 
+/**
+ * 聊天小窗里卡片的 App 最高多高（Svelte context，MiniChat 给、McpAppFrame 读）：列表最高能放下的高度减掉卡片上面那几行。
+ * App 再高也不在 iframe 里滚（两层滚动又卡又吃性能，rc.14 试玩），底部渐隐、点“在 Kotone 里看完整的”。
+ */
+export const FLOATING_CARD_MAX = Symbol("kotone.floatingCardMax");
+export interface FloatingCardMax {
+  /** 逻辑像素，跟着小窗的大小变（读的地方是响应式的）。 */
+  readonly max: number;
+}
+
 /** 气泡里的一行推送。 */
 export interface FloatingLine {
   /** `插件:key`。 */

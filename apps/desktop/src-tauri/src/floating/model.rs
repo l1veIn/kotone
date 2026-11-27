@@ -1,15 +1,17 @@
 //! 悬浮窗现在显示什么、什么时候收（纯状态，不碰窗口；时间用毫秒传进来，便于测试）。ADR 043 D6（2026-11-26 晚修订）。
 //!
-//! 悬浮窗出现时角上一定是她的头像，旁边是**气泡**（一条简单的：她在听、在想、说了一句短话，推送的一行）或**聊天小窗**
-//! （复杂的：卡片、工具调用、长回答、同时来了几条）。旁边放哪个只由界面按内容定（`routes/floating/shape.ts` 的
-//! `floatingShape`，规则只写在那一处），界面每次量好大小时报上来（[`Model::shape`]）；这里管显示不显示，和头像外面那一圈
-//! **进度条**（[`Ring`]，还剩多久）：
+//! 悬浮窗出现时角上一定是她的头像，旁边是**气泡**（简单的：她在听、在想、说了一句短话，推送的一行——几行推送和她那一句
+//! 都放在气泡里）或**聊天小窗**（复杂的：弹出的卡片、工具调用、长回答、她答了不止一轮）。旁边放哪个只由界面按内容定
+//! （`routes/floating/shape.ts` 的 `floatingShape`，规则只写在那一处），界面每次量好大小时报上来（[`Model::shape`]）；
+//! 这里管显示不显示，和头像外面那一圈**进度条**（[`Ring`]，还剩多久）：
 //!
-//! - 最后一次变化以后，气泡走 [`BUBBLE_MS`]、聊天小窗走 [`MINI_MS`]；走完整个收起（头像和旁边的一起）。
+//! - 最后一次变化以后，气泡走 [`Timing::bubble_ms`]、聊天小窗走 [`Timing::mini_ms`]（设置里的
+//!   `assistant.bubble.bubbleSeconds` / `miniSeconds`，缺省 3 秒、5 秒，rc.14 试玩：“默认小窗显示5秒，气泡类消息3秒就
+//!   可以了”）；走完整个收起（头像和旁边的一起）。设置改了从下一次变化起用新的。
 //! - 变化：她换了状态、说完了；推送来了一行、弹出一张卡片；聊天小窗开着时推送原地更新了；界面从气泡换成了小窗。
 //! - 停着不走：鼠标在上面、正拖着、她在听 / 在想 / 在说 / 等你回答（[`crate::bubble::Model::active`]）、写了
 //!   `until_done` 的一行插件还没说结束（插件一直不说，最后一次更新后 [`UNTIL_DONE_MAX_MS`] 就不再等）。
-//!   鼠标移开接着走，至少还剩 [`AFTER_LEAVE_MS`]（不至于一移开就没了）。
+//!   鼠标移开接着走，至少还剩 [`AFTER_LEAVE_MS`]（不至于一移开就没了；一圈比它短时最多剩一整圈）。
 //! - 她说完了（`bubble.rs` 按字数停留后收起她那一行）：这里接着留着她最后那句，直到进度条走完；她还在听 / 在想时被取消
 //!   （Esc、呼叫键打断）就马上收起她那一行（没有她说的话要看）。
 //! - ×、打开 Kotone：都收起，直到下一条推送；她这一行收到她换了状态。进度条走完收起的，她再开口（在听 / 在想 / 在说）
@@ -20,16 +22,38 @@ use serde::Serialize;
 
 use crate::bubble::Phase;
 
-/// 气泡：最后一次变化后走多久。
-pub const BUBBLE_MS: u64 = 6_000;
-/// 聊天小窗：最后一次变化后走多久（东西多，多给一点时间看）。
-pub const MINI_MS: u64 = 10_000;
-/// 鼠标移开（或拖完）以后至少还剩多久。
+/// 鼠标移开（或拖完）以后至少还剩多久（一圈比它短时取一圈）。
 pub const AFTER_LEAVE_MS: u64 = 2_000;
 /// 写了 `until_done` 的一行，插件一直不说结束时最多等多久（从最后一次更新算）。
 pub const UNTIL_DONE_MAX_MS: u64 = 90_000;
-/// 气泡里最多留几行推送（再多最旧的先走；两行以上界面就换成聊天小窗了）。
+/// 气泡里最多留几行推送（再多最旧的先走，聊天里照样有）。
 pub const MAX_LINES: usize = 3;
+
+/// 一圈多长：最后一次变化后气泡、聊天小窗各走多久（设置里的秒数，[`Timing::from_seconds`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timing {
+    pub bubble_ms: u64,
+    pub mini_ms: u64,
+}
+
+impl Timing {
+    /// 设置里的秒数（`assistant.bubble.bubbleSeconds` / `miniSeconds`；0 当 1 秒，免得一出来就收）。
+    pub fn from_seconds(bubble: u32, mini: u32) -> Self {
+        Self {
+            bubble_ms: u64::from(bubble.max(1)) * 1_000,
+            mini_ms: u64::from(mini.max(1)) * 1_000,
+        }
+    }
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self::from_seconds(
+            kotone_core::assistant::DEFAULT_BUBBLE_SECONDS,
+            kotone_core::assistant::DEFAULT_MINI_SECONDS,
+        )
+    }
+}
 
 /// 气泡里的一行推送。
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -104,7 +128,7 @@ pub enum Shape {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ring {
-    /// 一整圈多长（气泡 [`BUBBLE_MS`]、聊天小窗 [`MINI_MS`]）。
+    /// 一整圈多长（气泡 [`Timing::bubble_ms`]、聊天小窗 [`Timing::mini_ms`]）。
     pub total_ms: u64,
     pub left_ms: u64,
     /// false = 停着（鼠标在上面、拖着、她在忙、等插件说结束）。
@@ -180,9 +204,15 @@ pub struct Model {
     clock: Clock,
     hovering: bool,
     holding: bool,
+    timing: Timing,
 }
 
 impl Model {
+    /// 设置里的停留时间（每次改状态前照设置给一次；从下一次变化起用，正走着的这一圈不变）。
+    pub fn set_timing(&mut self, timing: Timing) {
+        self.timing = timing;
+    }
+
     fn her_visible(&self) -> bool {
         self.her.is_some() && self.her_closed.is_none()
     }
@@ -209,8 +239,8 @@ impl Model {
 
     fn total(&self) -> u64 {
         match self.shape {
-            Shape::Bubble => BUBBLE_MS,
-            Shape::Mini => MINI_MS,
+            Shape::Bubble => self.timing.bubble_ms,
+            Shape::Mini => self.timing.mini_ms,
         }
     }
 
@@ -249,7 +279,8 @@ impl Model {
                 self.clock.from = None;
             }
             (false, None) => {
-                self.clock.left = self.clock.left.max(AFTER_LEAVE_MS);
+                // 至少还剩 AFTER_LEAVE_MS，但不比一整圈长（气泡设成 1 秒时移开也只剩 1 秒）
+                self.clock.left = self.clock.left.max(AFTER_LEAVE_MS.min(self.clock.total));
                 self.clock.from = Some(now);
             }
             _ => {}
@@ -468,6 +499,10 @@ mod tests {
     use super::*;
     use kotone_plugin_api::PushTone;
 
+    /// 缺省的一圈（设置里没写时）：气泡 3 秒、聊天小窗 5 秒。
+    const BUBBLE_MS: u64 = 3_000;
+    const MINI_MS: u64 = 5_000;
+
     fn cells(texts: &[(&str, Option<PushTone>)]) -> Vec<PushCell> {
         texts
             .iter()
@@ -499,9 +534,16 @@ mod tests {
         m.view(now).ring.expect("显示着")
     }
 
-    /// 一行推送：出来、进度条从满的一圈往下走，6 秒走完整个收起。
+    /// 一行推送：出来、进度条从满的一圈往下走，3 秒（缺省）走完整个收起。
     #[test]
     fn a_line_runs_the_ring_and_hides_when_it_completes() {
+        assert_eq!(
+            Timing::default(),
+            Timing {
+                bubble_ms: BUBBLE_MS,
+                mini_ms: MINI_MS
+            }
+        );
         let mut m = Model::default();
         assert!(!m.view(0).shown);
         assert!(m.line(reminder("lv6:1"), 1_000));
@@ -509,12 +551,15 @@ mod tests {
         assert!(v.shown);
         assert_eq!(v.since, 1_000);
         assert_eq!(v.lines[0].id, "lol:lv6:1");
-        let r = ring(&m, 4_000);
-        assert_eq!((r.total_ms, r.left_ms, r.running), (BUBBLE_MS, 3_000, true));
+        let r = ring(&m, 2_000);
+        assert_eq!(
+            (r.total_ms, r.left_ms, r.running),
+            (BUBBLE_MS, BUBBLE_MS - 1_000, true)
+        );
         assert_eq!(m.next_deadline(), Some(1_000 + BUBBLE_MS));
-        assert!(!m.tick(6_999));
-        assert!(m.tick(7_000));
-        let v = m.view(7_000);
+        assert!(!m.tick(1_000 + BUBBLE_MS - 1));
+        assert!(m.tick(1_000 + BUBBLE_MS));
+        let v = m.view(1_000 + BUBBLE_MS);
         assert!(!v.shown && v.lines.is_empty() && v.ring.is_none());
         assert_eq!(m.next_deadline(), None);
     }
@@ -524,23 +569,51 @@ mod tests {
     fn hovering_pauses_the_ring_and_leaving_continues_it() {
         let mut m = Model::default();
         m.line(reminder("lv6:1"), 0);
-        assert!(m.hover(true, 2_000));
+        assert!(m.hover(true, 500));
         let r = ring(&m, 50_000);
-        assert_eq!((r.left_ms, r.running), (BUBBLE_MS - 2_000, false));
+        assert_eq!((r.left_ms, r.running), (BUBBLE_MS - 500, false));
         assert_eq!(m.next_deadline(), None);
         assert!(!m.tick(50_000));
         assert!(m.view(50_000).shown);
-        // 移开：接着走剩下的 4 秒
+        // 移开：接着走剩下的 2.5 秒
         assert!(m.hover(false, 50_000));
-        assert_eq!(m.next_deadline(), Some(54_000));
-        assert!(!m.tick(53_999));
-        assert!(m.tick(54_000));
-        assert!(!m.view(54_000).shown);
+        assert_eq!(m.next_deadline(), Some(50_000 + BUBBLE_MS - 500));
+        assert!(!m.tick(50_000 + BUBBLE_MS - 501));
+        assert!(m.tick(50_000 + BUBBLE_MS - 500));
+        assert!(!m.view(53_000).shown);
         // 快走完时停住再移开：至少还剩 2 秒
         m.line(reminder("lv6:2"), 100_000);
-        m.hover(true, 105_900);
-        m.hover(false, 106_000);
-        assert_eq!(m.next_deadline(), Some(106_000 + AFTER_LEAVE_MS));
+        m.hover(true, 100_000 + BUBBLE_MS - 100);
+        m.hover(false, 103_000);
+        assert_eq!(m.next_deadline(), Some(103_000 + AFTER_LEAVE_MS));
+    }
+
+    /// 停留时间照设置（`assistant.bubble.bubbleSeconds` / `miniSeconds`）：从下一次变化起用新的；一圈比 2 秒短时，
+    /// 鼠标移开以后最多剩一整圈。
+    #[test]
+    fn the_stay_times_come_from_the_settings() {
+        let mut m = Model::default();
+        m.set_timing(Timing::from_seconds(8, 15));
+        m.line(reminder("lv6:1"), 0);
+        assert_eq!(ring(&m, 0).total_ms, 8_000);
+        assert!(m.shape(true, m.view(0).revision, 100));
+        assert_eq!(ring(&m, 100).total_ms, 15_000);
+        assert_eq!(m.next_deadline(), Some(15_100));
+        // 正走着的这一圈不变，下一次变化起用新的
+        m.set_timing(Timing::from_seconds(2, 3));
+        assert_eq!(m.next_deadline(), Some(15_100));
+        assert!(m.updated(1_000));
+        assert_eq!(ring(&m, 1_000).total_ms, 3_000);
+        assert!(m.tick(4_000));
+        assert!(!m.view(4_000).shown);
+        // 气泡 1 秒：停住再移开，剩的不比一圈长
+        m.set_timing(Timing::from_seconds(1, 1));
+        m.line(reminder("lv6:2"), 10_000);
+        m.hover(true, 10_900);
+        m.hover(false, 20_000);
+        assert_eq!(m.next_deadline(), Some(21_000));
+        // 0 秒当 1 秒（一出来就收没意思）
+        assert_eq!(Timing::from_seconds(0, 0), Timing::from_seconds(1, 1));
     }
 
     /// 她在听 / 在想 / 在说时进度条不走；她说完了从满的一圈走，`bubble.rs` 收起她那一行以后最后那句还留着，走完才收。
@@ -560,10 +633,10 @@ mod tests {
         assert!(m.her(Some(Phase::Speaking), false, 61_000));
         assert!(ring(&m, 61_000).running);
         // bubble.rs 按字数停留后收起她那一行：这里留着最后那句
-        assert!(!m.her(None, false, 64_000));
-        assert!(m.view(64_000).her);
+        assert!(!m.her(None, false, 62_000));
+        assert!(m.view(62_000).her);
         assert!(m.tick(61_000 + BUBBLE_MS));
-        assert!(!m.view(67_000).shown);
+        assert!(!m.view(61_000 + BUBBLE_MS).shown);
         // 走完收起的：她再开口就再出来
         m.her(Some(Phase::Speaking), false, 70_000);
         m.her(None, false, 70_500);
@@ -591,7 +664,7 @@ mod tests {
         assert!(m.tick(20_000 + MINI_MS));
     }
 
-    /// 界面换成聊天小窗：一圈变成 10 秒、从头走；更早那一版报的不算；小窗开着时推送原地更新也从头走。
+    /// 界面换成聊天小窗：一圈变成 5 秒（缺省）、从头走；更早那一版报的不算；小窗开着时推送原地更新也从头走。
     #[test]
     fn the_mini_chat_has_a_longer_ring_and_restarts_on_updates() {
         let mut m = Model::default();
@@ -605,11 +678,11 @@ mod tests {
         assert!(m.shape(true, m.view(2_000).revision, 2_000));
         assert!(!m.shape(true, m.view(2_000).revision, 2_100), "没变");
         assert_eq!(ring(&m, 2_000).total_ms, MINI_MS);
-        assert!(m.updated(8_000));
-        assert_eq!(m.next_deadline(), Some(8_000 + MINI_MS));
-        assert!(!m.tick(17_999));
-        assert!(m.tick(18_000));
-        assert!(!m.view(18_000).shown);
+        assert!(m.updated(4_000));
+        assert_eq!(m.next_deadline(), Some(4_000 + MINI_MS));
+        assert!(!m.tick(4_000 + MINI_MS - 1));
+        assert!(m.tick(4_000 + MINI_MS));
+        assert!(!m.view(4_000 + MINI_MS).shown);
         // 收起以后又是气泡
         m.line(reminder("lv6:2"), 30_000);
         assert_eq!(ring(&m, 30_000).total_ms, BUBBLE_MS);

@@ -82,6 +82,21 @@ test("the plugin opens on the summoner home and leads into the loading match, a 
   await expect(lol.getByTestId("lol-player-name")).toHaveText("对手子#1006");
   await expect(lol.getByTestId("lol-player-game")).toHaveCount(20);
   await screenshot(page, { path: shot(testInfo, "kotone-plugin-page-player") });
+  // 别人的战绩也能翻页（每页 20 局）：第 3 页是不足一页的末页，写清客户端给了几局
+  const games = lol.getByTestId("lol-player-game");
+  const next = lol.getByTestId("lol-player-next");
+  await expect(lol.getByTestId("lol-player-end")).toHaveCount(0);
+  await next.click();
+  await expect(lol.getByTestId("lol-player-page")).toContainText("2");
+  await expect(games.first()).toHaveAttribute("data-game-id", "9000520");
+  await next.click();
+  await expect(games).toHaveCount(7);
+  await expect(next).toBeDisabled();
+  await expect(lol.getByTestId("lol-player-end")).toHaveText("客户端只给了最近 47 局");
+  await lol.getByTestId("lol-player-prev").click();
+  await expect(games.first()).toHaveAttribute("data-game-id", "9000520");
+  await lol.getByTestId("lol-player-prev").click();
+  await expect(games.first()).toHaveAttribute("data-game-id", "9000500");
 
   // 点一局：两队 10 个人；“← 战绩”回去
   await lol.getByTestId("lol-player-game").first().click();
@@ -89,6 +104,10 @@ test("the plugin opens on the summoner home and leads into the loading match, a 
   await expect(lol.getByTestId("lol-game-team")).toHaveCount(2);
   await expect(lol.getByTestId("lol-game-player")).toHaveCount(10);
   await expect(lol.getByTestId("lol-game-team").first()).toHaveAttribute("data-win", "true");
+  // 伤转（对英雄伤害 ÷ 经济，百分比）换掉了承伤
+  await expect(lol.getByTestId("lol-app-game")).toContainText("伤转");
+  await expect(lol.getByTestId("lol-app-game")).not.toContainText("承伤");
+  await expect(lol.getByTestId("lol-game-ratio").first()).toHaveText(/^\d+%$/);
   await screenshot(page, { path: shot(testInfo, "kotone-plugin-page-game") });
   await lol.getByTestId("lol-game-back").click();
   await expect(lol.getByTestId("lol-player-name")).toHaveText("对手子#1006");
@@ -159,10 +178,13 @@ test("older history pages keep their size and position after a game detail visit
   await expect(lol.getByTestId("lol-home-page")).toContainText("2");
   await expect(rows.first()).toHaveAttribute("data-game-id", "9000020");
   await expect(rows.last()).toHaveAttribute("data-game-id", "9000039");
+  await expect(lol.getByTestId("lol-home-end")).toHaveCount(0);
   await next.click();
   await expect(rows).toHaveCount(7);
   await expect(rows.last()).toHaveAttribute("data-game-id", "9000046");
   await expect(next).toBeDisabled();
+  // 翻到头：写清客户端给了几局（客户端按人只给一段战绩）
+  await expect(lol.getByTestId("lol-home-end")).toHaveText("客户端只给了最近 47 局");
   await prev.click();
   await expect(rows.first()).toHaveAttribute("data-game-id", "9000020");
   await expect(rows).toHaveCount(20);

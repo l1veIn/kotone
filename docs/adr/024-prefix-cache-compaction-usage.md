@@ -4,6 +4,7 @@
 - 照搬：DeepSeek Harness（MIT，commit `ca33fd68`）的请求组织、压缩请求形状、命中率算法；Goose（Apache-2.0，Copyright 2024 Block, Inc.，commit `196698819392`）的压缩时机、提示词要点与“原始历史保留、只是不再发给模型”；Hermes Agent（MIT）的“压缩没效果就别反复压”
 - 调研记录：`target/research/dsh-cache-report.md`、`target/research/compaction-report.md`（本地，未入库）；结论见下
 - 修订：[ADR 015](015-agent-scope-and-stack.md) 的上下文预算（原来按字数滑动窗口）；[ADR 022](022-sessions-memory-soul.md) 的“会话开始时冻结快照”扩展为“冻结系统提示与工具清单”
+- 2026-11-27 补（[ADR 048](048-her-voice-in-one-place.md)）：价格表加在线语音合成 MiniMax（Speech 2.8 Turbo 2 元、HD 3.5 元每万字符）和阿里云百炼 Qwen3-TTS-Flash（0.8 元每万字符），汉字都算 2 个字符（`usage::tts_cost`）；硅基流动、火山、自定义接口只记字数
 
 ## 问题
 

@@ -20,7 +20,6 @@ pub struct GameRecord {
     pub assists: i64,
     /// 对英雄的伤害。
     pub damage: i64,
-    pub taken: i64,
     pub gold: i64,
     pub cs: i64,
     /// 海克斯（海斗、斗魂竞技场）。
@@ -160,7 +159,6 @@ pub(crate) fn parse_match(g: &Value) -> Option<GameRecord> {
         deaths: i(st, "deaths"),
         assists: i(st, "assists"),
         damage: i(st, "totalDamageDealtToChampions"),
-        taken: i(st, "totalDamageTaken"),
         gold: i(st, "goldEarned"),
         cs: i(st, "totalMinionsKilled") + i(st, "neutralMinionsKilled"),
         augments: (1..=6)

@@ -13,6 +13,12 @@
 //! 这次带了 `note` 就再追加一条给模型的。**发给模型的部分只追加；通知里的推送数据可以改**：Notice 不发给模型，改它不动
 //! 发给模型的前缀（测试：更新前后 DeepSeek 请求体前面的每一条逐字节不变）。
 //!
+//! **带 `alert` 的更新挪到对话最后**（D5 修订，2026-11-27，[`Decision::Move`]、[`apply_move`]）：原地改在它最早那条的位置，
+//! 悬浮窗弹出来定位到它就跳回开局附近；所以从原处拿掉那条和跟着它的那句（[`take_push`]），用新内容、新时间追加在末尾，
+//! 同一个 `插件:key` 仍然只有一条。给她的那句一组只留一句、最新的：这次带了就是这次的，没带就把原来那句挪过来。
+//! 没有那句的（阵亡时对面的装备）发给模型的一个字节都不变；有那句的，从那里起前缀变了（只是那一次的缓存，不另外处理）。
+//! 推送那条的 `at_ms` 就是它在对话里那个位置的时间：原地改不变，挪到最后换成新的（界面靠它认出挪了）。
+//!
 //! 宿主记住每个 `插件:key` 最后一次的内容（[`content_hash`]）和它在哪段对话（[`Record`]，最近 [`REMEMBER`] 个，只在内存里）；
 //! Kotone 重启以后去对话里找（[`find`] + [`Record::of`]）。旧的自动卡片（rc.9 写在 Notice 的 `card` 里）也认得：当作发过、
 //! 不再改它（读旧，原则 19）。
@@ -20,7 +26,8 @@
 //! 时机（[`Desk`] 的排队）：她空着时马上记进对话；不空时排着（推送照样马上显示在聊天里），这一轮结束再记，不插进正在跑的
 //! 那一轮，也不叫她开口。**原地更新也照这条规矩**：那段对话正在跑一轮时（这一轮读了对话、跑完会整段存回去，这时写进去的
 //! 会被盖掉），更新排着（[`Desk::hold_replace`]，同一条只留最新的），这一轮结束再改；还排着没记进对话的，直接换掉排着的那条
-//! （[`Desk::update_held`]）。排着的存一份在盘上（[`Desk::restore`]），Kotone 退出了下次启动接着记；记进对话连着失败
+//! （[`Desk::update_held`]）。**挪到最后也一样**（[`Desk::hold_move`]）：排着，这一轮结束再挪；这一条已经排着的被这次的换掉，
+//! 排到最后。排着的存一份在盘上（[`Desk::restore`]），Kotone 退出了下次启动接着记；记进对话连着失败
 //! [`MAX_FAILURES`] 次就放弃。
 //!
 //! 桌面端（`apps/desktop/src-tauri/src/agent/push.rs`、`when_free.rs`）管开关、存盘、界面事件、悬浮窗和语音。
@@ -91,7 +98,8 @@ pub fn shown_title(record: &Value) -> &str {
         .unwrap_or_default()
 }
 
-/// 推送那条（只给界面）。`at_ms` 是第一次推的时间（原地更新时不变：聊天里的位置和标识跟着它）。
+/// 推送那条（只给界面）。`at_ms` 是它在对话里那个位置的时间：第一次推的时间，原地更新时不变（聊天里的位置和标识跟着它）；
+/// 挪到最后（[`Decision::Move`]）时是挪的那一刻。
 pub fn notice(plugin_name: &str, record: Value, at_ms: u64) -> Message {
     Message::Notice {
         // 旧版本只认得 text：看到的是这一行
@@ -193,7 +201,7 @@ pub fn pick(variants: &[String], n: usize) -> &str {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Record {
     pub conversation: String,
-    /// 第一次推的时间（Notice 的 `at_ms`，原地更新时不变）。
+    /// Notice 的 `at_ms`（第一次推的时间，原地更新时不变；挪到最后以后是挪的那一刻）。
     pub at_ms: u64,
     /// [`content_hash`]。
     pub hash: u64,
@@ -237,17 +245,20 @@ impl Record {
 pub enum Decision {
     /// 这个 key 第一次推：追加一条新的。
     Post,
-    /// 同一个 key、内容变了：原地改上一次那条（`Record` 是上一次的）。
+    /// 同一个 key、内容变了、不带 `alert`：原地改上一次那条（`Record` 是上一次的），位置不动、哪里都不滚过去。
     Update(Record),
+    /// 同一个 key、内容变了、带 `alert`（插件要提醒玩家）：挪到那段对话的最后（[`apply_move`]，D5 修订）。
+    Move(Record),
     /// 同一个 key、内容一样（或者是旧的自动卡片）：什么都不做。
     Unchanged,
 }
 
-/// 照上一次的记录（内存里的，或重启后从对话里认出来的）和这次内容的指纹决定。
-pub fn decide(previous: Option<Record>, hash: u64) -> Decision {
+/// 照上一次的记录（内存里的，或重启后从对话里认出来的）、这次内容的指纹和带没带 `alert` 决定。
+pub fn decide(previous: Option<Record>, hash: u64, alert: bool) -> Decision {
     match previous {
         None => Decision::Post,
         Some(r) if r.legacy || r.hash == hash => Decision::Unchanged,
+        Some(r) if alert => Decision::Move(r),
         Some(r) => Decision::Update(r),
     }
 }
@@ -265,6 +276,10 @@ pub struct Held {
     /// 旧版本读到会当成追加（多出一张，不丢）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replace: bool,
+    /// 挪到最后（D5 修订，[`apply_move`]）：从对话里拿掉同一个标识的那条和跟着它的那句，`messages`（推送那条 + 最多一句）
+    /// 接在末尾。旧版本读到会当成追加（多出一张，不丢）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub moved: bool,
 }
 
 /// 记住的推送和“排着”的消息。桌面端全进程一份。
@@ -314,6 +329,7 @@ impl Desk {
             messages,
             failures: 0,
             replace: false,
+            moved: false,
         });
     }
 
@@ -327,7 +343,51 @@ impl Desk {
             messages: vec![notice],
             failures: 0,
             replace: true,
+            moved: false,
         });
+    }
+
+    /// 带提醒的更新要挪到对话最后（D5 修订），但现在记不了（那段对话在跑一轮，或者前面还排着别的）：排着，照先后再挪。
+    /// `moved` 是推送那条（新内容、新时间）+ 这次带的那句（有才有）。这一条已经排着的被这次的换掉，排到最后：
+    /// 还没记进对话的新推送从它那一组里拿掉，这一组照旧是追加（记进去就在最后，跟着它的那句一起换过来）；排着的原地更新、
+    /// 排着的挪动直接作废，换成一个“挪到最后”（这一轮结束时从对话里拿掉原来那条再接上）。
+    pub fn hold_move(&mut self, conversation: &str, moved: Vec<Message>) {
+        let id = moved.first().and_then(push_id);
+        let mut in_conversation = true;
+        let mut removed = Vec::new();
+        if let Some(id) = &id {
+            let found = self.held.iter().position(|h| {
+                h.messages
+                    .iter()
+                    .any(|m| push_id(m).as_deref() == Some(id.as_str()))
+            });
+            if let Some(i) = found {
+                let h = &mut self.held[i];
+                if h.replace || h.moved {
+                    removed = std::mem::take(&mut h.messages);
+                } else {
+                    removed = take_push(&mut h.messages, id).unwrap_or_default();
+                    in_conversation = false;
+                }
+                if h.messages.is_empty() {
+                    self.held.remove(i);
+                }
+            }
+        }
+        self.held.push(Held {
+            conversation: conversation.to_string(),
+            messages: regroup(&moved, &removed),
+            failures: 0,
+            replace: false,
+            moved: in_conversation,
+        });
+    }
+
+    /// 这条推送（标识 `id`）还排着（没记进对话的新推送、排着的原地更新或挪动）。
+    pub fn is_held(&self, id: &str) -> bool {
+        self.held
+            .iter()
+            .any(|h| h.messages.iter().any(|m| push_id(m).as_deref() == Some(id)))
     }
 
     /// 这条推送还排着（没记进对话，或者排着一个更新）：直接换掉排着的那条，返回 true。
@@ -370,8 +430,8 @@ impl Desk {
         !self.held.is_empty()
     }
 
-    /// 某段对话里排着、还没记进对话的推送（还没记的新推送，和排着的更新）：给界面，重新读对话时照样显示——
-    /// 对话里已经有同一个标识的就原地换成这条，没有就放在最后面。
+    /// 某段对话里排着、还没记进对话的推送（还没记的新推送，和排着的更新、挪动）：给界面，重新读对话时照样显示——
+    /// 对话里已经有同一个标识、同一个时间的就原地换成这条；时间不一样（排着的挪动）就从原处拿掉，和没有的一样放在最后面。
     pub fn held_pushes(&self, conversation: &str) -> Vec<Message> {
         self.held
             .iter()
@@ -397,6 +457,55 @@ pub fn apply_replace(messages: &mut Vec<Message>, notice: &Message) {
         Some(m) => *m = notice.clone(),
         None => messages.push(notice.clone()),
     }
+}
+
+/// 带提醒的更新挪到对话最后（D5 修订）：从 `messages` 里拿掉同一个标识的最后一条推送和跟着它的那句（[`take_push`]），
+/// 把 `moved`（推送那条 + 这次带的那句，有才有）接在末尾；这次没带那句、原来跟着一句的，那句跟着挪过来（[`regroup`]）。
+/// 找不到原来那条也照样接上（那一条不在了，也别丢掉更新）。返回找没找到。
+pub fn apply_move(messages: &mut Vec<Message>, moved: &[Message]) -> bool {
+    let removed = moved
+        .first()
+        .and_then(push_id)
+        .and_then(|id| take_push(messages, &id));
+    messages.extend(regroup(moved, removed.as_deref().unwrap_or_default()));
+    removed.is_some()
+}
+
+/// 跟着时间是 `at_ms` 的那条推送的那句：来源 [`SOURCE`]、时间一样的用户消息（[`note_message`] 和推送那条一起记进对话，
+/// 时间是同一个；更新时单独追加的那句时间不一样，不算跟着它）。
+fn is_note_of(message: &Message, at_ms: u64) -> bool {
+    matches!(message, Message::User { source, at_ms: at, .. } if source == SOURCE && *at == at_ms)
+}
+
+/// 从 `messages` 里拿掉标识是 `id` 的最后一条推送和紧跟着它的那句（[`is_note_of`]），返回拿掉的（推送那条在前）；
+/// 没有这条推送时什么都不动，返回 None。
+fn take_push(messages: &mut Vec<Message>, id: &str) -> Option<Vec<Message>> {
+    let at = messages
+        .iter()
+        .rposition(|m| push_id(m).as_deref() == Some(id))?;
+    let Message::Notice { at_ms, .. } = &messages[at] else {
+        return None;
+    };
+    let at_ms = *at_ms;
+    let mut end = at + 1;
+    while end < messages.len() && is_note_of(&messages[end], at_ms) {
+        end += 1;
+    }
+    Some(messages.drain(at..end).collect())
+}
+
+/// 挪到最后的那一组：这次的推送那条和这次带的那句；这次没带、原来跟着一句的（`removed` 里推送那条后面的），把那句挪过来，
+/// 时间换成推送那条的（下次还认得是跟着它的）。一组只留一句：这次带了就是这次的（更新了的要点），原来的不要了。
+fn regroup(moved: &[Message], removed: &[Message]) -> Vec<Message> {
+    let mut out = moved.to_vec();
+    if let ([Message::Notice { at_ms, .. }], [_, .., carried]) = (moved, removed) {
+        let mut carried = carried.clone();
+        if let Message::User { at_ms: at, .. } = &mut carried {
+            *at = *at_ms;
+            out.push(carried);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -683,6 +792,237 @@ mod tests {
         );
     }
 
+    /// 一条推送（开局战绩的样子），换了 key 和卡片数据；没有 note。
+    fn variant(key: &str, data: Value) -> Push {
+        let mut push = opening();
+        push.key = key.into();
+        push.card.as_mut().unwrap().data = data;
+        push.note = String::new();
+        push
+    }
+
+    fn notice_of(push: &Push, at_ms: u64) -> Message {
+        notice(
+            "英雄联盟",
+            record(
+                "lol",
+                "英雄联盟",
+                &spec("opening", &[PushForm::Card]),
+                push,
+                "",
+            ),
+            at_ms,
+        )
+    }
+
+    /// D5 修订：带 alert 的更新挪到最后——原来那条和跟着它的那句从原处拿掉，新的接在末尾，同一个标识只有一条；这次没带
+    /// 那句就把原来那句挪过来（时间换成新的），带了就换成这次的（一组只留一句）；原地更新时单独追加的那句不算跟着它，
+    /// 留在原处；找不到原来那条也照样接上。
+    #[test]
+    fn an_alert_update_moves_the_push_to_the_end_with_its_note() {
+        let mut history = vec![Message::user("在吗")];
+        history.extend(posted(&opening(), 1_000));
+        // 原地更新时单独追加的一句（时间和推送那条不一样）、别的推送、玩家后来说的
+        history.push(note_message(
+            "英雄联盟",
+            "开局战绩",
+            "选人结束",
+            true,
+            1_600,
+        ));
+        history.push(notice_of(&variant("summary:42", json!({})), 1_700));
+        history.push(Message::user("对面谁最菜"));
+
+        let moved = notice_of(&variant("opening:42", json!({"wins": 7})), 2_000);
+        assert!(apply_move(&mut history, std::slice::from_ref(&moved)));
+        assert_eq!(history.len(), 6, "挪了，不多也不少");
+        assert_eq!(
+            history
+                .iter()
+                .filter(|m| push_id(m).as_deref() == Some("lol:opening:42"))
+                .count(),
+            1,
+            "只有一条"
+        );
+        assert_eq!(history[4], moved, "在最后（跟着它的那句前面）");
+        let Message::User {
+            text,
+            source,
+            at_ms,
+            ..
+        } = &history[5]
+        else {
+            panic!("跟着它的那句挪过来了")
+        };
+        assert_eq!((source.as_str(), *at_ms), (SOURCE, 2_000), "时间换成新的");
+        assert!(text.contains("发来一条推送「开局战绩」"), "{text}");
+        assert!(
+            matches!(&history[1], Message::User { at_ms: 1_600, .. }),
+            "原地更新时单独追加的那句留在原处"
+        );
+        assert_eq!(push_id(&history[2]).as_deref(), Some("lol:summary:42"));
+
+        // 再挪一次，这次带了那句：换成这次的，原来那句不要了
+        let again = [
+            notice_of(&variant("opening:42", json!({"wins": 8})), 3_000),
+            note_message("英雄联盟", "开局战绩", "第二次阵亡", true, 3_000),
+        ];
+        assert!(apply_move(&mut history, &again));
+        assert_eq!(history.len(), 6);
+        assert_eq!(&history[4..], &again[..]);
+
+        // 找不到原来那条：照样接上
+        let mut empty = vec![Message::user("在吗")];
+        assert!(!apply_move(&mut empty, &again));
+        assert_eq!(&empty[1..], &again[..]);
+    }
+
+    /// D5 修订：挪动没带 note 的推送（阵亡时对面的装备），发给模型的一个字节都不变；带 note 的挪了，她下一轮看到的是
+    /// 最新的那句、在最后、只有一句。
+    #[tokio::test]
+    async fn a_move_keeps_the_model_prefix_and_she_sees_the_latest_note_last() {
+        let model = Counting::default();
+        let mut history = Vec::new();
+        player_turn(&model, &mut history, "查一下这把").await;
+        history.push(notice_of(&variant("death:42", json!({"deaths": 1})), 1_000));
+        player_turn(&model, &mut history, "对面谁最菜").await;
+        let before = deepseek_messages(&history);
+        let length = history.len();
+
+        let moved = notice_of(&variant("death:42", json!({"deaths": 2})), 2_000);
+        assert!(apply_move(&mut history, std::slice::from_ref(&moved)));
+        assert_eq!(history.len(), length, "挪了，不多一条");
+        assert_eq!(history.last(), Some(&moved), "在最后");
+        assert_eq!(
+            deepseek_messages(&history),
+            before,
+            "没带 note 的挪动：发给模型的一个字节都不变"
+        );
+
+        // 带 note 的（开局战绩）挪了：原来那句跟着拿掉，换成这次的
+        history.extend(posted(&opening(), 3_000));
+        player_turn(&model, &mut history, "开局怎么样").await;
+        let mut changed = variant("opening:42", json!({"wins": 7}));
+        changed.note = "对面换了打野。".into();
+        let unit = [
+            notice_of(&changed, 4_000),
+            note_message("英雄联盟", "开局战绩", &changed.note, true, 4_000),
+        ];
+        apply_move(&mut history, &unit);
+        player_turn(&model, &mut history, "那现在呢").await;
+        let requests = model.requests.lock().unwrap();
+        let seen = &requests.last().unwrap().messages;
+        let notes = seen
+            .iter()
+            .filter(|m| matches!(m, Message::User { source, .. } if source == SOURCE))
+            .count();
+        assert_eq!(notes, 1, "同一条推送给她的那句只有一句");
+        assert!(
+            matches!(&seen[seen.len() - 2], Message::User { source, .. } if source == SOURCE),
+            "最新的那句在最后（玩家这句前面）"
+        );
+        let wire = serde_json::to_string(seen).unwrap();
+        assert!(wire.contains("对面换了打野") && !wire.contains("场均死 13 次"));
+    }
+
+    /// Kotone 重启以后：从对话里找到上一次那条，带 alert 的照样挪到最后；再重启一次，认得挪过的那条（时间是挪的那一刻）。
+    #[test]
+    fn after_a_restart_an_alert_update_still_moves_the_push() {
+        let mut history = posted(&opening(), 1_000);
+        history.push(Message::user("后来的"));
+        let found = Record::of("c-1", find(&history, "lol:opening:42").unwrap()).unwrap();
+        let changed = variant("opening:42", json!({"wins": 7}));
+        let rec = record(
+            "lol",
+            "英雄联盟",
+            &spec("opening", &[PushForm::Card]),
+            &changed,
+            "",
+        );
+        let Decision::Move(previous) = decide(Some(found), content_hash(&rec), true) else {
+            panic!("要挪到最后")
+        };
+        assert_eq!(previous.at_ms, 1_000);
+        let moved = notice("英雄联盟", rec, 2_000);
+        assert!(apply_move(&mut history, std::slice::from_ref(&moved)));
+        assert!(matches!(&history[0], Message::User { text, .. } if text == "后来的"));
+        assert_eq!(history.len(), 3);
+        let again = Record::of("c-1", find(&history, "lol:opening:42").unwrap()).unwrap();
+        assert_eq!(again.at_ms, 2_000);
+    }
+
+    /// 带 alert 的更新来的时候记不了（那段对话在跑）：排着。还没记进对话的新推送从它那一组里拿掉、排到最后（照旧追加，
+    /// 跟着它的那句换过来）；排着的原地更新换成挪动；再挪一次只留最新的；不带 alert 的更新照旧换掉排着的那条；存盘读回来
+    /// 照样是挪动；这一轮结束照排着的挪。
+    #[test]
+    fn alert_moves_wait_in_the_queue_and_replace_what_is_held() {
+        let mut desk = Desk::default();
+        desk.hold("c-1", posted(&opening(), 1_000));
+        let mut summary = opening();
+        summary.key = "summary:42".into();
+        desk.hold("c-1", posted(&summary, 1_500));
+        assert!(desk.is_held("lol:opening:42"));
+        assert!(!desk.is_held("lol:death:42"));
+        let x2 = notice_of(&variant("opening:42", json!({"wins": 7})), 2_000);
+        desk.hold_move("c-1", vec![x2.clone()]);
+        assert_eq!(desk.held().len(), 2, "原来那一组空了就不要了");
+        assert_eq!(
+            push_id(&desk.held()[0].messages[0]).as_deref(),
+            Some("lol:summary:42")
+        );
+        let last = &desk.held()[1];
+        assert!(!last.moved && !last.replace, "还没记进对话：照旧追加");
+        assert_eq!(last.messages[0], x2);
+        assert!(
+            matches!(&last.messages[1], Message::User { at_ms: 2_000, .. }),
+            "跟着它的那句换过来，时间换成新的"
+        );
+        assert_eq!(desk.held_pushes("c-1").len(), 2);
+
+        // 已经记进对话的：排着的原地更新换成挪动，再挪一次只留最新的
+        let mut desk = Desk::default();
+        desk.hold_replace("c-1", notice_of(&variant("death:42", json!({})), 1_000));
+        let d2 = notice_of(&variant("death:42", json!({"deaths": 2})), 3_000);
+        desk.hold_move("c-1", vec![d2.clone()]);
+        assert_eq!(desk.held().len(), 1);
+        assert!(desk.held()[0].moved && !desk.held()[0].replace);
+        assert_eq!(desk.held()[0].messages, std::slice::from_ref(&d2));
+        let d3 = [
+            notice_of(&variant("death:42", json!({"deaths": 3})), 4_000),
+            note_message("英雄联盟", "开局战绩", "第三次", true, 4_000),
+        ];
+        desk.hold_move("c-1", d3.to_vec());
+        assert_eq!(desk.held().len(), 1);
+        assert_eq!(desk.held()[0].messages, d3);
+        // 不带 alert 的更新（时间跟着挪的那一刻）：换掉排着的那条，照旧是挪动，那句还在
+        let d4 = notice_of(&variant("death:42", json!({"deaths": 3, "x": 1})), 4_000);
+        assert!(desk.update_held(&d4));
+        assert!(desk.held()[0].moved);
+        assert_eq!(desk.held()[0].messages, [d4.clone(), d3[1].clone()]);
+        // 别的没排着的：排一个挪动
+        desk.hold_move("c-2", vec![x2.clone()]);
+        assert!(desk.held()[1].moved);
+
+        // 存盘：moved 只在是的时候写；读回来照样是挪动，记上的时间是挪的那一刻
+        let saved = serde_json::to_value(desk.held()).unwrap();
+        assert_eq!(saved[0]["moved"], true);
+        assert!(saved[0].get("replace").is_none());
+        let mut restarted = Desk::default();
+        restarted.restore(serde_json::from_value(saved).unwrap());
+        assert_eq!(restarted.record("lol:death:42").unwrap().at_ms, 4_000);
+
+        // 这一轮结束：照排着的挪
+        let mut conversation = vec![
+            Message::user("在吗"),
+            notice_of(&variant("death:42", json!({})), 1_000),
+            Message::user("后来的"),
+        ];
+        assert!(apply_move(&mut conversation, &restarted.held()[0].messages));
+        assert_eq!(conversation.len(), 4);
+        assert_eq!(conversation[2], d4);
+        assert_eq!(conversation[3], d3[1]);
+    }
+
     /// 她不空时排着：对话里先没有；这一轮结束后取出来，接在她这一轮的回答后面。
     #[tokio::test]
     async fn while_busy_the_push_waits_until_the_turn_ends() {
@@ -713,7 +1053,8 @@ mod tests {
         );
     }
 
-    /// 同一个 key：内容一样什么都不做，变了更新上一次那条；不同插件、不同 key 是新的；旧的自动卡片当作发过。
+    /// 同一个 key：内容一样什么都不做，变了更新上一次那条（带 alert 的挪到最后）；不同插件、不同 key 是新的；旧的自动卡片
+    /// 当作发过。
     #[test]
     fn the_same_key_again_is_an_update_or_nothing() {
         let first = record(
@@ -724,7 +1065,12 @@ mod tests {
             "",
         );
         let hash = content_hash(&first);
-        assert_eq!(decide(None, hash), Decision::Post);
+        assert_eq!(decide(None, hash, false), Decision::Post);
+        assert_eq!(
+            decide(None, hash, true),
+            Decision::Post,
+            "第一次推不管 alert"
+        );
         let mut desk = Desk::default();
         let rec = Record {
             conversation: "c-1".into(),
@@ -742,8 +1088,13 @@ mod tests {
         );
         assert!(desk.record(&id("other", "opening:42")).is_none());
         assert_eq!(
-            decide(desk.record("lol:opening:42").cloned(), hash),
+            decide(desk.record("lol:opening:42").cloned(), hash, false),
             Decision::Unchanged
+        );
+        assert_eq!(
+            decide(desk.record("lol:opening:42").cloned(), hash, true),
+            Decision::Unchanged,
+            "内容一样：带 alert 也什么都不做（不挪、不弹）"
         );
         // 插件名、这次说的哪句、更新时间不算内容
         let mut renamed = record(
@@ -768,16 +1119,30 @@ mod tests {
         assert_eq!(
             decide(
                 desk.record("lol:opening:42").cloned(),
-                content_hash(&changed)
+                content_hash(&changed),
+                false
             ),
-            Decision::Update(rec)
+            Decision::Update(rec.clone())
+        );
+        // 带 alert（插件要提醒玩家）：挪到最后
+        assert_eq!(
+            decide(
+                desk.record("lol:opening:42").cloned(),
+                content_hash(&changed),
+                true
+            ),
+            Decision::Move(rec)
         );
         // 旧的自动卡片：当作发过，不动它
         let legacy = Record {
             legacy: true,
             ..Record::of("c-1", &posted(&opening(), 1)[0]).unwrap()
         };
-        assert_eq!(decide(Some(legacy), 123), Decision::Unchanged);
+        assert_eq!(
+            decide(Some(legacy.clone()), 123, false),
+            Decision::Unchanged
+        );
+        assert_eq!(decide(Some(legacy), 123, true), Decision::Unchanged);
         // 记得住的有上限，最早的先忘
         for i in 0..REMEMBER {
             desk.remember(
@@ -906,7 +1271,8 @@ mod tests {
         assert_eq!(saved[1]["replace"], true);
         let old: Vec<Held> =
             serde_json::from_str(r#"[{"conversation":"c-1","messages":[]}]"#).unwrap();
-        assert!(!old[0].replace && old[0].failures == 0);
+        assert!(!old[0].replace && !old[0].moved && old[0].failures == 0);
+        assert!(saved[0].get("moved").is_none(), "moved 只在是的时候写");
     }
 
     /// 排着的存盘读回来（下次启动接着记），里面的推送记上；新压进来的排在后面。记进对话连着失败几次就放弃。

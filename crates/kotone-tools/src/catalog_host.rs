@@ -244,7 +244,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_MODELS_LIST,
-            description: "List models of one category in the unified catalog (local and online) with size, whether downloaded, config schema and API-key page, plus the models directory, the active model and whether a download is running. category defaults to asr (speech recognition; output unchanged: active={engine, modelId}). For ocr / tts each entry also has ready/state/reason, active, recommended, languages, dataEgress (selected-image = the screenshot is uploaded) and files; active={modelId}. Configure an online entry's fields (e.g. its connection) with settings.update {\"modelConfigs\": {\"<id>\": {...}}}.",
+            description: "List models of one category in the unified catalog (local and online) with size, whether downloaded, config schema and API-key page, plus the models directory, the active model and whether a download is running. category defaults to asr (speech recognition; output unchanged: active={engine, modelId}). For ocr / tts each entry also has ready/state/reason, active, recommended, languages, dataEgress (selected-image = the screenshot is uploaded) and files; active={modelId}; tts descriptions say how each provider charges (speech.status has the details and where each key comes from). Configure an online entry's fields with settings.update {\"modelConfigs\": {\"<id>\": {...}}}; keys never go there (they live in the OS credential store).",
             side_effects: &[],
             egress: "none",
             input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"category": category()}}),
@@ -306,11 +306,11 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_SPEECH_STATUS,
-            description: "Status of the optional Kokoro speech package (installed / downloading / bytes / phase / error) and the voices available to the current speech engine (assistant.speechEngine). Choose a voice with settings.update {\"assistant\": {...}}.",
+            description: "Her voice (ADR 048): engine = what she speaks with now {modelId, auto (true = follows the provider of the model she uses: DeepSeek / MiniMax / Alibaba Bailian when that provider has a key, else the Windows system voice), displayName, billing (how it is charged, tell the player), online, ready, reason, keySource {kind: own (typed in her voice settings) | connection {id, name} (the key of that API connection of the same provider) | speechRecognition | notNeeded | none}, region cn/intl, rate (whether the speech-rate setting applies)}; providers = every online voice provider (deepseek-tts, minimax-tts, dashscope-tts, siliconflow-tts, volcano-tts, openai-compat-tts = custom OpenAI-compatible interface) with the same fields plus description, apiKeyUrl, defaultModel, defaultVoice; the voices of the current engine (provider/voice ids; MiniMax lists the account's voices online when it has a key) and the Kokoro package status. check: a provider id — try it with the current settings through a free endpoint (MiniMax voice list, model lists; Volcano and the custom interface synthesize one character) and return check {ok, message}. Keys are never returned: to add one, ask the player with connections.request_key (DeepSeek, MiniMax and Bailian voices use the key of that provider's API connection automatically); choose the provider with models.activate {category: tts}, the voice / model with settings.update {\"modelConfigs\": {\"<id>\": {\"voice\": ..., \"model\": ...}}}.",
             side_effects: &[],
-            egress: "none",
-            input: none(),
-            output: object(&["package", "voices", "voicesError"], json!({"package": open("Kokoro 包状态"), "voices": {"type": "array"}, "voicesError": {"type": ["string", "null"]}})),
+            egress: "connection-dependent",
+            input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"check": id("要试的声音服务商（模型 ID，如 minimax-tts）；不填 = 不试")}}),
+            output: object(&["package", "voices", "voicesError", "engine", "providers"], json!({"package": open("Kokoro 包状态"), "voices": {"type": "array"}, "voicesError": {"type": ["string", "null"]}, "engine": open("她现在用的声音：modelId、auto、displayName、billing、ready、reason、keySource、region、rate"), "providers": {"type": "array"}, "check": open("{ok, message}（给了 check 时）")})),
         },
         Def {
             name: TOOL_SPEECH_MODEL_DOWNLOAD,
@@ -672,7 +672,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_SAVE,
-            description: "Save an automation for reuse (create, or overwrite by id). action is {kind: program, source: Luau} — the functions are listed under automation.run: to tell the player write say / toast / push in the program (without them it stays silent), to hand something to 琴音 write ask(text). The older forms {kind: speak, text, delivery: [voice|danmaku]} ({name} in text = that param) and {kind: prompt, text} (≤500) are still accepted and saved as the equivalent program (say / toast with the params joined in, ask(\"…\")); prefer writing the program. params declare typed arguments the program reads as args.<name>: type number {min, max, integer} / text {maxLength ≤200, no newlines} / boolean / choice {options} / key (key name such as Q, Enter, Ctrl+Q) / region ({x, y, w, h} window-client ratios) / color ({r, g, b}) / image (template for find_image: pass {png: base64} — e.g. from screen.capture → image.crop → artifact.get — and it is stored as {image: sha256}; PNG ≤512×512, ≤512 KB); each has name (lowercase identifier), optional label, description and default (no default = required); a number param named delay_seconds starts every run that many seconds later. Programs are syntax-checked. schedule {cron, enabled, args} runs it on a crontab-like schedule in local time (5 fields \"min hour day month weekday\", or @hourly / @daily / @weekly / @monthly; missed runs are not caught up). on {event: [types or prefix like lol.*], game?: profile id, match?: {data field: value or [values] meaning or}, for?: seconds a phase must hold (game.phase_changed only), mode?: single|restart|queued (only for programs that use the game window; the others run on every trigger), oncePerMatch?, cooldownSeconds?, enabled} runs it when a game event happens (ADR 036; event names and data fields from game.state); data fields with the same name as a param (camelCase field = snake_case param) fill that param — they may be names other players chose: fine for say / toast / push, refused inside ask. ask() hands the turn to 琴音 with the event attached (one AI call each time, at most 3 per match per automation). The result (like automation.get / automation.list) carries usesWindow (binds the game window: needs the game in front, ▶ counts down first), asks (hands a turn to 琴音; such automations are not offered to her as saved.* tools and she cannot run them herself), tools [{name, title, state, reason}] — every tool() the program calls, in order; state ready (callable) / confirm (needs the player's 允许 (Allow) on the 自动化 (Automation) page) / off (its plugin or data switch is off: reason says which) / blocked (cannot be called: reason says why) — and needsConfirm (true = some tool waits for the player's 允许: tell the player to click 允许 on the 自动化 page; it does not run until then). An automation with off / blocked tools is saved anyway but does not run until that is fixed. Saved automations run without calling a model unless they ask (automation.run with id and args); runs keep a snapshot, so editing or deleting later does not change scheduled runs. Max 200.",
+            description: "Save an automation for reuse (create, or overwrite by id). action is {kind: program, source: Luau} — the functions are listed under automation.run: to tell the player write say / toast / push in the program (without them it stays silent), to hand something to 琴音 write ask(text). The older forms {kind: speak, text, delivery: [voice|danmaku]} ({name} in text = that param) and {kind: prompt, text} (≤500) are still accepted and saved as the equivalent program (say / toast with the params joined in, ask(\"…\")); prefer writing the program. params declare typed arguments the program reads as args.<name>: type number {min, max, integer} / text {maxLength ≤200, no newlines} / boolean / choice {options} / key (key name such as Q, Enter, Ctrl+Q) / region ({x, y, w, h} window-client ratios) / color ({r, g, b}) / image (template for find_image: pass {png: base64} — e.g. from screen.capture → image.crop → artifact.get — and it is stored as {image: sha256}; PNG ≤512×512, ≤512 KB); each has name (lowercase identifier), optional label, description and default (no default = required); a number param named delay_seconds starts every run that many seconds later. Programs are syntax-checked. schedule {cron, enabled, args} runs it on a crontab-like schedule in local time (5 fields \"min hour day month weekday\", or @hourly / @daily / @weekly / @monthly; missed runs are not caught up). on {event: [types or prefix like lol.*], game?: profile id, match?: {data field: value or [values] meaning or}, for?: seconds a phase must hold (game.phase_changed only), mode?: single|restart|queued (only for programs that use the game window; the others run on every trigger), oncePerMatch?, cooldownSeconds?, enabled} runs it when a game event happens (ADR 036; event names and data fields from game.state). Put every condition the event data can express into on.match (subset match, arrays mean or, e.g. {team: \"ally\", alliesAlive: [0, 1]}) rather than checking it in the program: a run whose program checks args and returns early still counts as a trigger and uses up oncePerMatch and cooldownSeconds. Data fields with the same name as a param (camelCase field = snake_case param) fill that param — they may be names other players chose: fine for say / toast / push, refused inside ask. ask() hands the turn to 琴音 with the event attached (one AI call each time, at most 3 per match per automation). The result (like automation.get / automation.list) carries usesWindow (binds the game window: needs the game in front, ▶ counts down first), asks (hands a turn to 琴音; such automations are not offered to her as saved.* tools and she cannot run them herself), tools [{name, title, state, reason}] — every tool() the program calls, in order; state ready (callable) / confirm (needs the player's 允许 (Allow) on the 自动化 (Automation) page) / off (its plugin or data switch is off: reason says which) / blocked (cannot be called: reason says why) — and needsConfirm (true = some tool waits for the player's 允许: tell the player to click 允许 on the 自动化 page; it does not run until then); automation.save also returns triggerNotes when there is something to know about on: its events cannot happen right now (e.g. their plugin is off), or it has oncePerMatch / cooldownSeconds while the program reads event-filled args (if the program only uses them to talk, nothing to change; if it checks them, move the condition into on.match). It is saved either way. An automation with off / blocked tools is saved anyway but does not run until that is fixed. Saved automations run without calling a model unless they ask (automation.run with id and args); runs keep a snapshot, so editing or deleting later does not change scheduled runs. Max 200.",
             side_effects: &["writes-automations"],
             egress: "none",
             input: object(&["name", "action"], json!({
@@ -703,7 +703,7 @@ fn defs() -> Vec<Def> {
                 "on": {"type": ["object", "null"], "required": ["event"], "properties": {
                     "event": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "maxLength": 64}, "description": "游戏事件类型，如 game.phase_changed，或某个游戏的前缀如 lol.*（全部名字见 game.state 的事件目录）"},
                     "game": {"type": "string", "maxLength": 64, "description": "只在这个游戏配置上触发；不写 = 任何游戏"},
-                    "match": {"type": "object", "description": "对事件 data 的子集匹配，数组表示“或”，如 {\"to\": \"loading\"}、{\"team\": \"enemy\"}"},
+                    "match": {"type": "object", "description": "对事件 data 的子集匹配，数组表示“或”，如 {\"to\": \"loading\"}、{\"team\": \"enemy\"}；能写进来的条件写进来，程序里判断不满足就 return 的那次也算触发（占掉 oncePerMatch 和冷却）"},
                     "for": {"type": "integer", "minimum": 0, "maximum": 3600, "description": "阶段保持多少秒才触发（只用于 game.phase_changed）"},
                     "mode": {"enum": ["single", "restart", "queued"]},
                     "oncePerMatch": {"type": "boolean"},
@@ -711,7 +711,7 @@ fn defs() -> Vec<Def> {
                     "enabled": {"type": "boolean"}
                 }}
             })),
-            output: open("保存后的自动化：id、name、description、params（补全 label 与规范化缺省值）、action（{kind: program, source}）、usesWindow、asks、tools（[{name, title, state: ready | confirm | off | blocked, reason}]，程序里调的工具）、needsConfirm（要玩家在「自动化」页点“允许”）、createdBy、createdAtMs、updatedAtMs；触发里的事现在不会发生时多一项 triggerNotes"),
+            output: open("保存后的自动化：id、name、description、params（补全 label 与规范化缺省值）、action（{kind: program, source}）、usesWindow、asks、tools（[{name, title, state: ready | confirm | off | blocked, reason}]，程序里调的工具）、needsConfirm（要玩家在「自动化」页点“允许”）、createdBy、createdAtMs、updatedAtMs；有关于触发的提醒时多一项 triggerNotes（触发里的事现在不会发生；开了一局一次或冷却、程序又读了事件填的参数）"),
         },
         Def {
             name: TOOL_AUTOMATION_GET,
@@ -946,6 +946,21 @@ mod tests {
         assert!(def(super::TOOL_AUTOMATION_SAVE)
             .description
             .contains("ready (callable) / confirm"));
+        // ADR 046 的 2026-11-27 修订：条件写进 on.match（程序里 return 的那次也算触发），保存结果的 triggerNotes
+        for text in [
+            "Put every condition the event data can express into on.match",
+            "still counts as a trigger and uses up oncePerMatch and cooldownSeconds",
+            "triggerNotes",
+            "reads event-filled args",
+        ] {
+            assert!(save.description.contains(text), "{text}");
+        }
+        assert!(
+            save.input["properties"]["on"]["properties"]["match"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("也算触发")
+        );
         let stop = def(super::TOOL_AUTOMATION_STOP);
         assert!(stop
             .description

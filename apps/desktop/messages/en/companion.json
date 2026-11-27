@@ -149,7 +149,7 @@
   "companion_bubble_offset_custom": "Custom ({offset})",
   "companion_bubble_preview_failed": "Preview failed: {error}",
   "companion_bubble_title": "Floating window",
-  "companion_bubble_desc": "A small window on the game's screen with her avatar in the corner. Something simple (what she's hearing or thinking, a short line she says, a line a plugin pushes) is a bubble next to the avatar; something more (a card, a tool she used, a long answer, several messages at once) is a mini chat showing the latest messages of the conversation; scroll back for earlier ones. It goes away when the ring around the avatar runs out, and the ring stops while your mouse is over it. It never takes the game's focus. You can close it (×) and drag it, and it comes back where you left it. It can't show over a game in exclusive fullscreen.",
+  "companion_bubble_desc": "A small window on the game's screen with her avatar in the corner. Something simple (what she's hearing or thinking, a short line she says, a line a plugin pushes) is a bubble next to the avatar, with a few push lines and her line together; something more (a card that pops up, a tool she used, a long answer, more than one reply from her) is a mini chat showing the latest messages of the conversation; scroll back for earlier ones. It goes away when the ring around the avatar runs out, and the ring stops while your mouse is over it. It never takes the game's focus. You can close it (×) and drag it, and it comes back where you left it. It can't show over a game in exclusive fullscreen.",
   "companion_bubble_enabled_label": "Show floating window",
   "companion_bubble_enabled_desc": "When off, she replies only by voice and floating text, and pushes still go into the chat. Voice input's input bar is never used to show her.",
   "companion_bubble_enabled_on": "Floating window on",
@@ -472,7 +472,16 @@
   "companion_workspace_revert": "Revert",
   "companion_saving": "Saving…",
   "companion_pushes_popup_label": "Open the mini chat for pushes",
-  "companion_pushes_popup_desc": "When a plugin pushes a card (or an update it wants you to see again), the mini chat opens at that card; click the line above a card to open the chat. It closes 10 seconds after the last new message (not while your mouse is over it) and doesn't open while a Kotone window is in front. Every push is recorded in the chat, and each has its own switch in the plugin's page under Settings → Pushes.",
+  "companion_pushes_popup_desc": "When a plugin pushes a card (or an update it wants you to see again), the mini chat opens at that card; click the line above a card to open the chat. When off, cards only go into the chat without opening the mini chat, and push lines still show in the bubble. It doesn't open while a Kotone window is in front. Each push has its own switch in the plugin's page under Settings → Pushes.",
   "companion_pushes_popup_on": "Mini window for pushes on",
-  "companion_pushes_popup_off": "Mini window for pushes off"
+  "companion_pushes_popup_off": "Mini window for pushes off",
+  "companion_floating_bubble_stay_label": "Bubble stays for",
+  "companion_floating_bubble_stay_desc": "How long her line or a push line stays next to the avatar. Counted from the last change; it doesn't run while your mouse is over it or while she's listening, thinking or speaking.",
+  "companion_floating_bubble_stay_aria": "How long the bubble stays",
+  "companion_floating_mini_stay_label": "Mini chat stays for",
+  "companion_floating_mini_stay_desc": "How long the mini chat (cards, a tool she used, a long answer) stays, counted the same way as the bubble.",
+  "companion_floating_mini_stay_aria": "How long the mini chat stays",
+  "companion_floating_stay_seconds": "{seconds} s",
+  "companion_floating_stay_default": "{seconds} s (default)",
+  "companion_floating_stay_saved": "Stay time saved"
 }

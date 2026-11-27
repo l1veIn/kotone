@@ -915,6 +915,75 @@ fn global_use(tokens: &[Token<'_>], i: usize) -> bool {
     !field && !assigned
 }
 
+// ---------- 保存时的提醒：条件写在程序里，次数和冷却照样用掉（ADR 046 的 2026-11-27 修订） ----------
+
+/// 程序里读的入参名字（`args.<名字>`，按出现的先后、不重复）。和“用到游戏窗口”同一个记号器：注释、字符串里的不算，
+/// `t.args.x` 不算；`args["x"]`、`local a = args` 这类读法认不出（只用来提醒，认漏了不出事）。
+fn args_read(source: &str) -> Vec<&str> {
+    let tokens = tokens(source);
+    let mut out: Vec<&str> = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        if *token != Token::Name("args") || !global_use(&tokens, i) {
+            continue;
+        }
+        if let (Some(Token::Dot), Some(Token::Name(name))) = (tokens.get(i + 1), tokens.get(i + 2))
+        {
+            if !out.contains(name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// 保存时给她的提醒（不拦）：按事件触发、开了“一局一次”或冷却，程序里又读了由事件自动填的参数（[`event_args`] 的规矩：
+/// 参数名对上触发里那几种事的 `data` 字段，camelCase 字段对 snake_case 参数；已经写进 `on.match` 的字段不算）。
+/// 程序拿它判断、不满足就 `return` 的那一次也算触发，会占掉次数和冷却，真到该触发的时候可能就不触发了——玩家
+/// 2026-11-27 让她写的“队友都倒了放首歌”就是这样：触发只写了 `team: ally`，第一个倒下的队友就用掉了一局一次。
+/// 读事件的值只拿来说话（`say(args.champion .. "倒了")`）的也会提醒，所以话说成让她自己判断，不当错误。
+/// 触发关着、没开次数和冷却、没读事件填的参数时为空。桌面端放进保存结果的 `triggerNotes`。
+pub fn trigger_hints(automation: &Automation, events: &EventCatalog) -> Vec<String> {
+    let Some(on) = automation.on.as_ref().filter(|on| on.enabled) else {
+        return Vec::new();
+    };
+    if !on.once_per_match && on.cooldown_seconds == 0 {
+        return Vec::new();
+    }
+    let fields = events.data_fields(on);
+    let read = args_read(automation.action.source());
+    let filled: Vec<String> = automation
+        .params
+        .iter()
+        .filter(|p| read.contains(&p.name.as_str()))
+        .filter_map(|p| {
+            let field = fields
+                .iter()
+                .find(|f| **f == p.name || snake(f) == p.name)?;
+            (!on.matches.contains_key(*field)).then(|| {
+                if *field == p.name {
+                    format!("args.{}", p.name)
+                } else {
+                    format!("args.{}（{field}）", p.name)
+                }
+            })
+        })
+        .collect();
+    if filled.is_empty() {
+        return Vec::new();
+    }
+    let limits = match (on.once_per_match, on.cooldown_seconds) {
+        (true, 0) => "一局一次".to_string(),
+        (true, s) => format!("一局一次和冷却（{s} 秒）"),
+        (false, s) => format!("冷却（{s} 秒）"),
+    };
+    vec![format!(
+        "这个触发开了{limits}，程序里又读了事件填进来的 {}：要是程序拿它判断、不满足就 return，那一次也算触发，\
+         会占掉{limits}，真该触发时可能就不触发了。能写进 on.match 的条件写进去（对事件 data 的子集匹配，数组表示“或”）；\
+         只是拿来说话的不用改。",
+        filled.join("、")
+    )]
+}
+
 // ---------- 模板（ADR 045 D9） ----------
 
 /// 新建自动化时选的模板。和内置程序一样由测试保证能编译、只填缺省值就能跑；界面按 `id` 取文案。
@@ -2660,5 +2729,141 @@ mod tests {
         let file: Rc13File = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(file.version, 1);
         assert_eq!(file.automations[0].action, saved.action);
+    }
+
+    /// 一个“示例”游戏的事件目录：`demo.death` 带 team、champion、alliesAlive、meAlive（本体的代码里不写插件登记的事件名，
+    /// kotone-plugin-api 的 tests/event_boundaries.rs）。
+    fn death_catalog() -> EventCatalog {
+        let mut catalog = EventCatalog::generic();
+        catalog
+            .add(crate::games::CatalogEntry {
+                spec: crate::games::EventSpec {
+                    kind: "demo.death".into(),
+                    label: "有英雄阵亡".into(),
+                    data: ["team", "champion", "alliesAlive", "meAlive"]
+                        .iter()
+                        .map(|f| (f.to_string(), format!("{f} 的说明")))
+                        .collect(),
+                    needs: Vec::new(),
+                    private: Vec::new(),
+                },
+                adapter: "demo".into(),
+                plugin: Some(("demo".into(), "示例".into())),
+                games: vec!["demo".into()],
+                off: None,
+            })
+            .unwrap();
+        catalog
+    }
+
+    /// ADR 046 的 2026-11-27 修订：按事件触发、开了一局一次或冷却，程序里又读了事件填的参数——保存时提醒一句（不拦）：
+    /// 条件写在程序里，不满足就 return 的那次也算触发。条件都在 `on.match` 里的、没开次数和冷却的、读的参数不是事件字段的、
+    /// 参数只在注释和字符串里出现的、字段已经写进 `on.match` 的、触发关着的都不提醒。
+    #[test]
+    fn a_trigger_that_spends_its_once_per_match_on_a_program_check_gets_a_hint() {
+        let catalog = death_catalog();
+        let dir = tempfile::tempdir().unwrap();
+        let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
+        let save = |name: &str, on: Value, params: Value, source: &str| {
+            let d = draft(json!({
+                "name": name, "params": params, "on": on,
+                "action": {"kind": "program", "source": source},
+            }));
+            library.save(d, CreatedBy::Companion, &catalog).unwrap()
+        };
+        let allies_alive = json!([{"name": "allies_alive", "type": "number", "default": 0}]);
+        let checks =
+            "if type(args.allies_alive) == \"number\" and args.allies_alive > 1 then return end\n\
+                      tool(\"music\", { action = \"play\", query = \"雨爱\" })";
+        // 玩家机器上那一份（摘要）：触发只写了 team，一局一次 + 120 秒冷却，程序里按 args.allies_alive 判断
+        let wrong = save(
+            "队友都倒了放首歌",
+            json!({"event": ["demo.death"], "game": "demo", "match": {"team": "ally"},
+                   "oncePerMatch": true, "cooldownSeconds": 120}),
+            allies_alive.clone(),
+            checks,
+        );
+        let hints = trigger_hints(&wrong, &catalog);
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        for text in [
+            "开了一局一次和冷却（120 秒）",
+            "args.allies_alive（alliesAlive）",
+            "那一次也算触发",
+            "写进 on.match",
+            "只是拿来说话的不用改",
+        ] {
+            assert!(hints[0].contains(text), "{text}：{}", hints[0]);
+        }
+        // 正确的写法：条件都在 on.match 里，程序只管放歌
+        let right = save(
+            "队友都倒了放首歌（改）",
+            json!({"event": ["demo.death"], "game": "demo",
+                   "match": {"team": "ally", "alliesAlive": 1, "meAlive": true}, "oncePerMatch": true}),
+            json!([]),
+            "tool(\"music\", { action = \"play\", query = \"雨爱\" })",
+        );
+        assert!(trigger_hints(&right, &catalog).is_empty());
+        // 没开一局一次也没冷却：每件都会再触发，不提醒；只开冷却的提醒
+        let on = |extra: Value| {
+            let mut on = json!({"event": ["demo.death"], "match": {"team": "ally"}});
+            on.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            on
+        };
+        let plain = save("不限次数", on(json!({})), allies_alive.clone(), checks);
+        assert!(trigger_hints(&plain, &catalog).is_empty());
+        let cooled = save(
+            "只有冷却",
+            on(json!({"cooldownSeconds": 60})),
+            allies_alive.clone(),
+            checks,
+        );
+        let hints = trigger_hints(&cooled, &catalog);
+        assert!(
+            hints.len() == 1
+                && hints[0].contains("开了冷却（60 秒）")
+                && !hints[0].contains("一局一次"),
+            "{hints:?}"
+        );
+        // 读的参数不是事件的字段（玩家自己填的歌名）：不提醒
+        let song = save(
+            "放我选的歌",
+            on(json!({"oncePerMatch": true})),
+            json!([{"name": "song", "type": "text", "default": "雨爱"}]),
+            "tool(\"music\", { action = \"play\", query = args.song })",
+        );
+        assert!(trigger_hints(&song, &catalog).is_empty());
+        // 声明了事件的参数，但只在注释、字符串、别的表的字段里出现：不提醒
+        let unread = save(
+            "没读",
+            on(json!({"oncePerMatch": true})),
+            allies_alive.clone(),
+            "-- args.allies_alive\nlocal t = { args = {} }\nsay(\"args.allies_alive\" .. tostring(t.args.allies_alive))",
+        );
+        assert!(trigger_hints(&unread, &catalog).is_empty());
+        // 字段已经写进 on.match 的不算；另一个没写的照样提醒（参数名和字段同名时不写括号）；前缀 demo.* 也认
+        let partly = save(
+            "一半写进 match",
+            json!({"event": ["demo.*"], "match": {"alliesAlive": 1}, "oncePerMatch": true}),
+            json!([{"name": "allies_alive", "type": "number", "default": 0},
+                   {"name": "team", "type": "text", "default": ""}]),
+            "if args.team ~= \"ally\" or args.allies_alive ~= 1 then return end\nsay(\"只剩你了\")",
+        );
+        let hints = trigger_hints(&partly, &catalog);
+        assert!(
+            hints.len() == 1
+                && hints[0].contains("args.team：")
+                && !hints[0].contains("allies_alive"),
+            "{hints:?}"
+        );
+        // 触发关着：不提醒
+        let off = save(
+            "关着",
+            on(json!({"oncePerMatch": true, "enabled": false})),
+            allies_alive,
+            checks,
+        );
+        assert!(trigger_hints(&off, &catalog).is_empty());
     }
 }

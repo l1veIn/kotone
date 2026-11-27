@@ -135,7 +135,6 @@ mod tests {
             deaths: kda.1,
             assists: kda.2,
             damage,
-            taken: 0,
             gold: 0,
             cs: 0,
             augments: vec![],

@@ -128,6 +128,8 @@ fn apply_update(
                 serde_json::to_value(&*next).map_err(|e| format!("序列化配置失败: {e}"))?;
             settings::merge_json(&mut merged, &patch);
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
+            // 补丁里写进模型配置的 Key（火山 Access Token、讯飞 APISecret……）存进凭据库，不进 config.json（ADR 048）
+            kotone_core::model_secrets::take(next, &previous, state.secrets.as_ref())?;
             // 快捷指令的旧写法照旧受旧的限制（最多 8 条、话 1 到 200 字……）：对齐以后旧字段只是表的镜像，先查
             if next.assistant.companion.quick_messages
                 != previous.assistant.companion.quick_messages

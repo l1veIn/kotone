@@ -3,6 +3,7 @@
 - 状态：Accepted（2026-11-17）。用户授权按推荐方案实施；第一版已实现，见文末“实施记录”
 - 细化：[ADR 014](014-game-agent-harness.md)（游戏内入口、同一段对话）、[ADR 006](006-session-lifecycle-interaction-modes.md)（交互模式里一直留着的“A3 全时免按，Phase 3”）、[ADR 007](007-vad-one-shot-mode.md)（VAD 静音判停）、[ADR 010](010-sound-feedback.md)（提示音）
 - 不变：游戏语音输入（发到游戏聊天）的所有模式与热键；`assistant.interactionMode` 的取值范围
+- 2026-11-27 修订（[ADR 048](048-her-voice-in-one-place.md)）：下文 TTS 一行的在线引擎现在是 DeepSeek、MiniMax、阿里云百炼、硅基流动、火山和自定义（OpenAI 兼容接口，原来叫“OpenAI 兼容”）
 
 ## 问题
 

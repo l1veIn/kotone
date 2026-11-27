@@ -29,6 +29,11 @@ export function rate(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
 }
 
+/** 伤转（伤害转化率）= 对英雄伤害 ÷ 经济，整数百分比（“152%”，照 LeagueAkari 的伤转率）；经济是 0 时空（不显示）。 */
+export function ratio(damage: number, gold: number): string {
+  return gold > 0 ? `${Math.round((damage / gold) * 100)}%` : "";
+}
+
 /** 数字按语言分组（12,345）。 */
 export function num(value: number): string {
   return Math.round(value).toLocaleString(lang());
