@@ -355,9 +355,24 @@ export async function getHotkeyTable(): Promise<HotkeyTable> {
  * 把 `except` 这一项改成 `key` 之前查一次（后端查，ADR 040 D6）：和谁冲突（别的热键、Esc、游戏配置的聊天键和
  * 控制台触发键），以及这个键游戏里常不常用。`except` 是正在改的那一项的 id（不和自己比）。
  */
-export async function checkHotkey(key: string, except?: string): Promise<HotkeyCheck> {
-  if (!isTauri) return browserMock.checkHotkey(key, except);
-  return invoke<HotkeyCheck>("check_hotkey", { key, except: except ?? null });
+export async function checkHotkey(key: string, except?: string, when?: string): Promise<HotkeyCheck> {
+  if (!isTauri) return browserMock.checkHotkey(key, except, when);
+  return invoke<HotkeyCheck>("check_hotkey", { key, except: except ?? null, when: when ?? null });
+}
+
+/**
+ * 改呼叫键 / 说话某一个键的方式、什么时候管用（ADR 054）。`id` 是表里那一行的 id（第 2 个起 `<命令>~<n>`）；
+ * 不传的不改。第一个键的方式写进她的「唤醒」页 / 语音输入页那个全局字段（说话的“自动”写在那一条上）。
+ */
+export async function setHotkeyOptions(id: string, options: { mode?: string; when?: string }): Promise<Settings> {
+  if (!isTauri) return browserMock.setHotkeyOptions(id, options);
+  return invoke<Settings>("set_hotkey_options", { id, mode: options.mode ?? null, when: options.when ?? null });
+}
+
+/** 给一个命令再加一个键（ADR 054：比如侧键按住只在游戏里，原来的键留着）。 */
+export async function addHotkey(command: string, key: string, options: { mode?: string; when?: string } = {}): Promise<Settings> {
+  if (!isTauri) return browserMock.addHotkey(command, key, options);
+  return invoke<Settings>("add_hotkey", { command, key, mode: options.mode ?? null, when: options.when ?? null });
 }
 
 /**

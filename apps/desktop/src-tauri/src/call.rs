@@ -58,6 +58,13 @@ pub fn mode(app: &AppHandle) -> CallMode {
     settings.assistant.effective_call_mode()
 }
 
+/// 有没有哪一个呼叫键选了一直听（ADR 054：热键表里那一条的 `mode`）。
+fn continuous_key(app: &AppHandle) -> bool {
+    let state = app.state::<SharedState>();
+    let settings = state.settings.read().unwrap();
+    !settings.ui.legacy_upgrade.voice_input_only() && settings.call_continuous_anywhere()
+}
+
 /// 设置里的空闲挂断秒数；0 = 不通话（一问一答）。还没启用她时不通话。
 pub fn idle_seconds(app: &AppHandle) -> u32 {
     let settings = app.state::<SharedState>().settings.read().unwrap().clone();
@@ -83,7 +90,13 @@ fn quiet_for() -> Duration {
 /// 接通（设置里选的不是通话时什么也不做：说一句就走、录音笔不接通）。已经在通话就只记一次动静。
 /// 返回是否新接通。
 pub fn start(app: &AppHandle) -> bool {
-    if mode(app) != CallMode::Call {
+    start_for(app, mode(app) == CallMode::Call)
+}
+
+/// 同 [`start`]，`continuous` 由调用方说（呼叫键的每个键可以有自己的方式，ADR 054：选了一直听的那个键才接通）。
+/// 空闲挂断秒数是 0（旧写法的“不通话”）时不接通。
+pub fn start_for(app: &AppHandle, continuous: bool) -> bool {
+    if !continuous || idle_seconds(app) == 0 {
         return false;
     }
     // 语音识别没在运行（本地识别没启动）：听不了，不接通（呼叫键那一下会提示怎么启动）
@@ -244,8 +257,8 @@ async fn watch_idle(app: AppHandle, generation: u64) {
         if GENERATION.load(Ordering::SeqCst) != generation || !active() {
             return;
         }
-        // 设置里改成了说一句就走 / 录音笔（或旧写法的“不通话”）：挂断
-        if mode(&app) != CallMode::Call {
+        // 设置里改成了说一句就走 / 录音笔（或旧写法的“不通话”），也没有哪个呼叫键是一直听了：挂断
+        if mode(&app) != CallMode::Call && !continuous_key(&app) {
             end(&app, "设置里不再是通话");
             return;
         }

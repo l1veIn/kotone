@@ -103,12 +103,30 @@ impl AfterHearing for VoiceInput {
     ) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             let pressed = edge == Edge::Press;
+            // 说话可以有几个键（ADR 054）：第 2 个起宿主转来 `talk~<n>`
+            let (command, nth) = kotone_core::hotkey_options::split_nth(command);
             match command {
                 plugin::CMD_TALK => {
-                    let mode = {
+                    // 这个键写了自己的方式（那一条的 `mode`），或者是第 2 个起的键（跟着 `interactionMode`）：照它；
+                    // 第一个键没写方式的照旧的路走（`interactionMode`，含旧的混合组合）
+                    let (mode, keyed, hold_ms) = {
                         let settings = orch.settings().read().unwrap();
-                        kotone_core::interaction::effective_hotkey_mode(&settings)
+                        let talk = kotone_core::hotkey_bindings::CMD_TALK;
+                        (
+                            kotone_core::interaction::effective_hotkey_mode(&settings),
+                            settings.binding_mode(talk, nth).or_else(|| {
+                                (nth >= 2)
+                                    .then(|| settings.global_voice_mode(talk))
+                                    .flatten()
+                            }),
+                            settings.hold_ms(),
+                        )
                     };
+                    if let Some(keyed) = keyed {
+                        orch.on_talk_key(keyed, pressed, input_ticket, hold_ms)
+                            .await;
+                        return;
+                    }
                     match (mode, input_ticket) {
                         (HotkeyMode::Hold, Some(ticket)) => {
                             orch.on_hotkey_hold_with_ticket(pressed, ticket).await

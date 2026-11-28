@@ -27,6 +27,7 @@ mod games;
 mod history_cmd;
 mod hotkey;
 mod hotkey_bind;
+mod hotkey_gate;
 mod hotkey_run;
 mod hotkey_table_cmd;
 mod key_request;
@@ -380,6 +381,8 @@ pub fn run() {
             recap::start(app.handle());
             // 游戏中心（ADR 036）：看进程和前台窗口，合成游戏状态、发游戏事件、按事件运行自动化。
             games::start(app.handle());
+            // 只在游戏里管用的热键（ADR 054）：看最前面是不是认得的游戏
+            hotkey_gate::start();
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());
@@ -489,6 +492,8 @@ pub fn run() {
             hotkey_table_cmd::get_hotkey_table,
             hotkey_table_cmd::check_hotkey,
             hotkey_table_cmd::set_hotkey,
+            hotkey_table_cmd::set_hotkey_options,
+            hotkey_table_cmd::add_hotkey,
             hotkey_bind::confirm_hotkey,
             hotkey_bind::hotkey_binding_options,
             hotkey_bind::save_custom_hotkey,

@@ -5,6 +5,7 @@
 
 use kotone_core::hotkey_bindings::legacy_by_id;
 use kotone_core::hotkey_commands::split_command;
+use kotone_core::hotkey_options::{split_nth, KeyWhen, VoiceKeyMode};
 use kotone_core::hotkey_table::{self, HotkeyCheck, HotkeyTable, Planned, PluginInfo, Sources};
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::Settings;
@@ -63,8 +64,14 @@ pub(crate) fn table(app: &AppHandle) -> HotkeyTable {
     table
 }
 
-pub(crate) fn check(app: &AppHandle, key: &str, except: Option<&str>) -> HotkeyCheck {
-    with_current(app, |src| hotkey_table::check(src, key, except))
+/// 改一个键之前查一次；这个键只在 `when` 的时候管用（ADR 054，一直 = `KeyWhen::Always`）。
+pub(crate) fn check_at(
+    app: &AppHandle,
+    key: &str,
+    when: &KeyWhen,
+    except: Option<&str>,
+) -> HotkeyCheck {
+    with_current(app, |src| hotkey_table::check_at(src, key, when, except))
 }
 
 /// 登记计划（谁先拿到键、哪些识别没跑也登记、哪些只看不吞）。登记不看游戏配置，不读磁盘，可以在设置事务里调
@@ -106,15 +113,110 @@ pub(crate) async fn get_hotkey_table(app: AppHandle) -> Result<HotkeyTable, Stri
 }
 
 /// 把 `except` 这一项改成 `key` 之前查一次：和谁冲突、这个键游戏里常不常用。
+/// `when`：这个键什么时候管用（`always` / `game` / `game:<id>`，不传 = 一直，ADR 054）。
 #[tauri::command]
 pub(crate) async fn check_hotkey(
     app: AppHandle,
     key: String,
     except: Option<String>,
+    when: Option<String>,
 ) -> Result<HotkeyCheck, String> {
-    tauri::async_runtime::spawn_blocking(move || check(&app, &key, except.as_deref()))
-        .await
-        .map_err(|e| format!("查热键冲突失败：{e}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        check_at(
+            &app,
+            &key,
+            &KeyWhen::parse(when.as_deref()),
+            except.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("查热键冲突失败：{e}"))
+}
+
+/// 「设置 → 热键」里改呼叫键 / 说话某一个键的方式和什么时候管用（ADR 054）。`id` 是表里那一行的 id
+/// （命令名，第 2 个起 `<命令>~<n>`）；`mode` / `when` 不传 = 不改。第一个键的方式写进她的「唤醒」页 / 语音输入页
+/// 那个全局字段（说话的“自动”写在那一条上）。
+#[tauri::command]
+pub(crate) fn set_hotkey_options(
+    app: AppHandle,
+    id: String,
+    mode: Option<String>,
+    when: Option<String>,
+) -> Result<Settings, String> {
+    let current = app.state::<SharedState>().settings.read().unwrap().clone();
+    let patch = options_patch(&current, &id, mode.as_deref(), when.as_deref())?;
+    crate::settings_cmd::update_settings_from_backend(&app, patch)
+}
+
+/// 给一个命令再加一个键（ADR 054：同一个命令可以有几个键，比如侧键按住只在游戏里、Ctrl+~ 点一下一直管用）。
+#[tauri::command]
+pub(crate) fn add_hotkey(
+    app: AppHandle,
+    command: String,
+    key: String,
+    mode: Option<String>,
+    when: Option<String>,
+) -> Result<Settings, String> {
+    let current = app.state::<SharedState>().settings.read().unwrap().clone();
+    let patch = add_patch(&current, &command, &key, mode.as_deref(), when.as_deref())?;
+    crate::settings_cmd::update_settings_from_backend(&app, patch)
+}
+
+fn parse_mode(mode: &str) -> Result<VoiceKeyMode, String> {
+    VoiceKeyMode::parse(mode).ok_or_else(|| {
+        format!("不认识的方式「{mode}」：auto / hold / one-shot / dictation / continuous")
+    })
+}
+
+/// 行 id → (命令名, 第几个键)。
+fn command_of_row(id: &str) -> Result<(String, usize), String> {
+    let (base, nth) = split_nth(id);
+    let command = legacy_by_id(base).map_or(base, |legacy| legacy.command);
+    if split_command(command).is_none() {
+        return Err(format!("「{id}」在这里改不了"));
+    }
+    Ok((command.to_string(), nth))
+}
+
+fn options_patch(
+    current: &Settings,
+    id: &str,
+    mode: Option<&str>,
+    when: Option<&str>,
+) -> Result<Value, String> {
+    let (command, nth) = command_of_row(id)?;
+    let mut next = current.clone();
+    if let Some(mode) = mode {
+        next.set_voice_key_mode(&command, nth, parse_mode(mode)?)?;
+    }
+    if let Some(when) = when {
+        next.set_binding_when(&command, nth, &KeyWhen::parse(Some(when)))?;
+    }
+    Ok(json!({
+        "hotkeys": {"bindings": next.hotkeys.bindings},
+        "assistant": {"callMode": next.assistant.call_mode, "callIdleSeconds": next.assistant.call_idle_seconds},
+        "interactionMode": next.interaction_mode,
+    }))
+}
+
+fn add_patch(
+    current: &Settings,
+    command: &str,
+    key: &str,
+    mode: Option<&str>,
+    when: Option<&str>,
+) -> Result<Value, String> {
+    let key = key.trim();
+    if kotone_core::hotkey::parse_hotkey(key).is_none() {
+        return Err(format!(
+            "认不出「{key}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按"
+        ));
+    }
+    let (command, _) = command_of_row(command)?;
+    let mode = mode.map(parse_mode).transpose()?;
+    let mut next = current.clone();
+    next.add_command_binding(&command, key, mode, &KeyWhen::parse(when));
+    Ok(json!({"hotkeys": {"bindings": next.hotkeys.bindings}}))
 }
 
 /// 「设置 → 热键」里改一个键（ADR 040 D3：热键只在这一页改；新手引导第一次设呼叫键也走这里）。
@@ -140,15 +242,23 @@ fn hotkey_patch(current: &Settings, id: &str, key: &str) -> Result<Value, String
         next.set_custom_key(id, key)?;
         return Ok(json!({"hotkeys": {"bindings": next.hotkeys.bindings}}));
     }
-    let command = legacy_by_id(id).map_or(id, |legacy| legacy.command);
-    if split_command(command).is_none() {
-        return Err(match id {
-            hotkey_table::KEY_ESCAPE => "Esc 是固定的，不能改".to_string(),
-            _ => format!("「{id}」在这里改不了"),
-        });
+    if id == hotkey_table::KEY_ESCAPE {
+        return Err("Esc 是固定的，不能改".to_string());
     }
+    // 第 2 个键起（`<命令>~<n>`，ADR 054）：改那一条的键，清空 = 删掉那一条
+    let (command, nth) = command_of_row(id)?;
     let mut next = current.clone();
-    next.set_binding(command, key);
+    let count = next.command_binding_indexes(&command).len();
+    if nth >= 2 || (key.is_empty() && count > 1) {
+        // 有几个键时清掉第一个只删它自己，后面的往前挪
+        if key.is_empty() {
+            next.remove_command_binding(&command, nth)?;
+        } else {
+            next.set_command_key(&command, nth, key)?;
+        }
+    } else {
+        next.set_binding(&command, key);
+    }
     Ok(json!({"hotkeys": {"bindings": next.hotkeys.bindings}}))
 }
 
@@ -206,5 +316,73 @@ mod tests {
         // 0.1.x 提醒助手的键退掉了（ADR 052）：这个 id 也改不了
         assert!(hotkey_patch(&settings, "legacy-reminder", "F8").is_err());
         assert!(hotkey_patch(&settings, CMD_TALK, "NotAKey").is_err());
+    }
+
+    /// ADR 054：加第二个键、改方式和什么时候管用、删第二个键都是热键表的补丁；第一个呼叫键的方式写进 callMode。
+    #[test]
+    fn second_keys_ways_and_when_are_settings_patches() {
+        let mut settings = Settings::default();
+        let patch = add_patch(&settings, CMD_CALL, "Mouse5", Some("hold"), Some("game")).unwrap();
+        let bindings = patch["hotkeys"]["bindings"].as_array().unwrap();
+        assert_eq!(
+            bindings.last().unwrap(),
+            &json!({"key": "Mouse5", "command": CMD_CALL, "mode": "hold", "when": "game"})
+        );
+        assert!(add_patch(&settings, CMD_CALL, "NotAKey", None, None).is_err());
+        assert!(add_patch(&settings, CMD_CALL, "F6", Some("walkie"), None).is_err());
+        settings.hotkeys.bindings =
+            serde_json::from_value(patch["hotkeys"]["bindings"].clone()).unwrap();
+
+        // 第一个呼叫键的方式：写进 assistant.callMode，那一条上不写
+        let patch = options_patch(&settings, CMD_CALL, Some("dictation"), None).unwrap();
+        assert_eq!(patch["assistant"]["callMode"], "dictation");
+        assert!(patch["hotkeys"]["bindings"][0].get("mode").is_none());
+        // 第二个：写在那一条上；什么时候管用改成只在英雄联盟里
+        let patch =
+            options_patch(&settings, "kotone.call~2", Some("auto"), Some("game:lol")).unwrap();
+        let second = patch["hotkeys"]["bindings"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(second["mode"], "auto");
+        assert_eq!(second["when"], "game:lol");
+        // 登记 id 也认
+        assert!(options_patch(&settings, "assistant~2", None, Some("always")).is_ok());
+        // 别的命令没有方式
+        assert!(options_patch(&settings, "kotone.stop", Some("hold"), None).is_err());
+
+        // 改第二个键的键、清空 = 删掉它；有两个时清掉第一个只删它自己
+        let patch = hotkey_patch(&settings, "kotone.call~2", "Mouse4").unwrap();
+        assert_eq!(
+            patch["hotkeys"]["bindings"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["key"],
+            "Mouse4"
+        );
+        let patch = hotkey_patch(&settings, "kotone.call~2", "").unwrap();
+        let calls = |patch: &Value| {
+            patch["hotkeys"]["bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|b| b["command"] == CMD_CALL)
+                .count()
+        };
+        assert_eq!(calls(&patch), 1);
+        let patch = hotkey_patch(&settings, CMD_CALL, "").unwrap();
+        assert_eq!(calls(&patch), 1, "第二个往前挪");
+        assert_eq!(
+            patch["hotkeys"]["bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["command"] == CMD_CALL)
+                .unwrap()["key"],
+            "Mouse5"
+        );
     }
 }

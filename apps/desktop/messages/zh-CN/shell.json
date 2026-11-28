@@ -90,7 +90,7 @@
   "shell_onboarding_mode_push_to_talk": "按住说话",
   "shell_onboarding_mode_dictation": "按一下开始、再按停止",
   "shell_onboarding_mode_one_shot": "说一句就走",
-  "shell_onboarding_mode_solo": "独奏模式",
+  "shell_onboarding_mode_solo": "一直听",
   "shell_onboarding_mode_toggle": "按一下开始",
   "shell_onboarding_asr_fallback_name": "本地识别",
   "shell_onboarding_game_generic": "通用",

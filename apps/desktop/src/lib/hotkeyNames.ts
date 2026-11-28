@@ -57,6 +57,23 @@ export function keyUseDetail(use: KeyUse, settings: Settings | null): string {
   return named ? (use.detail ?? "") : "";
 }
 
+/** 说话键 / 呼叫键的方式叫什么（ADR 054，docs/glossary.md）。不认识的原样。 */
+export function voiceModeName(mode: string): string {
+  const names: Record<string, () => string> = {
+    auto: m.hotkeys_mode_auto, hold: m.hotkeys_mode_hold, "one-shot": m.hotkeys_mode_one_shot,
+    dictation: m.hotkeys_mode_dictation, continuous: m.hotkeys_mode_continuous,
+  };
+  return names[mode]?.() ?? mode;
+}
+
+/** 什么时候管用叫什么：一直 / 在游戏里 / 只在《x》里（`game` 查游戏名，查不到用 id）。 */
+export function whenName(when: string, game: (id: string) => string | null = () => null): string {
+  if (!when || when === "always") return m.hotkeys_when_always();
+  if (when === "game") return m.hotkeys_when_game();
+  const id = when.startsWith("game:") ? when.slice(5) : when;
+  return m.hotkeys_when_profile({ game: game(id) ?? id });
+}
+
 /** 好几个冲突连成一句（“语音输入热键、《英雄联盟》的打开聊天框键”）。 */
 export function keyUseNames(uses: KeyUse[]): string {
   return uses.map(keyUseName).join(m.hotkeys_list_separator());

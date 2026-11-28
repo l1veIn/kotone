@@ -378,6 +378,10 @@ pub struct UiConfig {
     /// 左侧栏页面的顺序和隐藏（ADR 034 第六节）。空 = 默认。新字段，旧版本会忽略。
     #[serde(default)]
     pub sidebar: SidebarConfig,
+    /// 聊天页“准备好了吗”里点过“就用这个键”（ADR 054 第 4 条：呼叫键还是默认的时候，玩家说了就用它，这一行才算 ✓）。
+    /// 新字段，旧配置没有 = 没点过。
+    #[serde(default)]
+    pub call_key_chosen: bool,
 }
 
 /// 左侧栏（config.json `ui.sidebar`，ADR 034 第六节）：页面 id 的顺序（在各自的分组里排）和隐藏的页面。
@@ -1102,6 +1106,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     migrate_legacy_upgrade_json(&mut user);
     migrate_call_hotkey_json(&mut user);
     migrate_call_idle_json(&mut user);
+    migrate_call_mode_json(&mut user);
     migrate_plugins_json(&mut user);
     crate::hotkey_bindings::migrate_hotkeys_json(&mut user);
     merge_json(&mut merged, &user);
@@ -1227,6 +1232,24 @@ fn migrate_call_idle_json(user: &mut serde_json::Value) {
     if assistant.get("followUpSeconds").and_then(|v| v.as_u64()) == Some(0) {
         assistant.insert("callIdleSeconds".into(), 0.into());
     }
+}
+
+/// 呼叫以后怎么听的缺省改成了自动（ADR 054），只给新装：配置文件里没有 `assistant.callMode` 的老用户照旧是说一句就走，
+/// 读取时写明（旧版本认识这个值）。玩家选过的不动。
+fn migrate_call_mode_json(user: &mut serde_json::Value) {
+    let Some(object) = user.as_object_mut() else {
+        return;
+    };
+    let Some(assistant) = object
+        .entry("assistant")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    assistant
+        .entry("callMode")
+        .or_insert_with(|| "one-shot".into());
 }
 
 /// 插件重构（ADR 038）：旧的 `lol.enabled`（ADR 035，英雄联盟对局数据）搬到 `plugins.lol.sources.client`

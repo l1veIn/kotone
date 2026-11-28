@@ -3721,3 +3721,116 @@ async fn adr041_voice_input_and_game_chat_send_do_not_interleave() {
         "两段打字交错了：{log:?}"
     );
 }
+
+// ---------- ADR 054：说话键 / 呼叫键的“自动”和她的按住说话 ----------
+
+async fn wait_sent(sent: &Arc<Mutex<Vec<String>>>, timeout: Duration) {
+    let start = std::time::Instant::now();
+    while sent.lock().unwrap().is_empty() {
+        assert!(start.elapsed() < timeout, "等发送超时");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// 自动：按着的时候说完了也不判停；按了门槛以上松开 = 按住说话，松开就发。
+#[tokio::test]
+async fn auto_talk_key_holds_off_the_silence_stop_and_a_long_hold_sends_on_release() {
+    use kotone_core::hotkey_options::VoiceKeyMode;
+    let (orch, _emitter, sent) = make_one_shot_orchestrator(ScriptVad::speech_then_silence(3));
+    orch.on_talk_key(VoiceKeyMode::Auto, true, None, 150).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    // 平常 210ms 静音就判停；按着不算
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(sent.lock().unwrap().is_empty());
+    orch.on_talk_key(VoiceKeyMode::Auto, false, None, 150).await;
+    wait_sent(&sent, Duration::from_secs(2)).await;
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        &["对面打野在下路".to_string()]
+    );
+}
+
+/// 自动：点一下（短于门槛）= 说一句就走：松开不结束，说完由静音判停结束、发出去。
+#[tokio::test]
+async fn auto_talk_key_tap_is_one_shot() {
+    use kotone_core::hotkey_options::VoiceKeyMode;
+    let (orch, _emitter, sent) = make_one_shot_orchestrator(ScriptVad::speech_then_silence(3));
+    orch.on_talk_key(VoiceKeyMode::Auto, true, None, 300).await;
+    orch.on_talk_key(VoiceKeyMode::Auto, false, None, 300).await;
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Listening,
+        "点一下松开不结束"
+    );
+    wait_sent(&sent, Duration::from_secs(2)).await;
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        &["对面打野在下路".to_string()]
+    );
+}
+
+/// 说话键带了自己的方式（第 2 个键选了录音笔）：照它，不看 interactionMode（对讲机）。
+#[tokio::test]
+async fn a_talk_key_with_its_own_way_ignores_the_global_mode() {
+    use kotone_core::hotkey_options::VoiceKeyMode;
+    use kotone_core::interaction::InteractionMode;
+    let (orch, _emitter, _sent) = make_orchestrator(true);
+    orch.settings().write().unwrap().interaction_mode = Some(InteractionMode::PushToTalk);
+    orch.on_talk_key(VoiceKeyMode::Dictation, true, None, 300)
+        .await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    // 录音笔：松开不算
+    orch.on_talk_key(VoiceKeyMode::Dictation, false, None, 300)
+        .await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    // 再按一下结束，先预览
+    orch.on_talk_key(VoiceKeyMode::Dictation, true, None, 300)
+        .await;
+    wait_state(&orch, OrchestratorState::Preview, Duration::from_secs(2)).await;
+}
+
+/// 她的按住说话：按下开始听（不判停），松开交给她；她的自动点一下松开不结束。
+#[tokio::test]
+async fn her_hold_to_talk_hands_over_on_release_and_auto_tap_keeps_listening() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue =
+        kotone_core::automation::AutomationScheduler::open(dir.path().join("automation-runs.json"))
+            .unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let handler = Arc::new(AssistantTestHandler {
+        entered: Arc::new(tokio::sync::Notify::new()),
+        release: None,
+        requests: requests.clone(),
+    });
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(VecEmitter::default());
+    let orch = assistant_orchestrator(handler, queue, sent, emitter.clone());
+    orch.call_assistant_hold_press(None).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    // 按住说话不写“再按呼叫键结束”
+    assert!(!emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(event, payload)| {
+            event == "kotone://state" && payload["payload"]["manualStop"] == true
+        }));
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.call_assistant_release(None, None).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+
+    // 自动：点一下就松开（短于门槛）不结束，接着照说一句就走等说完
+    orch.cancel().await;
+    orch.call_assistant_auto_press(None, 8_000).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.call_assistant_release(None, Some(300)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    // 再按一下 = 说完了（说一句就走）
+    orch.call_assistant_auto_press(None, 8_000).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+    assert_eq!(requests.lock().unwrap().len(), 2);
+}

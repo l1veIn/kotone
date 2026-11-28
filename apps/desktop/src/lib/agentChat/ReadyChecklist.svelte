@@ -11,11 +11,13 @@
   import { m } from "$lib/paraglide/messages.js";
   import { companionName } from "$lib/stores/companion";
   import {
-    activateCatalogModel, companionStatus, getElevationStatus, restartAsAdmin, updateSettings,
+    activateCatalogModel, addHotkey, checkHotkey, companionStatus, getElevationStatus, restartAsAdmin, setHotkey, updateSettings,
     type CompanionStatus, type ConnectionInfo, type ElevationStatus,
   } from "../ipc";
+  import KeyCaptureButton from "../components/KeyCaptureButton.svelte";
   import { isDeepSeekConnection, switchToDeepSeek } from "../deepseekSetup";
-  import { hotkeyLabel } from "../hotkeyCombo";
+  import { hotkeyLabel, normalizeHotkeyCombo } from "../hotkeyCombo";
+  import { firstConflictName } from "../hotkeyNames";
   import { pluginEnabled, pluginName, pluginsStore, setPluginEnabled, setPluginSource, sourceEnabled, sourceName } from "../plugins";
   import { openTarget } from "../stores/navigation";
   import { errText, settingsStore, toast } from "../stores/ui";
@@ -27,7 +29,11 @@
     onOpenTalk: () => void;
   } = $props();
 
-  type Row = { id: string; ok: boolean; text: string; fix?: { label: string; run: () => unknown } };
+  /** `pickKey`：这一行是“按一下你想用的呼叫键”（录键 + 就用现在这个，ADR 054）。 */
+  type Row = { id: string; ok: boolean; text: string; fix?: { label: string; run: () => unknown }; pickKey?: boolean };
+
+  /** 新装时的呼叫键（同后端 DEFAULT_CALL_HOTKEY）。 */
+  const DEFAULT_CALL_KEY = "Ctrl+Backquote";
 
   let status = $state<CompanionStatus | null>(null);
   let elevation = $state<ElevationStatus | null>(null);
@@ -44,6 +50,38 @@
   const deepseek = $derived(connections.find((c) => c.kind === "remote" && c.hasApiKey && isDeepSeekConnection(c)) ?? null);
   const current = $derived(connections.find((c) => c.id === $settingsStore?.assistant.connectionId) ?? null);
   const callKey = $derived($settingsStore?.assistant.hotkey.trim() ?? "");
+  /**
+   * 呼叫键是玩家自己定的（ADR 054 第 4 条）：键不是新装的默认、或者加了第二个呼叫键、或者点过“就用这个键”
+   * （`ui.callKeyChosen`，新手引导里点“用推荐的”、录过键也算）。没定之前默认键照样能用，只是这一行提醒他绑一个顺手的。
+   */
+  const callKeyChosen = $derived.by(() => {
+    const settings = $settingsStore;
+    if (!settings || !callKey) return false;
+    const calls = (settings.hotkeys?.bindings ?? []).filter((b) => b.command === "kotone.call").length;
+    return !!settings.ui.callKeyChosen || calls > 1 || normalizeHotkeyCombo(callKey) !== normalizeHotkeyCombo(DEFAULT_CALL_KEY);
+  });
+
+  /** 录到一个键：鼠标侧键加成只在游戏里管用的第二个呼叫键（默认键留着，桌面上侧键还是“后退”）；别的键换掉现在的呼叫键。 */
+  async function pickCallKey(combo: string) {
+    if (busy) return;
+    busy = "call";
+    try {
+      const side = /(^|\+)Mouse[45]$/.test(combo);
+      const when = side ? "game" : undefined;
+      const conflict = firstConflictName(await checkHotkey(combo, side ? undefined : "kotone.call", when));
+      if (conflict) {
+        toast(false, m.voice_hotkey_conflict({ title: m.voice_hotkey_name_call(), conflict, key: hotkeyLabel(combo) }));
+        return;
+      }
+      settingsStore.set(side ? await addHotkey("kotone.call", combo, { when }) : await setHotkey("kotone.call", combo));
+      settingsStore.set(await updateSettings({ ui: { callKeyChosen: true } }));
+      toast(true, side && callKey
+        ? m.chat_ready_call_saved_game({ key: hotkeyLabel(combo), fallback: hotkeyLabel(callKey) })
+        : m.chat_ready_call_saved({ key: hotkeyLabel(combo) }));
+    } catch (error) {
+      toast(false, m.chat_ready_fix_failed({ error: errText(error) }));
+    } finally { busy = null; }
+  }
   const lol = $derived($pluginsStore.find((p) => p.manifest.id === "lol") ?? null);
 
   async function fix(id: string, run: () => unknown) {
@@ -70,9 +108,12 @@
           fix: { label: m.chat_ready_model_fix(), run: async () => { settingsStore.set((await switchToDeepSeek(deepseek.id, settings)).settings); } },
         });
     }
-    list.push(callKey
+    // 呼叫键：玩家自己定过才算 ✓；没定的“按一下你想用的键”（录键、就用现在这个）；没有呼叫键的照旧去「唤醒」
+    list.push(callKey && callKeyChosen
       ? { id: "call", ok: true, text: m.chat_ready_call_ok({ key: hotkeyLabel(callKey) }) }
-      : { id: "call", ok: false, text: m.chat_ready_call_missing({ name }), fix: { label: m.chat_ready_call_fix(), run: onOpenTalk } });
+      : callKey
+        ? { id: "call", ok: false, text: m.chat_ready_call_pick({ key: hotkeyLabel(callKey) }), pickKey: true }
+        : { id: "call", ok: false, text: m.chat_ready_call_missing({ name }), fix: { label: m.chat_ready_call_fix(), run: onOpenTalk }, pickKey: true });
     // 管理员身份（ADR 044）：不是 Windows 时没有这一行
     if (elevation?.supported) {
       const revision = elevation.adminPromptRevision;
@@ -133,7 +174,21 @@
         {#each rows as row (row.id)}
           <li class="flex min-h-7 items-center gap-2" data-testid={`chat-ready-${row.id}`} data-ok={row.ok ? "yes" : "no"}>
             {#if row.ok}<Check class="size-3.5 shrink-0 text-success" aria-label="✓" />{:else}<X class="size-3.5 shrink-0 text-destructive" aria-label="✗" />{/if}
-            <span class="min-w-0 flex-1 {row.ok ? 'text-muted-foreground' : 'text-foreground'}">{row.text}</span>
+            <span class="min-w-0 flex-1 {row.ok ? 'text-muted-foreground' : 'text-foreground'}">
+              {row.text}
+              {#if !row.ok && row.pickKey}
+                <span class="block text-xs text-muted-foreground" data-testid="chat-ready-call-hint">{m.chat_ready_call_hint()}</span>
+              {/if}
+            </span>
+            {#if !row.ok && row.pickKey}
+              <KeyCaptureButton label={m.chat_ready_call_capture()} capturingLabel={m.chat_ready_call_capturing()} testid="chat-ready-call-capture"
+                disabled={busy !== null} onCombo={pickCallKey} />
+              {#if callKey}
+                <Button size="sm" variant="ghost" class="h-7 shrink-0" data-testid="chat-ready-call-keep" disabled={busy !== null}
+                  onclick={() => void fix("call", async () => { settingsStore.set(await updateSettings({ ui: { callKeyChosen: true } })); })}>
+                  {m.chat_ready_call_keep({ key: hotkeyLabel(callKey) })}</Button>
+              {/if}
+            {/if}
             {#if !row.ok && row.fix}
               {@const action = row.fix}
               <Button size="sm" variant="outline" class="h-7 shrink-0" data-testid={`chat-ready-${row.id}-fix`} disabled={busy !== null}

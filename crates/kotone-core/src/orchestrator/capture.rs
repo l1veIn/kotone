@@ -29,6 +29,10 @@ pub(super) enum SessionOrigin {
     /// 呼叫键的录音笔（ADR 033 2026-11-26 修订）：按一下开始听，再按一下结束、直接交给她
     /// （不判停、没有预览）。会话 ID 和唤醒一样以 `assistant-wake-` 开头，宿主据此认作呼叫来的。
     CallDictation,
+    /// 呼叫键的按住说话（ADR 054）：按下开始听，松开交给她（不判停、没有预览）。界面上不写“再按呼叫键结束”。
+    CallHold,
+    /// 语音输入的键带了自己的方式（ADR 054，热键表那一条的 `mode`）：照这个预设开始，不看 `interactionMode`。
+    HotkeyPreset(crate::interaction::InteractionMode),
 }
 
 /// 录音的旁听者（评测录档、识别记录）：都要 PCM、识别中的字（第一个字的时间）、
@@ -97,7 +101,11 @@ impl Orchestrator {
     /// solo 连续模式逐句续录：与 begin 同路径，但「录制音」提示由壳做区分
     /// （capture_started 事件带 resumed=true，不播录制音效，只保留逐句发送音）。
     pub async fn begin_resumed(&self, purpose: SessionPurpose, gen: u64) -> Result<(), String> {
-        self.begin_inner(true, purpose, Some(gen), None).await
+        // 照键上的方式开始的这一轮（ADR 054）：续录也照它
+        let origin = (*self.resume_preset.lock().unwrap())
+            .map_or(SessionOrigin::Hotkey, SessionOrigin::HotkeyPreset);
+        self.begin_inner_from(true, purpose, Some(gen), None, origin)
+            .await
     }
 
     pub(super) async fn begin_inner(
@@ -107,11 +115,30 @@ impl Orchestrator {
         expected_gen: Option<u64>,
         input_ticket: Option<u64>,
     ) -> Result<(), String> {
+        self.begin_inner_from(
+            resumed,
+            purpose,
+            expected_gen,
+            input_ticket,
+            SessionOrigin::Hotkey,
+        )
+        .await
+    }
+
+    /// 同 [`Self::begin_inner`]，说明从哪里开始（语音输入的键带了自己的方式时是 `HotkeyPreset`，ADR 054）。
+    pub(super) async fn begin_inner_from(
+        &self,
+        resumed: bool,
+        purpose: SessionPurpose,
+        expected_gen: Option<u64>,
+        input_ticket: Option<u64>,
+        origin: SessionOrigin,
+    ) -> Result<(), String> {
         let _op = self.op.lock().await;
         if !self.input_ticket_is_current(input_ticket) {
             return Ok(());
         }
-        self.begin_admitted_with(resumed, purpose, expected_gen, SessionOrigin::Hotkey)
+        self.begin_admitted_with(resumed, purpose, expected_gen, origin)
     }
 
     /// 调用方持有 op；所有来源共享录音入场和失败收尾。
@@ -127,6 +154,14 @@ impl Orchestrator {
         }
         let settings = self.settings.read().unwrap().clone();
         let mut policy = Self::configured_policy(&settings, purpose);
+        // 上一次“还按着”没等到松开（钩子丢了松开那一下）：新会话不带着它，静音判停照常
+        self.key_held.store(false, Ordering::SeqCst);
+        // 语音输入这一轮照哪个方式（续录时沿用）
+        match origin {
+            SessionOrigin::HotkeyPreset(mode) => *self.resume_preset.lock().unwrap() = Some(mode),
+            SessionOrigin::Hotkey if !resumed => *self.resume_preset.lock().unwrap() = None,
+            _ => {}
+        }
         let no_speech_timeout_ms = match origin {
             SessionOrigin::Wake {
                 no_speech_timeout_ms,
@@ -135,12 +170,16 @@ impl Orchestrator {
                 policy = InteractionPolicy::from_preset(kotone_core_assistant_one_shot());
                 Some(no_speech_timeout_ms)
             }
-            SessionOrigin::CallDictation => {
-                // 录音笔：再按一下才结束；结束后直接交给她，不像语音输入的录音笔那样先预览。
+            SessionOrigin::CallDictation | SessionOrigin::CallHold => {
+                // 录音笔：再按一下才结束；按住说话：松开结束。结束后直接交给她，不像语音输入的录音笔那样先预览。
                 policy = InteractionPolicy {
                     post: PostFinalize::SendDirect,
                     ..InteractionPolicy::from_preset(crate::interaction::InteractionMode::Dictation)
                 };
+                None
+            }
+            SessionOrigin::HotkeyPreset(mode) => {
+                policy = InteractionPolicy::from_preset(mode);
                 None
             }
             SessionOrigin::Hotkey => None,
@@ -171,8 +210,10 @@ impl Orchestrator {
             }
             inner.purpose = purpose;
             let source = match origin {
-                SessionOrigin::Wake { .. } | SessionOrigin::CallDictation => "assistant-wake-",
-                SessionOrigin::Hotkey => "session-",
+                SessionOrigin::Wake { .. }
+                | SessionOrigin::CallDictation
+                | SessionOrigin::CallHold => "assistant-wake-",
+                SessionOrigin::Hotkey | SessionOrigin::HotkeyPreset(_) => "session-",
             };
             inner.process_case_id = Some(format!(
                 "{source}{}-{}",
@@ -257,6 +298,7 @@ impl Orchestrator {
             stt_rx,
             audio_err_rx,
             vad,
+            key_held: self.key_held.clone(),
             cancelled: cancelled_flag.clone(),
             observers,
             emitter: self.emitter.clone(),

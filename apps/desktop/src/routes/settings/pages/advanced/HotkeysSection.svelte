@@ -18,14 +18,17 @@
   import { Input } from "$lib/components/ui/input";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import KeyCaptureButton from "../../../../lib/components/KeyCaptureButton.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
   import CustomHotkeyForm from "./CustomHotkeyForm.svelte";
   import {
-    confirmHotkey, getHotkeyBindingOptions, getHotkeyTable, removeCustomHotkey, setHotkey, usesLegacyVoiceInput,
+    addHotkey, checkHotkey, confirmHotkey, getHotkeyBindingOptions, getHotkeyTable, removeCustomHotkey, setHotkey, setHotkeyOptions,
+    usesLegacyVoiceInput, VOICE_KEY_MODES,
     type HotkeyBinding, type HotkeyBindingOptions, type HotkeyTable, type KeyUse, type Settings,
   } from "../../../../lib/ipc";
   import { listAutomations, subscribeAutomations, type Automation } from "../../../../lib/automation";
   import { hotkeyLabel } from "../../../../lib/hotkeyCombo";
-  import { keyUseDetail, keyUseName, keyUseNames, keyUseSource } from "../../../../lib/hotkeyNames";
+  import { firstConflictName, keyUseDetail, keyUseName, keyUseNames, keyUseSource, voiceModeName, whenName } from "../../../../lib/hotkeyNames";
   import { openLocation } from "../../../../lib/stores/navigation";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
@@ -110,6 +113,8 @@
     return table.bindings.map((use) => {
       const binding = bindingOf(use);
       let name = keyUseName(use);
+      // 同一个命令的第 2 个键起（ADR 054）
+      if ((use.nth ?? 1) >= 2) name = m.hotkeys_extra_name({ name, n: use.nth ?? 2 });
       let detail = keyUseDetail(use, $settingsStore);
       if (use.action === "automation") {
         const auto = automationText(binding);
@@ -147,6 +152,79 @@
 
   async function save(row: Row, key: string) {
     settingsStore.set(await setHotkey(row.use.id, key));
+  }
+
+  // ---------- 呼叫键、说话：方式、什么时候管用、再加一个键（ADR 054） ----------
+
+  const modeOptions = VOICE_KEY_MODES.map((mode) => ({ value: mode, label: voiceModeName(mode) }));
+  /** 游戏配置（游戏配置里的键带着游戏名）：“只在《x》里”能选的。 */
+  const games = $derived.by(() => {
+    const seen = new Map<string, string>();
+    // 通用（generic）认不出窗口，不能“只在它里面”
+    for (const key of table?.gameKeys ?? []) {
+      if (key.owner && key.owner !== "generic" && !seen.has(key.owner)) seen.set(key.owner, key.ownerName ?? key.owner);
+    }
+    return [...seen].map(([id, name]) => ({ id, name }));
+  });
+  function gameName(id: string): string | null {
+    return games.find((g) => g.id === id)?.name ?? null;
+  }
+  function whenOptions(current: string) {
+    const options = [
+      { value: "always", label: whenName("always", gameName) },
+      { value: "game", label: whenName("game", gameName) },
+      ...games.map((g) => ({ value: `game:${g.id}`, label: whenName(`game:${g.id}`, gameName) })),
+    ];
+    return options.some((o) => o.value === current) ? options : [...options, { value: current, label: whenName(current, gameName) }];
+  }
+  /** 两个有方式的命令：每个命令最后一行下面放“再加一个键”。 */
+  const lastOfCommand = $derived.by(() => {
+    const last = new Map<string, string>();
+    for (const row of rows) if (row.use.mode && row.use.command) last.set(row.use.command, row.use.id);
+    return new Set(last.values());
+  });
+
+  async function saveOptions(row: Row, options: { mode?: string; when?: string }) {
+    if (busy) return;
+    busy = row.use.id;
+    try {
+      settingsStore.set(await setHotkeyOptions(row.use.id, options));
+      toast(true, options.mode
+        ? m.hotkeys_mode_saved({ name: row.name, mode: voiceModeName(options.mode) })
+        : m.hotkeys_when_saved({ name: row.name, when: whenName(options.when ?? "always", gameName) }));
+    } catch (error) {
+      toast(false, errText(error));
+    } finally { busy = ""; }
+  }
+
+  /** 录到的键加成这个命令的又一个键；鼠标侧键只在游戏里管用（桌面上照样是“后退”）。 */
+  async function addKey(row: Row, combo: string) {
+    const command = row.use.command;
+    if (!command || busy) return;
+    const when = /(^|\+)Mouse[45]$/.test(combo) ? "game" : undefined;
+    busy = row.use.id;
+    try {
+      const conflict = firstConflictName(await checkHotkey(combo, undefined, when));
+      if (conflict) {
+        toast(false, m.voice_hotkey_conflict({ title: keyUseName(row.use), conflict, key: hotkeyLabel(combo) }));
+        return;
+      }
+      settingsStore.set(await addHotkey(command, combo, { when }));
+      toast(true, m.hotkeys_key_added({ key: hotkeyLabel(combo), when: whenName(when ?? "always", gameName) }));
+    } catch (error) {
+      toast(false, errText(error));
+    } finally { busy = ""; }
+  }
+
+  async function removeKey(row: Row) {
+    if (busy) return;
+    busy = row.use.id;
+    try {
+      settingsStore.set(await setHotkey(row.use.id, ""));
+      toast(true, m.hotkeys_key_removed({ key: row.key }));
+    } catch (error) {
+      toast(false, errText(error));
+    } finally { busy = ""; }
   }
 
   async function resetToDefault(row: Row) {
@@ -289,8 +367,32 @@
         <CustomHotkeyForm entry={row.binding} {options} {automations} onDone={done} onCancel={() => (editing = null)} />
       </div>
     {:else if row.editable}
-      <HotkeyField id={row.use.id} statusId={row.use.statusId} title={row.name} value={row.use.key} compact
+      <HotkeyField id={row.use.id} statusId={row.use.statusId} title={row.name} value={row.use.key} compact when={row.use.when}
         onSave={(key) => save(row, key)} />
+    {/if}
+    {#if row.use.mode && row.editable}
+      <!-- 呼叫键、说话：方式、什么时候管用（ADR 054）；常用的在这里，别的让她改 -->
+      <div class="mt-2 flex flex-wrap items-center gap-2" data-testid={`hotkeys-options-${row.use.id}`}>
+        <SelectField class="w-36" ariaLabel={m.hotkeys_mode_aria({ name: row.name })} testid={`hotkeys-mode-${row.use.id}`}
+          value={row.use.mode} options={modeOptions} disabled={!!busy || (!row.use.key && (row.use.nth ?? 1) >= 2)}
+          onchange={(mode) => void saveOptions(row, { mode })} />
+        {#if row.use.key}
+          <SelectField class="w-52" ariaLabel={m.hotkeys_when_aria({ name: row.name })} testid={`hotkeys-when-${row.use.id}`}
+            value={row.use.when ?? "always"} options={whenOptions(row.use.when ?? "always")} disabled={!!busy}
+            onchange={(when) => void saveOptions(row, { when })} />
+        {/if}
+        {#if (row.use.nth ?? 1) >= 2}
+          <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            data-testid={`hotkeys-remove-key-${row.use.id}`} disabled={!!busy}
+            onclick={() => void removeKey(row)}><Trash2 class="size-3.5" />{m.hotkeys_remove_key()}</Button>
+        {/if}
+      </div>
+    {/if}
+    {#if lastOfCommand.has(row.use.id) && row.editable && row.use.key}
+      <div class="mt-2">
+        <KeyCaptureButton label={m.hotkeys_add_key()} capturingLabel={m.hotkeys_add_key_capturing()} variant="ghost"
+          testid={`hotkeys-add-key-${row.use.command}`} disabled={!!busy} onCombo={(combo) => addKey(row, combo)} />
+      </div>
     {/if}
   </div>
 {/snippet}

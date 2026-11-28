@@ -74,6 +74,14 @@ pub enum InteractionMode {
 /// 映射：PushToTalk → Hold（按住开始/松开结束）；Dictation / OneShot / Solo → Toggle
 /// （点按开始，结束分别由再按 / VAD 判停 / 再按停止负责）。
 pub fn effective_hotkey_mode(settings: &Settings) -> HotkeyMode {
+    // 说话的第一个键写了自己的方式（ADR 054）：自动、按住说话要松开那一下
+    if let Some(mode) = settings.binding_mode(crate::hotkey_bindings::CMD_TALK, 1) {
+        return if mode.uses_release() {
+            HotkeyMode::Hold
+        } else {
+            HotkeyMode::Toggle
+        };
+    }
     match settings.interaction_mode {
         Some(InteractionMode::PushToTalk) => HotkeyMode::Hold,
         Some(InteractionMode::Dictation)

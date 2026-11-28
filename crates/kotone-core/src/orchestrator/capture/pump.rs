@@ -27,6 +27,8 @@ pub(super) struct CapturePump {
     pub(super) stt_rx: mpsc::UnboundedReceiver<SttEvent>,
     pub(super) audio_err_rx: Option<mpsc::UnboundedReceiver<String>>,
     pub(super) vad: Option<VadStop>,
+    /// 自动（ADR 054）：键还按着时静音判停不算数（按着 = 还在说）。
+    pub(super) key_held: Arc<AtomicBool>,
     /// 取消标记：收尾时 session.cancel() 还是交还 session
     pub(super) cancelled: Arc<AtomicBool>,
     /// 录音的旁听者，按登记顺序通知（评测录档在前、识别记录在后）
@@ -177,6 +179,10 @@ impl CapturePump {
                         }
                     }
                     decision = tracker.push(speech);
+                    // 自动的键还按着：说完了、一直没开口都不算（松开时由热键决定，ADR 054）
+                    if self.key_held.load(Ordering::SeqCst) {
+                        decision = crate::vad::StopDecision::Continue;
+                    }
                     if decision != crate::vad::StopDecision::Continue {
                         break;
                     }

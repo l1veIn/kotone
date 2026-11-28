@@ -11,6 +11,10 @@
 //! - Esc 取消：会话激活（session_active）时 Esc down → Cancel 并吞键，
 //!   不再依赖 RegisterHotKey 临时注册。
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+pub use crate::hotkey_options::KeyGate;
+
 /// 热键触发模式（用户在设置中选择，默认 toggle 引导时确认）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -86,6 +90,30 @@ pub trait HotkeySource: Send + Sync {
             return Err("当前热键后端不支持具名按住模式".into());
         }
         self.set_named_hotkey(id, combo)
+    }
+
+    /// 带门的具名热键（ADR 054：只在游戏里管用，门关着时键原样放行）。放行只有低层钩子做得到：
+    /// 别的后端只接受一直管用的。
+    fn set_named_hotkey_gated(
+        &self,
+        id: &str,
+        combo: Option<&str>,
+        mode: HotkeyMode,
+        gate: KeyGate,
+    ) -> Result<(), String> {
+        if gate != KeyGate::Always && combo.is_some_and(|value| !value.trim().is_empty()) {
+            return Err("“只在游戏里”的键要用低层键鼠钩子，当前热键后端做不到".into());
+        }
+        self.set_named_hotkey_mode(id, combo, mode)
+    }
+
+    /// 主键的门（说话的第一个键带 `when` 时）。默认只接受一直管用。
+    fn set_main_gate(&self, gate: KeyGate) -> Result<(), String> {
+        if gate == KeyGate::Always {
+            Ok(())
+        } else {
+            Err("“只在游戏里”的键要用低层键鼠钩子，当前热键后端做不到".into())
+        }
     }
 
     /// 注销全部具名辅助热键（主热键与 Esc 取消不受影响）。默认无操作。
@@ -364,9 +392,13 @@ pub struct HookMatcher {
     spec: HotkeySpec,
     mode: HotkeyMode,
     enabled: bool,
-    /// 具名辅助热键：稳定 id、严格修饰键匹配 spec 和触发模式。声明顺序即
-    /// 优先级（与主键同 vk 不同修饰键时互不干扰，未命中的具名键落回主键分支）。
-    named_specs: Vec<(String, HotkeySpec, HotkeyMode)>,
+    /// 具名辅助热键：稳定 id、严格修饰键匹配 spec、触发模式和门（什么时候管用，ADR 054）。声明顺序即
+    /// 优先级（与主键同 vk 不同修饰键时互不干扰，未命中的具名键落回主键分支）。门关着的键像没登记一样。
+    named_specs: Vec<(String, HotkeySpec, HotkeyMode, KeyGate)>,
+    /// 主键的门（说话的第一个键带 `when` 时）。
+    main_gate: KeyGate,
+    /// 最前面是哪个游戏（[`crate::hotkey_options::foreground_game_cell`]；测试换成自己的）。回调里只读它。
+    foreground: &'static AtomicU64,
     /// 被动具名热键 id：命中照样产生事件，但按下、重复按下、松开都不吞键（键照常传给游戏）。
     /// 用于语音识别没准备好时的提示（D8：只提示、不吞键）。
     passive: Vec<String>,
@@ -402,6 +434,8 @@ impl HookMatcher {
             mode,
             enabled: true,
             named_specs: Vec::new(),
+            main_gate: KeyGate::Always,
+            foreground: crate::hotkey_options::foreground_game_cell(),
             passive: Vec::new(),
             named_down: Vec::new(),
             named_missed: None,
@@ -424,9 +458,22 @@ impl HookMatcher {
     pub fn set_config(&mut self, spec: HotkeySpec, mode: HotkeyMode) {
         let named_specs = std::mem::take(&mut self.named_specs);
         let passive = std::mem::take(&mut self.passive);
+        let foreground = self.foreground;
         *self = Self::new(spec, mode);
         self.named_specs = named_specs;
         self.passive = passive;
+        self.foreground = foreground;
+    }
+
+    /// 主键的门（改键 `set_config` 会重置成一直，之后再设）。
+    pub fn set_main_gate(&mut self, gate: KeyGate) {
+        self.main_gate = gate;
+    }
+
+    /// 测试用：换一个“最前面是哪个游戏”的原子量。
+    pub fn with_foreground_source(mut self, foreground: &'static AtomicU64) -> Self {
+        self.foreground = foreground;
+        self
     }
 
     /// 配置/更新/清除一个具名热键（None = 关闭该 id）。同 id 已存在时原位更新
@@ -436,6 +483,17 @@ impl HookMatcher {
     }
 
     pub fn set_named_spec_mode(&mut self, id: &str, spec: Option<HotkeySpec>, mode: HotkeyMode) {
+        self.set_named_spec_gated(id, spec, mode, KeyGate::Always);
+    }
+
+    /// 同 [`Self::set_named_spec_mode`]，带门（ADR 054：只在游戏里管用的键，门关着时原样放行）。
+    pub fn set_named_spec_gated(
+        &mut self,
+        id: &str,
+        spec: Option<HotkeySpec>,
+        mode: HotkeyMode,
+        gate: KeyGate,
+    ) {
         self.passive.retain(|existing| existing != id);
         self.named_down.retain(|existing| existing != id);
         match spec {
@@ -443,23 +501,31 @@ impl HookMatcher {
                 if let Some(entry) = self
                     .named_specs
                     .iter_mut()
-                    .find(|(existing, _, _)| existing == id)
+                    .find(|(existing, _, _, _)| existing == id)
                 {
                     entry.1 = spec;
                     entry.2 = mode;
+                    entry.3 = gate;
                 } else {
-                    self.named_specs.push((id.to_string(), spec, mode));
+                    self.named_specs.push((id.to_string(), spec, mode, gate));
                 }
             }
-            None => self.named_specs.retain(|(existing, _, _)| existing != id),
+            None => self
+                .named_specs
+                .retain(|(existing, _, _, _)| existing != id),
         }
     }
 
     /// 配置/清除一个被动具名热键（None = 关闭该 id）：命中时产生 `NamedHotkey` 事件，
     /// 但这个键的按下、重复按下和松开都照常传给前台程序。
     pub fn set_passive_spec(&mut self, id: &str, spec: Option<HotkeySpec>) {
+        self.set_passive_spec_gated(id, spec, KeyGate::Always);
+    }
+
+    /// 同 [`Self::set_passive_spec`]，带门。
+    pub fn set_passive_spec_gated(&mut self, id: &str, spec: Option<HotkeySpec>, gate: KeyGate) {
         let enabled = spec.is_some();
-        self.set_named_spec_mode(id, spec, HotkeyMode::Toggle);
+        self.set_named_spec_gated(id, spec, HotkeyMode::Toggle, gate);
         if enabled {
             self.passive.push(id.to_string());
         }
@@ -578,11 +644,13 @@ impl HookMatcher {
         // 一次物理按下只按按下那一刻的修饰键算（和主键位一样）：按住不放时先松开 / 换了修饰键，
         // 后面的重复按下仍归按下时命中的那一个（吞、不再触发），没命中的仍算没命中（放行、不触发），
         // 不会换成同一个键的另一个热键；按住的热键照样等这个键松开才算松开。
+        // 最前面是哪个游戏：只读一个原子量（钩子回调里不做别的，ADR 054）
+        let foreground = self.foreground.load(Ordering::Relaxed);
         if down {
-            if let Some((id, _, _)) = self
+            if let Some((id, _, _, _)) = self
                 .named_specs
                 .iter()
-                .find(|(id, ns, _)| ns.vk == vk && self.named_down.iter().any(|d| d == id))
+                .find(|(id, ns, _, _)| ns.vk == vk && self.named_down.iter().any(|d| d == id))
             {
                 // 已命中按住的重复 down：吞（被动键放行）但不重复触发
                 return MatchOutcome {
@@ -601,8 +669,13 @@ impl HookMatcher {
             if main_held {
                 break; // 这个键正作为主键按着：重复按下和松开都归主键分支
             }
-            let (id, ns, mode) = &self.named_specs[i];
+            let (id, ns, mode, gate) = &self.named_specs[i];
             if vk != ns.vk {
+                continue;
+            }
+            // 门关着（只在游戏里管用、现在不在游戏里）：这个键像没登记——不吞、不触发、不算没命中。
+            // 按下时开着的那一次，松开照样归它（上面的 named_down 和下面的松开分支）
+            if down && !gate.open(foreground) {
                 continue;
             }
             // 被动提示键：事件照发，键照常传给游戏。
@@ -673,6 +746,10 @@ impl HookMatcher {
             return PASS;
         }
         if self.enabled && vk == self.spec.vk {
+            // 主键的门关着（说话的第一个键只在游戏里管用）：原样放行，也不报诊断
+            if down && !self.main_down && !self.main_gate.open(foreground) {
+                return PASS;
+            }
             return if down {
                 if self.main_down {
                     // 按住不放的重复 down：命中过则继续吞（防游戏收到连发），不产生事件

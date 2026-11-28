@@ -44,6 +44,71 @@ function collides(use: KeyUse, key: string): boolean {
   return use.combo === combo;
 }
 
+// ---------- ADR 054：一个命令几个键、方式、什么时候管用（同后端 `hotkey_options`） ----------
+
+/** 同后端 `KeyWhen::parse` + `as_string`：always / game / game:<id>。 */
+function normWhen(when: unknown): string {
+  const value = typeof when === "string" ? when.trim() : "";
+  if (!value || value === "always") return "always";
+  if (value === "game" || value === "game:") return "game";
+  const id = value.startsWith("game:") ? value.slice(5).trim() : value;
+  return id ? `game:${id}` : "game";
+}
+
+/** 同后端 `KeyWhen::overlaps`。 */
+function overlaps(a: string | undefined, b: string | undefined): boolean {
+  const x = normWhen(a);
+  const y = normWhen(b);
+  return x === "always" || y === "always" || x === "game" || y === "game" || x === y;
+}
+
+function collidesAt(use: KeyUse, key: string, when?: string): boolean {
+  return overlaps(use.when, when) && collides(use, key);
+}
+
+const VOICE_MODES = ["auto", "hold", "one-shot", "dictation", "continuous"] as const;
+type Mode = (typeof VOICE_MODES)[number];
+
+/** 同后端 `VoiceKeyMode::parse`。 */
+function parseMode(value: unknown): Mode | null {
+  const aliases: Record<string, Mode> = { "push-to-talk": "hold", solo: "continuous", call: "continuous" };
+  const text = typeof value === "string" ? value.trim() : "";
+  return (VOICE_MODES as readonly string[]).includes(text) ? (text as Mode) : aliases[text] ?? null;
+}
+
+function isVoice(command: string): boolean {
+  return command === "kotone.call" || command === "voice-input.talk";
+}
+
+/** 同后端 `global_voice_mode`：她的 callMode（通话可是 0 秒 = 说一句就走），说话的 interactionMode（null = 没有）。 */
+function globalMode(settings: Settings, command: string): Mode | null {
+  if (command === "kotone.call") {
+    const mode = settings.assistant.callMode ?? "one-shot";
+    if (mode === "call") return (settings.assistant.callIdleSeconds ?? 30) === 0 ? "one-shot" : "continuous";
+    return parseMode(mode) ?? "one-shot";
+  }
+  return settings.interactionMode ? parseMode(settings.interactionMode) : null;
+}
+
+function commandBindings(settings: Settings, command: string): HotkeyBinding[] {
+  return (settings.hotkeys?.bindings ?? []).filter((b) => b.command === command);
+}
+
+/** 同后端 `split_nth`：`kotone.call~2` → [`kotone.call`, 2]。 */
+function splitNth(id: string): [string, number] {
+  const match = /^(.*)~(\d+)$/.exec(id);
+  const n = match ? Number(match[2]) : 1;
+  return match && n >= 2 ? [match[1], n] : [id, 1];
+}
+
+/** 预览的第一个键存在旧字段里：表里没有这一条时补上，好往后面加。 */
+function ensureFirst(settings: Settings, command: (typeof COMMANDS)[number]): void {
+  if (commandBindings(settings, command.command).length) return;
+  const key = mirror(settings, command.field);
+  if (!key) return;
+  settings.hotkeys = { ...(settings.hotkeys ?? {}), bindings: [...(settings.hotkeys?.bindings ?? []), { key, command: command.command }] };
+}
+
 function entry(id: string, key: string, source: KeySource, label: string, page: string, field: string, extra: Partial<KeyUse> = {}): KeyUse {
   return { id, key: key.trim(), combo: canonicalCombo(key), source, label, page, field, enabled: true, ...extra };
 }
@@ -97,8 +162,27 @@ const PAGE = "设置 → 热键";
 
 function commandRow(settings: Settings, c: (typeof COMMANDS)[number], plugin?: { owner: string; ownerName: string; enabled: boolean }): KeyUse {
   const field = c.field === "call" ? "assistant.hotkey" : c.field === "talk" ? "hotkey.key" : c.field;
+  const binding = commandBindings(settings, c.command)[0];
   return entry(c.command, mirror(settings, c.field), plugin ? "plugin" : "core", NAMES[c.command], PAGE, field, {
     command: c.command, statusId: c.statusId, ...(c.defaultKey ? { defaultKey: c.defaultKey } : {}), ...(plugin ?? {}),
+    ...voiceExtra(settings, c.command, binding),
+  });
+}
+
+/** 方式和什么时候管用（同后端 `command_row`）。 */
+function voiceExtra(settings: Settings, command: string, binding: HotkeyBinding | undefined): Partial<KeyUse> {
+  const own = isVoice(command) ? parseMode(binding?.mode) : null;
+  const mode = isVoice(command) ? own ?? globalMode(settings, command) : null;
+  return { when: normWhen(binding?.when), ...(mode ? { mode } : {}), ...(own ? { ownMode: true } : {}) };
+}
+
+/** 同一个命令的第 2 个键起（ADR 054）：行 id `<命令>~<n>`，登记 id `<旧 id>~<n>`，存在热键表里。 */
+function extraRows(settings: Settings, c: (typeof COMMANDS)[number], plugin?: { owner: string; ownerName: string; enabled: boolean }): KeyUse[] {
+  return commandBindings(settings, c.command).slice(1).map((binding, index) => {
+    const nth = index + 2;
+    return entry(`${c.command}~${nth}`, String(binding.key ?? ""), plugin ? "plugin" : "core", NAMES[c.command], PAGE, "hotkeys.bindings", {
+      command: c.command, statusId: `${c.statusId}~${nth}`, nth, ...(plugin ?? {}), ...voiceExtra(settings, c.command, binding),
+    });
   });
 }
 
@@ -129,11 +213,11 @@ function bindings({ settings, voiceInput, lol }: HotkeySources): KeyUse[] {
   const out: KeyUse[] = [];
   for (const c of COMMANDS.filter((c) => c.command.startsWith("kotone."))) {
     if (legacyOnly && c.command !== "kotone.speech-toggle") continue;
-    out.push(commandRow(settings, c));
+    out.push(commandRow(settings, c), ...extraRows(settings, c));
   }
   out.push(entry("escape", "Escape", "fixed", "Esc", "", "", { detail: "取消这次录音；她操作游戏时让她停下" }));
   const plugin = { owner: voiceInput.id, ownerName: voiceInput.name, enabled: voiceInput.enabled };
-  for (const c of COMMANDS.filter((c) => c.command.startsWith("voice-input."))) out.push(commandRow(settings, c, plugin));
+  for (const c of COMMANDS.filter((c) => c.command.startsWith("voice-input."))) out.push(commandRow(settings, c, plugin), ...extraRows(settings, c, plugin));
   if (lol) for (const p of LOL_PRESETS) out.push(presetRow(settings, p, lol));
   if (!legacyOnly) {
     // 自己加的（第 3 期，后端 `hotkey_custom`）：在热键表里，每条一行，行 id 是 `custom.<id>`
@@ -260,6 +344,13 @@ export function presetStatus(src: HotkeySources): NamedHotkeyStatus[] {
     .map((row) => ({ id: row.id, key: row.blocked ? null : row.key, error: row.blocked ?? null }));
 }
 
+/** 呼叫键、说话的第 2 个键起（同后端：登记 id `<旧 id>~<n>`，随语音识别登记）。 */
+export function extraStatus(src: HotkeySources, running: boolean): NamedHotkeyStatus[] {
+  return bindings(src)
+    .filter((row) => (row.nth ?? 1) >= 2 && row.key && row.statusId)
+    .map((row) => ({ id: row.statusId!, key: running ? row.key : null, error: null }));
+}
+
 /** 同后端 `hotkey_binding_options`。 */
 export function bindingOptions(settings: Settings): HotkeyBindingOptions {
   return { tools: MOCK_TOOLS.map((t) => ({ ...t, ...decisionOf(settings, t) })), pages: MOCK_PAGES };
@@ -343,7 +434,9 @@ function gameKeys(profiles: GameProfile[], activeProfileId: string | null | unde
       if (!key || seen.includes(combo || key)) continue;
       seen.push(combo || key);
       const label = { "open-chat": "打开聊天框键", channel: `「${detail}」频道的开聊天框键`, send: "发送键", console: "控制台触发键" }[gameKey];
-      out.push(entry(id, key, "game", label, "游戏列表", "", { owner: profile.id, ownerName: profile.displayName, gameKey, ...(detail ? { detail } : {}) }));
+      out.push(entry(id, key, "game", label, "游戏列表", "", {
+        owner: profile.id, ownerName: profile.displayName, gameKey, when: `game:${profile.id}`, ...(detail ? { detail } : {}),
+      }));
     }
   }
   return out;
@@ -362,7 +455,7 @@ export function hotkeyTable(src: HotkeySources): HotkeyTable {
   const rows = bindings(src);
   for (const row of rows) {
     const conflicts = [...rows, ...game]
-      .filter((other) => other.id !== row.id && (collides(other, row.key) || collides(row, other.key)))
+      .filter((other) => other.id !== row.id && (collidesAt(other, row.key, row.when) || collidesAt(row, other.key, other.when)))
       .map((other) => other.id);
     if (conflicts.length) row.conflicts = conflicts;
   }
@@ -375,14 +468,16 @@ const COMMON_GAME_KEYS = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F9", "F10",
 function isSelf(settings: Settings, use: KeyUse, except?: string): boolean {
   if (!except) return false;
   const custom = customOf(settings, except);
-  return use.id === except || use.command === except || (!!use.command && commandOf(except)?.command === use.command)
+  const first = (use.nth ?? 1) <= 1;
+  return use.id === except || use.statusId === except
+    || (first && (use.command === except || (!!use.command && commandOf(except)?.command === use.command)))
     || (!!custom && use.id === `custom.${custom.id}`);
 }
 
-export function checkHotkey(src: HotkeySources, key: string, except?: string): HotkeyCheck {
+export function checkHotkey(src: HotkeySources, key: string, except?: string, when?: string): HotkeyCheck {
   const trimmed = key.trim();
   const conflicts = [...bindings(src), ...gameKeys(src.profiles, src.settings.activeProfileId)]
-    .filter((use) => !isSelf(src.settings, use, except) && collides(use, trimmed));
+    .filter((use) => !isSelf(src.settings, use, except) && collidesAt(use, trimmed, when));
   const warnings = COMMON_GAME_KEYS.some((k) => k.toLowerCase() === trimmed.toLowerCase())
     ? [`「${trimmed}」是常见游戏/系统键位，可能与游戏内操作冲突`] // i18n-ignore：后端原样给的提示（预览用假数据）
     : [];
@@ -395,8 +490,24 @@ export function setHotkey(src: HotkeySources, id: string, key: string): void {
   // i18n-ignore-start：后端原样给的错误（预览用假数据）
   if (trimmed && !canonicalCombo(trimmed)) throw new Error(`认不出「${trimmed}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按`);
   const isQuick = id.startsWith("custom.") || /^quick-message-\d+$/.test(id);
-  const command = commandOf(id);
+  const [base, nth] = splitNth(id);
+  const command = commandOf(base);
   const preset = presetOf(id);
+  // 第 2 个键起（ADR 054）：改那一条，清空 = 删掉；有几个时清掉第一个只删它自己
+  if (command && (nth >= 2 || (!trimmed && commandBindings(src.settings, command.command).length > 1))) {
+    const target = commandBindings(src.settings, command.command)[nth - 1];
+    if (!target) throw new Error(`${command.command} 没有第 ${nth} 个键`);
+    if (trimmed) {
+      const conflict = checkHotkey(src, trimmed, id, target.when).conflicts[0];
+      if (conflict) throw new Error(conflictError(trimmed, conflict));
+      target.key = trimmed;
+    } else {
+      src.settings.hotkeys = { ...src.settings.hotkeys, bindings: (src.settings.hotkeys?.bindings ?? []).filter((b) => b !== target) };
+    }
+    const first = commandBindings(src.settings, command.command)[0];
+    setMirror(src.settings, command.field, String(first?.key ?? ""));
+    return;
+  }
   if (!isQuick && !command && !preset) throw new Error(id === "escape" ? "Esc 是固定的，不能改" : `「${id}」在这里改不了`);
   // i18n-ignore-end
   if (trimmed) {
@@ -413,7 +524,70 @@ export function setHotkey(src: HotkeySources, id: string, key: string): void {
   // 插件的预设没有旧字段，键只在热键表里
   if (command) setMirror(settings, command.field, trimmed);
   const name = command?.command ?? preset!.command;
-  const list: HotkeyBinding[] = (settings.hotkeys?.bindings ?? []).filter((b) => b.command !== name);
-  if (trimmed) list.push({ key: trimmed, command: name });
-  settings.hotkeys = { bindings: list };
+  // 第一条：改它的键（方式、什么时候管用留着），没有就加
+  const all = settings.hotkeys?.bindings ?? [];
+  const first = all.find((b) => b.command === name);
+  let list: HotkeyBinding[];
+  if (!trimmed) list = all.filter((b) => b.command !== name);
+  else if (first) list = all.map((b) => (b === first ? { ...b, key: trimmed } : b));
+  else list = [...all, { key: trimmed, command: name }];
+  settings.hotkeys = { ...(settings.hotkeys ?? {}), bindings: list };
+}
+
+/** 同后端 `set_hotkey_options`：第一个键的方式写进全局字段（说话的“自动”写在那一条上），第 2 个起写在那一条上。 */
+export function setHotkeyOptions(src: HotkeySources, id: string, options: { mode?: string; when?: string }): void {
+  const { settings } = src;
+  const [base, nth] = splitNth(id);
+  const command = commandOf(base);
+  // i18n-ignore-start：后端原样给的错误（预览用假数据）
+  if (!command) throw new Error(`「${id}」在这里改不了`);
+  ensureFirst(settings, command);
+  const target = commandBindings(settings, command.command)[nth - 1];
+  if (options.mode !== undefined) {
+    const mode = parseMode(options.mode);
+    if (!mode) throw new Error(`不认识的方式「${options.mode}」：auto / hold / one-shot / dictation / continuous`);
+    if (!isVoice(command.command)) throw new Error(`「${command.command}」没有方式可选，只有呼叫键和说话有`);
+    if (nth >= 2) {
+      if (!target) throw new Error(`${command.command} 没有第 ${nth} 个键`);
+      target.mode = mode;
+    } else if (command.command === "kotone.call") {
+      settings.assistant.callMode = mode === "continuous" ? "call" : mode;
+      if (mode === "continuous" && settings.assistant.callIdleSeconds === 0) settings.assistant.callIdleSeconds = 30;
+      if (target) delete target.mode;
+    } else if (mode === "auto") {
+      if (!target) throw new Error("先给说话设一个键，再选“自动”");
+      target.mode = "auto";
+    } else {
+      settings.interactionMode = ({ hold: "push-to-talk", "one-shot": "one-shot", dictation: "dictation", continuous: "solo" } as const)[mode];
+      if (target) delete target.mode;
+    }
+  }
+  if (options.when !== undefined) {
+    if (!target) throw new Error(`${command.command} 没有第 ${nth} 个键`);
+    const when = normWhen(options.when);
+    if (when === "always") delete target.when;
+    else target.when = when;
+  }
+  // i18n-ignore-end
+}
+
+/** 同后端 `add_hotkey`：给命令再加一个键；新造成的冲突不让存。 */
+export function addHotkey(src: HotkeySources, commandName: string, key: string, options: { mode?: string; when?: string } = {}): void {
+  const trimmed = key.trim();
+  const command = commandOf(commandName);
+  // i18n-ignore-start：后端原样给的错误（预览用假数据）
+  if (!command) throw new Error(`「${commandName}」在这里改不了`);
+  if (!canonicalCombo(trimmed)) throw new Error(`认不出「${trimmed}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按`);
+  const mode = options.mode === undefined ? null : parseMode(options.mode);
+  if (options.mode !== undefined && !mode) throw new Error(`不认识的方式「${options.mode}」：auto / hold / one-shot / dictation / continuous`);
+  // i18n-ignore-end
+  const when = normWhen(options.when);
+  const conflict = checkHotkey(src, trimmed, undefined, when).conflicts[0];
+  if (conflict) throw new Error(conflictError(trimmed, conflict));
+  ensureFirst(src.settings, command);
+  const binding: HotkeyBinding = { key: trimmed, command: command.command };
+  if (mode && isVoice(command.command)) binding.mode = mode;
+  if (when !== "always") binding.when = when;
+  if (!commandBindings(src.settings, command.command).length) setMirror(src.settings, command.field, trimmed);
+  src.settings.hotkeys = { ...(src.settings.hotkeys ?? {}), bindings: [...(src.settings.hotkeys?.bindings ?? []), binding] };
 }

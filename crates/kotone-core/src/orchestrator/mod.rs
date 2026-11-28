@@ -120,6 +120,12 @@ pub struct Orchestrator {
     op: tokio::sync::Mutex<()>,
     /// 按住输入的 down/up 串行化；down 等待开麦时不能丢掉已到达的 up。
     hold_input: tokio::sync::Mutex<()>,
+    /// 自动（ADR 054）：说话键 / 呼叫键还按着。按着的时候静音判停不算数（收音循环看它），松开才看按了多久。
+    key_held: Arc<AtomicBool>,
+    /// 自动 / 按住说话：这一下按下开始了哪一次会话（代际）、什么时候按下的。松开时对上了才算这一次的松开。
+    key_press: Mutex<Option<(u64, std::time::Instant)>>,
+    /// 这一轮语音输入是照键上的方式开始的（ADR 054）：一直听逐句续录时照它，不回到 `interactionMode`。
+    resume_preset: Mutex<Option<crate::interaction::InteractionMode>>,
     /// 热键队列代际独立于逐句会话代际；Esc / 重注册同步废弃旧票据。
     hotkey_epoch: AtomicU64,
     settings: Arc<RwLock<Settings>>,
@@ -204,6 +210,9 @@ impl Orchestrator {
             })),
             op: tokio::sync::Mutex::new(()),
             hold_input: tokio::sync::Mutex::new(()),
+            key_held: Arc::new(AtomicBool::new(false)),
+            key_press: Mutex::new(None),
+            resume_preset: Mutex::new(None),
             hotkey_epoch: AtomicU64::new(0),
             settings,
             settings_repository: None,

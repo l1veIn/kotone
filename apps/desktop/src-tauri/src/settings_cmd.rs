@@ -42,6 +42,9 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         || old.toggle_post_processing_hotkey != next.toggle_post_processing_hotkey
         || old.cycle_post_processing_hotkey != next.cycle_post_processing_hotkey
         || old.call_hotkey() != next.call_hotkey()
+        // 方式（ADR 054）：呼叫键、说话的第 2 个键起，选了自动 / 按住说话要按住登记
+        || old.assistant.effective_call_mode() != next.assistant.effective_call_mode()
+        || old.interaction_mode != next.interaction_mode
         || old.ui.legacy_upgrade.voice_input_only()
             != next.ui.legacy_upgrade.voice_input_only()
         // 语音输入插件开关：语音输入热键跟着登记 / 撤掉（ADR 038）

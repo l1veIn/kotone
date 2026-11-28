@@ -14,6 +14,7 @@
     restartAsAdmin,
     getHotkeyStatus,
     getHotkeyTable,
+    setHotkeyOptions,
     type AudioDevice,
     type ElevationStatus,
     type GameProfile,
@@ -172,17 +173,39 @@
     return () => { current = false; };
   });
 
-  const modes: { id: InteractionMode; name: string; desc: string }[] = [
+  // 和呼叫键一套说法（ADR 054）：“自动”写不进 interactionMode，写在说话的第一个键上（热键表那一条的 mode）
+  const modes: { id: InteractionMode | "auto"; name: string; desc: string }[] = [
+    { id: "auto", name: m.voice_mode_auto_name(), desc: m.voice_mode_auto_desc() },
     { id: "push-to-talk", name: m.voice_mode_ptt_name(), desc: m.voice_mode_ptt_desc() },
     { id: "dictation", name: m.voice_mode_dictation_name(), desc: m.voice_mode_dictation_desc() },
     { id: "one-shot", name: m.voice_mode_one_shot_name(), desc: m.voice_mode_one_shot_desc() },
     { id: "solo", name: m.voice_mode_solo_name(), desc: m.voice_mode_solo_desc() },
   ];
 
-  const currentMode = $derived($settingsStore?.interactionMode ?? null);
+  /** 第一个说话键写着自己的方式（自动）时照它，不然是 interactionMode。 */
+  const currentMode = $derived(talkBinding?.ownMode && talkBinding.mode === "auto" ? "auto" : $settingsStore?.interactionMode ?? null);
   const vadMs = $derived($settingsStore?.vadSilenceMs ?? 700);
+  const keyModeOf: Record<InteractionMode, string> = { "push-to-talk": "hold", dictation: "dictation", "one-shot": "one-shot", solo: "continuous" };
 
-  async function onModeSelect(id: InteractionMode) {
+  async function refreshTalkBinding() {
+    try { talkBinding = (await getHotkeyTable()).bindings.find((row) => row.id === "voice-input.talk") ?? null; } catch { /* 下次设置变了再读 */ }
+  }
+
+  async function onModeSelect(id: InteractionMode | "auto") {
+    if (id === "auto" || talkBinding?.ownMode) {
+      // 写在第一个键上 / 去掉第一个键上的方式：走「设置 → 热键」同一个命令（第一个键能写进全局的写全局）
+      try {
+        settingsStore.set(await setHotkeyOptions("voice-input.talk", { mode: id === "auto" ? "auto" : keyModeOf[id] }));
+        await refreshTalkBinding();
+        if (id === "auto") {
+          toast(true, m.voice_general_mode_switched({ name: m.voice_mode_auto_name() }));
+          return;
+        }
+      } catch (e) {
+        toast(false, m.voice_general_mode_switch_failed({ error: errText(e) }));
+        return;
+      }
+    }
     try {
       // 预设与 hotkey.mode 同步落盘：壳侧注册用 effective_hotkey_mode 推导，
       // 这里保持旧字段一致，避免设置页其它处读到脱节的 mode。
@@ -273,7 +296,7 @@
     <div id="voice-mode" class="scroll-mt-16">
     <SettingsSection title={m.voice_general_mode_title()} description={m.voice_general_mode_desc()}>
       <div class="py-3.5">
-        <div class="grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" aria-label={m.voice_general_mode_title()}>
+        <div class="grid grid-cols-2 gap-2 lg:grid-cols-5" role="group" aria-label={m.voice_general_mode_title()}>
           {#each modes as mode}
             {@const active = currentMode === mode.id}
             <button

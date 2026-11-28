@@ -1,5 +1,6 @@
 <script lang="ts">
-  // 「琴音 → 唤醒」（原「设置 → 怎么叫她」）：呼叫键、按下以后怎么听（说一句就走 / 录音笔 / 通话，ADR 033 2026-11-26 修订）；
+  // 「琴音 → 唤醒」（原「设置 → 怎么叫她」）：呼叫键、按下以后怎么听（自动 / 按住说话 / 说一句就走 / 录音笔 / 一直听，
+  // ADR 033 2026-11-26 修订、ADR 054；改的是第一个呼叫键的方式，别的呼叫键在「设置 → 热键」各自选）；
   // 选了通话才有“通话多久挂断”和回声消除（ADR 033），下面接快捷指令等（ADR 028）。
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
@@ -21,7 +22,10 @@
     const mode = config?.callMode ?? "one-shot";
     return mode === "call" && callIdle === 0 ? "one-shot" : mode;
   });
+  // 五种，和说话键一套说法（ADR 054）；“一直听”存的值照旧是 call
   const modes: { id: CallMode; name: () => string; desc: () => string }[] = [
+    { id: "auto", name: m.companion_call_mode_auto_name, desc: m.companion_call_mode_auto_desc },
+    { id: "hold", name: m.companion_call_mode_hold_name, desc: m.companion_call_mode_hold_desc },
     { id: "one-shot", name: m.companion_call_mode_one_shot_name, desc: m.companion_call_mode_one_shot_desc },
     { id: "dictation", name: m.companion_call_mode_dictation_name, desc: m.companion_call_mode_dictation_desc },
     { id: "call", name: m.companion_call_mode_call_name, desc: m.companion_call_mode_call_desc },
@@ -57,7 +61,7 @@
       </SettingsRow>
       <div class="py-3.5">
         <p class="mt-0 mb-2 text-sm font-medium">{m.companion_call_mode_label()}</p>
-        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label={m.companion_call_mode_aria()}>
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-5" role="group" aria-label={m.companion_call_mode_aria()}>
           {#each modes as mode (mode.id)}
             {@const active = callMode === mode.id}
             <button type="button" data-testid={`call-mode-${mode.id}`} aria-pressed={active} disabled={savingMode}

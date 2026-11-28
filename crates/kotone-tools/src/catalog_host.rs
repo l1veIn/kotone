@@ -407,12 +407,13 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_HOTKEYS_CONFLICTS,
-            description: "Check a hotkey (e.g. F8, Ctrl+Alt+K) before setting it. conflicts lists what already uses that key: other Kotone hotkeys (pass except = the id of the one being changed: its command, e.g. kotone.call, voice-input.talk, or custom.<id> for one the player added such as a quick command; the older ids assistant, record, quick-message-2 still work), Esc, and the chat / console keys of every game profile (a hotkey equal to one would take that key away from the game); don't set a key that has conflicts. warnings flags common game keys. Set it with settings.update {\"hotkey\": {\"key\": ...}} (assistant: {\"assistant\": {\"hotkey\": ...}}).",
+            description: "Check a hotkey (e.g. F8, Ctrl+Alt+K) before setting it. conflicts lists what already uses that key: other Kotone hotkeys (pass except = the id of the one being changed: its command, e.g. kotone.call, voice-input.talk, or custom.<id> for one the player added such as a quick command; the older ids assistant, record, quick-message-2 still work), Esc, and the chat / console keys of every game profile (a hotkey equal to one would take that key away from the game); don't set a key that has conflicts. A command can have several keys (the second one's id is <command>~2). Pass when = game / game:<profile id> for a key that should only work while a game is in front: it then only conflicts with keys that also work there. warnings flags common game keys. Set it with settings.update {\"hotkey\": {\"key\": ...}} (assistant: {\"assistant\": {\"hotkey\": ...}}), or hotkeys.bindings for mode / when / a second key.",
             side_effects: &[],
             egress: "none",
             input: object(&["key"], json!({
                 "key": {"type": "string", "minLength": 1, "maxLength": 64},
-                "except": {"type": "string", "maxLength": 64, "description": "id of the hotkey being changed (not compared with itself)"}
+                "except": {"type": "string", "maxLength": 64, "description": "id of the hotkey being changed (not compared with itself)"},
+                "when": {"type": "string", "maxLength": 80, "description": "always (default) / game / game:<profile id>"}
             })),
             output: object(&["key", "conflicts", "warnings"], json!({
                 "key": {"type": "string"},

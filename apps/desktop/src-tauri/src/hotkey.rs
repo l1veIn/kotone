@@ -15,11 +15,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
-    parse_hotkey, HookEvent, HotkeySource, HK_ASSISTANT, HK_AUTOMATION_STOP, HK_CHANNEL_CYCLE,
-    HK_PP_CYCLE, HK_PP_TOGGLE, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
+    parse_hotkey, HookEvent, HotkeySource, KeyGate, HK_ASSISTANT, HK_AUTOMATION_STOP,
+    HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
 };
-use kotone_core::hotkey_bindings::{legacy_by_id, CMD_TALK};
+use kotone_core::hotkey_bindings::{legacy_by_id, CMD_CALL, CMD_TALK};
 use kotone_core::hotkey_commands::{split_command, Edge};
+use kotone_core::hotkey_options::{nth_id, split_nth, VoiceKeyMode};
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
 
@@ -344,16 +345,63 @@ async fn hearing_main(orch: &Orchestrator, edge: Edge, ticket: u64) {
     }
 }
 
-/// 登记 id → 接在“听一句”后面那个插件的命令 id（`channel-cycle` → `voice-input.channel-cycle` → `channel-cycle`）；
-/// 不是它的命令为 None。
-fn hearing_command_of<'a>(orch: &Orchestrator, id: &'a str) -> Option<&'a str> {
+/// 登记 id → 接在“听一句”后面那个插件的命令 id（`channel-cycle` → `voice-input.channel-cycle` → `channel-cycle`；
+/// 第 2 个键起带 `~<n>`：`record~2` → `talk~2`，插件自己拆，ADR 054）；不是它的命令为 None。
+fn hearing_command_of(orch: &Orchestrator, id: &str) -> Option<String> {
     hearing_command_for(orch.hearing_owner(), id)
 }
 
-fn hearing_command_for<'a>(owner: Option<&str>, id: &'a str) -> Option<&'a str> {
-    let full = legacy_by_id(id).map_or(id, |legacy| legacy.command);
+fn hearing_command_for(owner: Option<&str>, id: &str) -> Option<String> {
+    let (base, nth) = split_nth(id);
+    let full = legacy_by_id(base).map_or(base, |legacy| legacy.command);
     let (source, command) = split_command(full)?;
-    (Some(source) == owner).then_some(command)
+    (Some(source) == owner).then(|| nth_id(command, nth))
+}
+
+/// 呼叫键（第 `nth` 个）按下 / 松开（ADR 054）：照这个键的方式。
+/// - 通话中按下 = 挂断（ADR 033 D1），这一下的松开不再算；
+/// - 她正在说时按下：先停下她，再开始听（ADR 029 §五）；
+/// - 自动：按下照说一句就走，按着不判停，按了 `holdMs` 以上松开就交给她；按住说话：松开交给她；
+///   录音笔再按一下才结束；说一句就走、一直听说完自动结束（正在听时按 = 说完了）；一直听接通通话。
+async fn call_key(app: &AppHandle, orch: &Arc<Orchestrator>, nth: usize, edge: Edge, ticket: u64) {
+    let (mode, timeout, hold_ms) = {
+        let state = app.state::<crate::SharedState>();
+        let settings = state.settings.read().unwrap();
+        (
+            settings
+                .voice_key_mode(CMD_CALL, nth)
+                .unwrap_or(VoiceKeyMode::OneShot),
+            settings.assistant.wake.no_speech_timeout_ms,
+            settings.hold_ms(),
+        )
+    };
+    if edge == Edge::Release {
+        match mode {
+            VoiceKeyMode::Auto => {
+                orch.call_assistant_release(Some(ticket), Some(hold_ms))
+                    .await
+            }
+            VoiceKeyMode::Hold => orch.call_assistant_release(Some(ticket), None).await,
+            _ => {}
+        }
+        return;
+    }
+    if crate::call::active() {
+        crate::call::hang_up_by_key(app).await;
+        return;
+    }
+    crate::assistant::interrupt_before_call(app).await;
+    match mode {
+        VoiceKeyMode::Auto => orch.call_assistant_auto_press(Some(ticket), timeout).await,
+        VoiceKeyMode::Hold => orch.call_assistant_hold_press(Some(ticket)).await,
+        VoiceKeyMode::Dictation => orch.call_assistant_dictation(Some(ticket)).await,
+        VoiceKeyMode::OneShot => orch.call_assistant(Some(ticket), timeout).await,
+        VoiceKeyMode::Continuous => {
+            orch.call_assistant(Some(ticket), timeout).await;
+            // 选了一直听就接通（ADR 033）：这句说完以后一直在听，直到挂断
+            crate::call::start_for(app, true);
+        }
+    }
 }
 
 /// 事件到达时记录运行时与核心入场票据；启停、取消和重注册后拒绝旧输入。
@@ -387,10 +435,8 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
     // Press/release must reach the core in physical order. Spawning each edge
     // separately can schedule release first, leaving a short press recording.
     // Other actions (especially Esc) stay independent so they can cancel input.
-    // 具名的按住热键现在没有（以前只有 0.1.x 提醒助手的对讲机键，ADR 052 退掉了）：按住 / 松开不处理
-    if let HookEvent::NamedHold { .. } = &event {
-        return;
-    }
+    // 具名的按住热键（ADR 054）：呼叫键选了自动 / 按住说话、说话的第 2 个键起；按下 / 松开在 core 里按
+    // `hold_input` 排队（松开等按下开好麦）
     let app = app.clone();
     let orch = orch.clone();
     tauri::async_runtime::spawn(async move {
@@ -401,7 +447,18 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
             return;
         }
         match event {
-            HookEvent::NamedHold { .. } => unreachable!("named hold edges return above"),
+            HookEvent::NamedHold { id, pressed } => {
+                let edge = if pressed { Edge::Press } else { Edge::Release };
+                let (base, nth) = split_nth(&id);
+                if base == HK_ASSISTANT {
+                    call_key(&app, &orch, nth, edge, ticket.core).await;
+                } else if let Some(command) = hearing_command_of(&orch, &id) {
+                    orch.hearing_command(&command, edge, Some(ticket.core))
+                        .await;
+                } else {
+                    kotone_core::log::log(&format!("未知的按住热键: {id}"));
+                }
+            }
             // 主键位上的是“说话”（插件登记的按住命令）：按住还是按一下由插件照交互模式决定（ADR 040 D1）
             HookEvent::HoldPressed | HookEvent::Toggle => {
                 hearing_main(&orch, Edge::Press, ticket.core).await
@@ -409,28 +466,9 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
             HookEvent::HoldReleased => hearing_main(&orch, Edge::Release, ticket.core).await,
             HookEvent::Cancel => unreachable!("cancel bypasses queued input"),
             HookEvent::NamedHotkey { id } => match id.as_str() {
-                HK_ASSISTANT => {
-                    if crate::call::active() {
-                        // 通话中再按一次 = 挂断（ADR 033 D1）。
-                        crate::call::hang_up_by_key(&app).await;
-                    } else {
-                        let timeout = {
-                            let state = app.state::<crate::SharedState>();
-                            let settings = state.settings.read().unwrap();
-                            settings.assistant.wake.no_speech_timeout_ms
-                        };
-                        // 她正在说时按呼叫键：先停下她，再开始听（ADR 029 §五）。
-                        crate::assistant::interrupt_before_call(&app).await;
-                        // 呼叫以后怎么听（ADR 033 2026-11-26 修订）：录音笔再按一下才结束；说一句就走、
-                        // 通话说完自动结束（正在听时按 = 说完了）。
-                        if crate::call::mode(&app) == kotone_core::assistant::CallMode::Dictation {
-                            orch.call_assistant_dictation(Some(ticket.core)).await;
-                        } else {
-                            orch.call_assistant(Some(ticket.core), timeout).await;
-                        }
-                        // 选了通话就接通（ADR 033）：这句说完以后一直在听，直到挂断；另外两种不接通。
-                        crate::call::start(&app);
-                    }
+                // 呼叫键（按一下的方式：说一句就走、录音笔、一直听；第 2 个键起是 `assistant~<n>`）
+                other if split_nth(other).0 == HK_ASSISTANT => {
+                    call_key(&app, &orch, split_nth(other).1, Edge::Press, ticket.core).await
                 }
                 // 自己加的、要听的（快捷指令：替你跟她说一句，不经过语音识别，ADR 040 第 3 期）
                 other if crate::hotkey_run::is_custom(other) => {
@@ -439,7 +477,7 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                 // 插件登记的命令：接在“听一句”后面的那个插件的，经本体转给它（ADR 040 D1）
                 other => match hearing_command_of(&orch, other) {
                     Some(command) => {
-                        orch.hearing_command(command, Edge::Press, Some(ticket.core))
+                        orch.hearing_command(&command, Edge::Press, Some(ticket.core))
                             .await
                     }
                     None => kotone_core::log::log(&format!("未知具名热键: {id}")),
@@ -481,6 +519,8 @@ struct Entry {
     id: String,
     combo: String,
     mode: HotkeyMode,
+    /// 什么时候管用（ADR 054）：门关着时键原样放行，只有低层钩子做得到。
+    gate: KeyGate,
     /// 登记计划里的错误（撞了 Esc、被前面的占了……）：有就不登记，记进状态。
     error: Option<String>,
 }
@@ -494,6 +534,7 @@ fn entry(planned: &Planned) -> Entry {
         } else {
             HotkeyMode::Toggle
         },
+        gate: planned.when.gate(),
         error: planned.error.clone(),
     }
 }
@@ -516,13 +557,28 @@ fn app_entries(plan: &[Planned]) -> Vec<Entry> {
     plan.iter().filter(|p| p.always).map(entry).collect()
 }
 
-/// 识别没在跑时只看不吞、按了提示的：(登记 id, 键, 在哪提示)。被前面的占了键的不盯。
+/// 识别没在跑时只看不吞、按了提示的：(登记 id, 键, 在哪提示)。被前面的占了键的不盯。测试用（登记用带门的那个）。
+#[cfg(test)]
 fn hint_entries(plan: &[Planned]) -> Vec<(String, String, HintAt)> {
+    hint_entries_gated(plan)
+        .into_iter()
+        .map(|(id, combo, at, _)| (id, combo, at))
+        .collect()
+}
+
+/// 同上，带门（只在游戏里管用的键，不在游戏里时也不提示）。
+fn hint_entries_gated(plan: &[Planned]) -> Vec<(String, String, HintAt, KeyGate)> {
     plan.iter()
         .filter(|p| !p.always && p.error.is_none())
         .filter_map(|p| {
-            p.hint
-                .map(|at| (format!("{HINT_PREFIX}{}", p.id), p.combo.clone(), at))
+            p.hint.map(|at| {
+                (
+                    format!("{HINT_PREFIX}{}", p.id),
+                    p.combo.clone(),
+                    at,
+                    p.when.gate(),
+                )
+            })
         })
         .collect()
 }
@@ -584,6 +640,8 @@ pub struct HotkeyManager {
     app_named: Mutex<HashMap<String, Option<String>>>,
     /// 应用级具名热键的失败信息（冲突/钩子与插件都注册失败）
     app_named_errors: Mutex<HashMap<String, Option<String>>>,
+    /// 应用级具名热键的门（ADR 054：只在游戏里管用的键）：id → 门；重新落回后端时用。
+    app_gates: Mutex<HashMap<String, KeyGate>>,
     /// 当前生效的被动提示键（runtime 未运行时）：登记 id（`hint:<id>`）→ (组合, 在哪提示)
     hints: Mutex<HashMap<String, (String, HintAt)>>,
 }
@@ -604,6 +662,7 @@ impl HotkeyManager {
             named_errors: Mutex::new(HashMap::new()),
             app_named: Mutex::new(HashMap::new()),
             app_named_errors: Mutex::new(HashMap::new()),
+            app_gates: Mutex::new(HashMap::new()),
             hints: Mutex::new(HashMap::new()),
         }
     }
@@ -612,14 +671,18 @@ impl HotkeyManager {
     /// 快捷指令）：被动、不吞键，按下只弹提示（D8；ADR 040 实施记录主会话定的第 2 条）。`active = false`
     /// （进入 Running）时全部撤掉。由 `runtime::refresh_hints` 在配置锁内调用。钩子不可用时不提示（RegisterHotKey 会吞键）。
     pub fn set_runtime_hints(&self, settings: &kotone_core::settings::Settings, active: bool) {
-        let wanted: HashMap<String, (String, HintAt)> = if active {
-            hint_entries(&plan_from(settings))
+        let wanted_gated: HashMap<String, (String, HintAt, KeyGate)> = if active {
+            hint_entries_gated(&plan_from(settings))
                 .into_iter()
-                .map(|(id, combo, at)| (id, (combo, at)))
+                .map(|(id, combo, at, gate)| (id, (combo, at, gate)))
                 .collect()
         } else {
             HashMap::new()
         };
+        let wanted: HashMap<String, (String, HintAt)> = wanted_gated
+            .iter()
+            .map(|(id, (combo, at, _))| (id.clone(), (combo.clone(), *at)))
+            .collect();
         let mut current = self.hints.lock().unwrap();
         if *current == wanted {
             return;
@@ -638,7 +701,13 @@ impl HotkeyManager {
                 return;
             }
             for (id, (combo, at)) in wanted {
-                match self.llhook.set_passive_hotkey(&id, Some(&combo)) {
+                let gate = wanted_gated
+                    .get(&id)
+                    .map_or(KeyGate::Always, |(_, _, gate)| *gate);
+                match self
+                    .llhook
+                    .set_passive_hotkey_gated(&id, Some(&combo), gate)
+                {
                     Ok(()) => {
                         current.insert(id, (combo, at));
                     }
@@ -648,7 +717,7 @@ impl HotkeyManager {
         }
         #[cfg(not(windows))]
         {
-            let _ = &wanted;
+            let _ = (&wanted, &wanted_gated);
             current.clear();
         }
     }
@@ -676,6 +745,7 @@ impl HotkeyManager {
     ) -> Result<(), String> {
         self.unregister(app)?;
         let _ = key;
+        // 主键按住还是按一下：调用方给的是 `effective_hotkey_mode`（说话的第一个键写了方式时已经照它）
         let plan = plan_from(settings);
         // 语音输入插件关着（ADR 038）：计划里没有说话，主键空着，呼叫键这些具名热键照常；
         // 钩子照样跑（主键停用、全部放行，会话中的 Esc 取消照常）。说话的键被前面的占了、撞了 Esc 时也不登记。
@@ -689,18 +759,25 @@ impl HotkeyManager {
         let named = runtime_entries(&plan);
         let pref = settings.hotkey_backend;
 
+        // 说话的第一个键带了方式 / 什么时候管用（ADR 054）
+        let main_gate = main.map_or(KeyGate::Always, |p| p.when.gate());
+
         #[cfg(windows)]
         let requires_llhook = plan
             .iter()
-            .any(|p| p.error.is_none() && uses_mouse_button(&p.combo));
+            .any(|p| p.error.is_none() && (uses_mouse_button(&p.combo) || !p.when.is_always()));
 
         #[cfg(windows)]
         if pref != HotkeyBackend::Register || requires_llhook {
             if requires_llhook && pref == HotkeyBackend::Register {
-                kotone_core::log::log("鼠标侧键不受 RegisterHotKey 支持，已强制使用低层键鼠钩子");
+                kotone_core::log::log(
+                    "鼠标侧键、只在游戏里管用的键不受 RegisterHotKey 支持，已强制使用低层键鼠钩子",
+                );
             }
             let registered = if voice_on {
-                self.llhook.register(&key, mode)
+                self.llhook
+                    .register(&key, mode)
+                    .and_then(|()| self.llhook.set_main_gate(main_gate))
             } else {
                 self.llhook.register_without_main()
             };
@@ -718,7 +795,7 @@ impl HotkeyManager {
                 Err(e) => {
                     if requires_llhook {
                         let msg = format!(
-                            "鼠标侧键热键需要低层键鼠钩子，但钩子注册失败：{e}。\
+                            "鼠标侧键、只在游戏里管用的热键需要低层键鼠钩子，但钩子注册失败：{e}。\
                              请将 Kotone 加入安全软件信任区后重试"
                         );
                         kotone_core::log::log(&format!("hotkey register FAILED: {msg}"));
@@ -731,7 +808,9 @@ impl HotkeyManager {
         }
 
         let registered = if voice_on {
-            self.plugin.register(&key, mode)
+            self.plugin
+                .register(&key, mode)
+                .and_then(|()| self.plugin.set_main_gate(main_gate))
         } else {
             self.plugin.unregister();
             Ok(())
@@ -800,6 +879,7 @@ impl HotkeyManager {
                 errors.insert(e.id, Some(error));
                 continue;
             }
+            self.app_gates.lock().unwrap().insert(e.id.clone(), e.gate);
             match self.register_app_hotkey(&e.id, &e.combo) {
                 Ok(()) => {
                     applied.insert(e.id.clone(), Some(e.combo));
@@ -820,10 +900,22 @@ impl HotkeyManager {
     /// 正是「在游戏里启动 / 停止 Kotone」），钩子不可用时回退 RegisterHotKey。
     /// 和别的热键撞不撞在登记计划里算过了（ADR 040 D6），这里只管落到后端。
     fn register_app_hotkey(&self, id: &str, combo: &str) -> Result<(), String> {
+        let gate = self
+            .app_gates
+            .lock()
+            .unwrap()
+            .get(id)
+            .copied()
+            .unwrap_or_default();
         #[cfg(windows)]
         {
             match self.llhook.ensure_hook_ready() {
-                Ok(()) => match self.llhook.set_named_hotkey(id, Some(combo)) {
+                Ok(()) => match self.llhook.set_named_hotkey_gated(
+                    id,
+                    Some(combo),
+                    HotkeyMode::Toggle,
+                    gate,
+                ) {
                     Ok(()) => {
                         // 摘掉插件后端可能残留的同 id 注册，避免同一键在两个后端各触发一次
                         let _ = self.plugin.set_named_hotkey(id, None);
@@ -844,7 +936,7 @@ impl HotkeyManager {
             let _ = self.llhook.set_named_hotkey(id, None);
         }
         self.plugin
-            .set_named_hotkey(id, Some(combo))
+            .set_named_hotkey_gated(id, Some(combo), HotkeyMode::Toggle, gate)
             .map_err(|e| format!("注册热键「{combo}」失败: {e}（键位可能被其他程序占用）"))
     }
 
@@ -909,17 +1001,17 @@ impl HotkeyManager {
                 {
                     if backend == ActiveBackend::LlHook {
                         self.llhook
-                            .set_named_hotkey_mode(&e.id, Some(&e.combo), e.mode)
+                            .set_named_hotkey_gated(&e.id, Some(&e.combo), e.mode, e.gate)
                     } else {
                         self.plugin
-                            .set_named_hotkey_mode(&e.id, Some(&e.combo), e.mode)
+                            .set_named_hotkey_gated(&e.id, Some(&e.combo), e.mode, e.gate)
                     }
                 }
                 #[cfg(not(windows))]
                 {
                     let _ = backend;
                     self.plugin
-                        .set_named_hotkey_mode(&e.id, Some(&e.combo), e.mode)
+                        .set_named_hotkey_gated(&e.id, Some(&e.combo), e.mode, e.gate)
                 }
             };
             match res {
@@ -1172,13 +1264,13 @@ mod tests {
         assert!(named.iter().all(|(_, key, _)| key != "F9"));
         assert!(named.iter().all(|(id, _, _)| id != "legacy-reminder"));
         assert!(app_entries(&plan_from(&settings)).is_empty());
-        // 启用了她：呼叫键就是 assistant.hotkey，按一下
+        // 启用了她：呼叫键就是 assistant.hotkey；新装是自动，按下、松开都要（ADR 054）
         settings.ui.legacy_upgrade = LegacyUpgrade::NotNeeded;
         settings.set_binding(kotone_core::hotkey_bindings::CMD_CALL, "F10");
         settings.sync_hotkey_mirrors();
         assert_eq!(
             named_list_from(&settings)[0],
-            (HK_ASSISTANT.to_string(), "F10".into(), HotkeyMode::Toggle)
+            (HK_ASSISTANT.to_string(), "F10".into(), HotkeyMode::Hold)
         );
     }
 
@@ -1230,24 +1322,67 @@ mod tests {
         assert!(hint_entries(&plan_from(&settings)).is_empty());
     }
 
+    /// 呼叫键按住还是按一下只看她自己的方式（ADR 054）：新装的自动、按住说话要按下和松开；说一句就走、录音笔、
+    /// 一直听只要按下。说话键的交互方式（旧的“对讲机”）不影响它。
     #[test]
-    fn calling_kotone_is_always_a_single_press_regardless_of_old_modes() {
+    fn the_call_key_registers_by_her_own_way_not_the_talk_mode() {
+        use kotone_core::assistant::CallMode;
         use kotone_core::interaction::InteractionMode;
-        let settings = kotone_core::settings::Settings {
+        let mut settings = kotone_core::settings::Settings {
             interaction_mode: Some(InteractionMode::PushToTalk),
             ..Default::default()
         };
-        // 呼叫琴音按一次就听：旧配置里的“对讲机”也不再按住说话
-        let call = named_list_from(&settings)
-            .into_iter()
-            .find(|(id, _, _)| id == HK_ASSISTANT);
+        let call = |settings: &kotone_core::settings::Settings| {
+            named_list_from(settings)
+                .into_iter()
+                .find(|(id, _, _)| id == HK_ASSISTANT)
+                .map(|(_, key, mode)| (key, mode))
+        };
+        let key = kotone_core::assistant::DEFAULT_CALL_HOTKEY.to_string();
         assert_eq!(
-            call,
-            Some((
-                HK_ASSISTANT.to_string(),
-                kotone_core::assistant::DEFAULT_CALL_HOTKEY.into(),
-                HotkeyMode::Toggle
-            ))
+            call(&settings),
+            Some((key.clone(), HotkeyMode::Hold)),
+            "新装是自动"
+        );
+        for (mode, want) in [
+            (CallMode::Hold, HotkeyMode::Hold),
+            (CallMode::OneShot, HotkeyMode::Toggle),
+            (CallMode::Dictation, HotkeyMode::Toggle),
+            (CallMode::Call, HotkeyMode::Toggle),
+        ] {
+            settings.assistant.call_mode = mode;
+            assert_eq!(call(&settings), Some((key.clone(), want)), "{mode:?}");
+        }
+        settings.interaction_mode = Some(InteractionMode::Dictation);
+        assert_eq!(call(&settings), Some((key, HotkeyMode::Toggle)));
+    }
+
+    /// 第二个呼叫键（侧键按住、只在游戏里）：登记 id `assistant~2`，按住，带门；说话的第二个键交给插件时带 `~2`。
+    #[test]
+    fn a_second_call_key_registers_with_its_own_way_and_gate() {
+        use kotone_core::hotkey_options::{KeyWhen, VoiceKeyMode};
+        let mut settings = kotone_core::settings::Settings::default();
+        settings.assistant.call_mode = kotone_core::assistant::CallMode::OneShot;
+        settings.add_command_binding(CMD_CALL, "Mouse5", Some(VoiceKeyMode::Hold), &KeyWhen::Game);
+        settings.sync_hotkey_mirrors();
+        let plan = plan_from(&settings);
+        let entries = runtime_entries(&plan);
+        let second = entries.iter().find(|e| e.id == "assistant~2").unwrap();
+        assert_eq!(second.combo, "Mouse5");
+        assert_eq!(second.mode, HotkeyMode::Hold);
+        assert_eq!(second.gate, KeyGate::AnyGame);
+        let first = entries.iter().find(|e| e.id == HK_ASSISTANT).unwrap();
+        assert_eq!(
+            (first.mode, first.gate),
+            (HotkeyMode::Toggle, KeyGate::Always)
+        );
+        // 识别没在跑时的提示也带门
+        assert!(hint_entries_gated(&plan)
+            .iter()
+            .any(|(id, _, _, gate)| id == "hint:assistant~2" && *gate == KeyGate::AnyGame));
+        assert_eq!(
+            hearing_command_for(Some("voice-input"), "record~2").as_deref(),
+            Some("talk~2")
         );
     }
 
@@ -1275,7 +1410,7 @@ mod tests {
             .iter()
             .all(|(id, _, _)| !id.contains("lol.")));
         assert_eq!(
-            hearing_command_for(Some("voice-input"), "lol.shout-enemy-flash"),
+            hearing_command_for(Some("voice-input"), "lol.shout-enemy-flash").as_deref(),
             None
         );
     }
@@ -1285,24 +1420,28 @@ mod tests {
     fn plugin_commands_go_to_the_plugin_after_hearing() {
         let owner = Some("voice-input");
         assert_eq!(
-            hearing_command_for(owner, HK_CHANNEL_CYCLE),
+            hearing_command_for(owner, HK_CHANNEL_CYCLE).as_deref(),
             Some("channel-cycle")
         );
         assert_eq!(
-            hearing_command_for(owner, HK_PP_CYCLE),
+            hearing_command_for(owner, HK_PP_CYCLE).as_deref(),
             Some("post-process-cycle")
         );
         assert_eq!(
-            hearing_command_for(owner, "voice-input.resend-last"),
+            hearing_command_for(owner, "voice-input.resend-last").as_deref(),
             Some("resend-last")
         );
         assert_eq!(
-            hearing_command_for(None, HK_CHANNEL_CYCLE),
+            hearing_command_for(None, HK_CHANNEL_CYCLE).as_deref(),
             None,
             "没接语音输入"
         );
-        assert_eq!(hearing_command_for(owner, HK_ASSISTANT), None, "本体的不转");
-        assert_eq!(hearing_command_for(owner, "music.next"), None);
+        assert_eq!(
+            hearing_command_for(owner, HK_ASSISTANT).as_deref(),
+            None,
+            "本体的不转"
+        );
+        assert_eq!(hearing_command_for(owner, "music.next").as_deref(), None);
     }
 
     /// 宿主登记的每一个热键都在「设置 → 热键」那张表里、参与冲突检查（ADR 040 D2、D6）：

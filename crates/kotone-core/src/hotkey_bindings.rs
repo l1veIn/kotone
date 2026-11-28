@@ -3,8 +3,9 @@
 //! config.json 里一个 `hotkeys.bindings` 列表，每条一个 JSON 对象：`key` 加上四选一——`command`
 //! （`<来源>.<命令 id>`，本体的是 `kotone.*`）；或者玩家自己加的（第 3 期，带 `id`、可选 `label`，见
 //! [`crate::hotkey_custom`]）：`say`（跟她说一句，快捷指令）、`tool`（+ `args`；运行自动化就是 `automation.run`）、
-//! `page`（`ui://…`）。照 VS Code 的 `keybindings.json`（key + command + args）。**不存“按一下 / 按住”**：由命令自己声明
-//! （ADR 040 实施记录里对 D8 的修订）。
+//! `page`（`ui://…`）。照 VS Code 的 `keybindings.json`（key + command + args）。“按一下 / 按住”由命令自己声明
+//! （ADR 040 实施记录里对 D8 的修订）；说话键和呼叫键的一条可以带 `mode`（五种方式），任何一条都可以带 `when`
+//! （什么时候管用），同一个命令可以有几条（ADR 054，[`crate::hotkey_options`]）。
 //!
 //! 规矩（原则 19，读旧写新、不覆盖新字段）：
 //! - **有 `hotkeys.bindings`（数组，哪怕是空的）就以它为准**；没有就从旧字段造（[`migrate_hotkeys_json`]，
@@ -48,7 +49,7 @@ pub struct Legacy {
     pub command: &'static str,
     pub id: &'static str,
     pub old_default: &'static str,
-    /// 旧字段（点分路径）；呼叫键对 0.1.x 升级后启用了她的人是 `assistant.companionBindings.hotkey`。
+    /// 旧字段（点分路径）。0.1.x 升级后还没启用她的人没有呼叫键的镜像（ADR 052 以后所有人都是 `assistant.hotkey`）。
     pub field: &'static str,
 }
 
@@ -126,6 +127,9 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
 pub struct HotkeysConfig {
     #[serde(default)]
     pub bindings: Vec<Binding>,
+    /// 说话键 / 呼叫键选了“自动”时，按住超过这么多毫秒算按住说话（ADR 054；新字段，缺省 300）。
+    #[serde(default = "default_hold_ms")]
+    pub hold_ms: u32,
     /// 将来加在 `hotkeys` 下面的东西：原样留着。
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -138,9 +142,14 @@ impl Default for HotkeysConfig {
                 .iter()
                 .map(|(command, key)| Binding::command(key, command))
                 .collect(),
+            hold_ms: default_hold_ms(),
             extra: Map::new(),
         }
     }
+}
+
+fn default_hold_ms() -> u32 {
+    crate::hotkey_options::DEFAULT_HOLD_MS
 }
 
 /// 表里的一条。存的就是 JSON 原样（读不懂的也能原样写回去），用下面的方法读。
@@ -218,9 +227,8 @@ impl Settings {
         }
     }
 
-    /// 把表写回旧字段（只读的镜像）。没绑的写空串。呼叫键看是哪种用户：新用户写 `assistant.hotkey`；
-    /// 0.1.x 升级后启用了她的写 `assistant.companionBindings.hotkey`（`assistant.hotkey` 是他的提醒键，不动）；
-    /// 还没启用她的没有呼叫键，不写。快捷指令（`assistant.companion.quickMessages`）写表里前 8 条
+    /// 把表写回旧字段（只读的镜像，每个命令写它的第一条）。没绑的写空串。呼叫键写 `assistant.hotkey`
+    /// （ADR 052 以后所有人都在这里）；0.1.x 升级后还没启用她的没有呼叫键，不写。快捷指令（`assistant.companion.quickMessages`）写表里前 8 条
     /// “说一句 / 运行已保存的自动化”（第 3 期，[`crate::hotkey_custom`]）。
     pub fn sync_hotkey_mirrors(&mut self) {
         for legacy in LEGACY {
@@ -247,6 +255,8 @@ impl Settings {
                 }
             }
             self.adopt_quick_message_edits();
+            // 她的「唤醒」页、语音输入页改了方式：第一个键跟着（ADR 054）
+            self.follow_global_voice_modes(previous);
         }
         self.number_custom_entries();
         self.sync_hotkey_mirrors();

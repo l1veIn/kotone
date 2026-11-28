@@ -48,6 +48,44 @@ impl Orchestrator {
             .await
     }
 
+    /// 呼叫键的“自动”按下（ADR 054）：照说一句就走（[`Self::call_assistant`]）；这一下开始了会话就记下来，
+    /// 按着的时候静音判停不算数，松开时看按了多久（[`Self::call_assistant_release`]）。
+    pub async fn call_assistant_auto_press(&self, ticket: Option<u64>, no_speech_timeout_ms: u32) {
+        self.call_assistant_pressed(
+            ticket,
+            SessionOrigin::Wake {
+                no_speech_timeout_ms,
+            },
+        )
+        .await
+    }
+
+    /// 呼叫键的按住说话按下（ADR 054）：空闲时开始听（不判停），松开交给她。正在听（松开那一下丢了）就结束这句。
+    pub async fn call_assistant_hold_press(&self, ticket: Option<u64>) {
+        self.call_assistant_pressed(ticket, SessionOrigin::CallHold)
+            .await
+    }
+
+    /// 呼叫键松开（自动 / 按住说话）。`hold_ms` = Some(门槛) 是自动：按了这么久以上才当场结束、交给她，短于它
+    /// 照说一句就走等说完；None 是按住说话：松开就结束。这一下按下没开始会话（挂断、结束上一句……）时什么都不做。
+    pub async fn call_assistant_release(&self, ticket: Option<u64>, hold_ms: Option<u32>) {
+        let ticket = ticket.unwrap_or_else(|| self.hotkey_input_ticket());
+        let _input = self.hold_input.lock().await;
+        if let Some(gen) = self.take_long_press(ticket, hold_ms, SessionPurpose::Assistant) {
+            let _ = self.end_inner(Some(gen), Some(ticket)).await;
+        }
+    }
+
+    async fn call_assistant_pressed(&self, ticket: Option<u64>, origin: SessionOrigin) {
+        let at = std::time::Instant::now();
+        // 按下、松开按顺序进来（松开等按下开好麦）
+        let _input = self.hold_input.lock().await;
+        *self.key_press.lock().unwrap() = None;
+        let (_, _, before) = self.hotkey_session_snapshot();
+        self.call_assistant_with(ticket, origin).await;
+        self.remember_press(before, SessionPurpose::Assistant, at);
+    }
+
     async fn call_assistant_with(&self, ticket: Option<u64>, origin: SessionOrigin) {
         if !self.input_ticket_is_current(ticket) {
             return;

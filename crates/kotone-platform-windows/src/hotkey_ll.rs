@@ -36,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use kotone_core::hotkey::{
-    parse_hotkey, HookEvent, HookMatcher, HotkeyMode, HotkeySource, HotkeySpec, KeyAction,
+    parse_hotkey, HookEvent, HookMatcher, HotkeyMode, HotkeySource, HotkeySpec, KeyAction, KeyGate,
     VK_ESCAPE, VK_XBUTTON1, VK_XBUTTON2,
 };
 
@@ -416,6 +416,16 @@ impl LlHookSource {
     /// （语音识别没准备好时的提示，D8）。RegisterHotKey 做不到放行，所以只有钩子能用。
     /// 钩子未安装时返回 Err；`None` / 空串 = 清除，钩子未安装时视为已清除。
     pub fn set_passive_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
+        self.set_passive_hotkey_gated(id, combo, KeyGate::Always)
+    }
+
+    /// 同 [`Self::set_passive_hotkey`]，带门（ADR 054：只在游戏里管用的键，不在游戏里时也不提示）。
+    pub fn set_passive_hotkey_gated(
+        &self,
+        id: &str,
+        combo: Option<&str>,
+        gate: KeyGate,
+    ) -> Result<(), String> {
         let spec = match combo {
             Some(k) if !k.trim().is_empty() => Some(
                 parse_hotkey(k)
@@ -430,7 +440,11 @@ impl LlHookSource {
                 Ok(())
             };
         };
-        shared.matcher.lock().unwrap().set_passive_spec(id, spec);
+        shared
+            .matcher
+            .lock()
+            .unwrap()
+            .set_passive_spec_gated(id, spec, gate);
         kotone_core::log::log(&format!("llhook passive hint {id}: {spec:?}"));
         Ok(())
     }
@@ -515,6 +529,17 @@ impl HotkeySource for LlHookSource {
         combo: Option<&str>,
         mode: HotkeyMode,
     ) -> Result<(), String> {
+        self.set_named_hotkey_gated(id, combo, mode, KeyGate::Always)
+    }
+
+    /// 带门的具名热键（ADR 054）：门由匹配器在回调里判（只读一个原子量），门关着时键原样放行。
+    fn set_named_hotkey_gated(
+        &self,
+        id: &str,
+        combo: Option<&str>,
+        mode: HotkeyMode,
+        gate: KeyGate,
+    ) -> Result<(), String> {
         let spec = match combo {
             Some(k) if !k.trim().is_empty() => Some(
                 parse_hotkey(k)
@@ -531,9 +556,21 @@ impl HotkeySource for LlHookSource {
             .matcher
             .lock()
             .unwrap()
-            .set_named_spec_mode(id, spec, mode);
-        kotone_core::log::log(&format!("llhook named hotkey {id}: {spec:?}"));
+            .set_named_spec_gated(id, spec, mode, gate);
+        kotone_core::log::log(&format!("llhook named hotkey {id}: {spec:?} {gate:?}"));
         Ok(())
+    }
+
+    /// 主键的门（说话的第一个键带 `when`，ADR 054）。钩子没装上时只接受一直管用。
+    fn set_main_gate(&self, gate: KeyGate) -> Result<(), String> {
+        match SHARED.get() {
+            Some(shared) => {
+                shared.matcher.lock().unwrap().set_main_gate(gate);
+                Ok(())
+            }
+            None if gate == KeyGate::Always => Ok(()),
+            None => Err("低级键盘钩子尚未安装，主热键的“只在游戏里”无法设置".into()),
+        }
     }
 
     /// 注销全部具名热键（主热键与 Esc 取消不受影响）

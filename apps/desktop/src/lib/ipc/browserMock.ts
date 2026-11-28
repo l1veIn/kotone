@@ -47,8 +47,8 @@ import type {
 import { defaultPostProcessing, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
 import type { BrowserAction, BrowserBounds, BrowserExtension, BrowserState, BrowserTab } from "../browser";
 import {
-  bindingOptions, checkHotkey as checkHotkeyInMock, confirmCustom, customStatus, hotkeyTable, presetStatus, removeCustom, saveCustom,
-  setHotkey as setHotkeyInMock, type HotkeySources,
+  addHotkey as addHotkeyInMock, bindingOptions, checkHotkey as checkHotkeyInMock, confirmCustom, customStatus, extraStatus, hotkeyTable, presetStatus,
+  removeCustom, saveCustom, setHotkey as setHotkeyInMock, setHotkeyOptions as setHotkeyOptionsInMock, type HotkeySources,
 } from "./hotkeysMock";
 
 // ================================================================
@@ -985,6 +985,8 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
         ...customStatus(mock.settings),
         // 插件登记的调工具的命令（英雄联盟的一键喊话）：登记 id 是命令名
         ...presetStatus(hotkeySources()),
+        // 呼叫键、说话的第 2 个键起（ADR 054）：登记 id `<旧 id>~<n>`，随识别登记
+        ...extraStatus(hotkeySources(), registered),
       ],
     };
 }
@@ -1058,12 +1060,22 @@ export async function getHotkeyTable(): Promise<HotkeyTable> {
   return clone(hotkeyTable(hotkeySources()));
 }
 
-export async function checkHotkey(key: string, except?: string): Promise<HotkeyCheck> {
-  return clone(checkHotkeyInMock(hotkeySources(), key, except));
+export async function checkHotkey(key: string, except?: string, when?: string): Promise<HotkeyCheck> {
+  return clone(checkHotkeyInMock(hotkeySources(), key, except, when));
 }
 
 export async function setHotkey(id: string, key: string): Promise<Settings> {
   setHotkeyInMock(hotkeySources(), id, key);
+  return clone(mock.settings);
+}
+
+export async function setHotkeyOptions(id: string, options: { mode?: string; when?: string }): Promise<Settings> {
+  setHotkeyOptionsInMock(hotkeySources(), id, options);
+  return clone(mock.settings);
+}
+
+export async function addHotkey(command: string, key: string, options: { mode?: string; when?: string } = {}): Promise<Settings> {
+  addHotkeyInMock(hotkeySources(), command, key, options);
   return clone(mock.settings);
 }
 

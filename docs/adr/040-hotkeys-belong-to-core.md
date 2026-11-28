@@ -4,6 +4,8 @@
 
 2026-11-28 修订（[ADR 052](052-retire-reminder-assistant.md)）：D10 了结——0.1.x 的提醒助手退掉了，它的键（`legacy-reminder`）一起去掉：热键表里没有这一行、不登记、没有按住的分派；升级用户的呼叫键不再存在 `assistant.companionBindings.hotkey`，所有人都是 `assistant.hotkey`（热键表 `kotone.call` 的镜像）。下文实施记录里提到提醒助手热键、`companionBindings` 的是当时的样子。
 
+2026-11-28 修订（[ADR 054](054-call-and-talk-key-modes.md)）：D8 的“不存按一下 / 按住”和“一个命令一个键”改了——热键表里同一个命令可以有几条，都登记（第 2 条起登记 id `<旧 id>~<n>`）；呼叫键、说话的一条可以带 `mode`（自动 / 按住说话 / 说一句就走 / 录音笔 / 一直听），任何一条可以带 `when`（`always` / `game` / `game:<id>`，门关着时键原样放行，只有低层钩子做得到）；冲突只在两条会同时管用时才算（游戏配置里的键只在那个游戏里）。旧字段的镜像照旧是每个命令的第一条。
+
 2026-11-28 修订（[ADR 053](053-retire-old-companion-flow.md)）：旧的单次陪玩和工具 `companion.ask` 退掉了。快捷指令“跟她说一句”（`companion::say`）只交给她，`assistant.route = agent` 时原文转交外部 Agent（`user.request`，来源 `assistant-text`；以前这时走旧的单次陪玩）；没绑键的快捷指令不再能由工具触发。下文实施记录里的 `companion.ask {quickMessageId}` 是当时的样子。
 
 ## 背景

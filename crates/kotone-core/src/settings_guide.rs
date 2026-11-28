@@ -97,7 +97,7 @@ pub const FIELDS: &[Field] = &[
     // ---- 语音输入（说话 → 识别 → 原话打进游戏聊天框；不经过 Agent）----
     f("hotkey.key", "语音输入热键", "设置 → 热键", "按键名，如 CapsLock、F8、Ctrl+Alt+Q。改之前可用 hotkeys.conflicts 查冲突。", NONE, NOW),
     f("hotkey.mode", "热键方式", "插件 → 语音输入 → 输入", "按住说话还是按一下开始、再按一下结束。", &[("hold", "按住说话，松开结束"), ("toggle", "按一下开始，再按一下结束")], NOW),
-    f("interactionMode", "语音输入方式", "插件 → 语音输入 → 交互模式", "识别完以后怎么处理。", &[("push-to-talk", "对讲机：按住说话，松开发送"), ("dictation", "录音笔：按一下开始，再按一下结束，预览确认后发送"), ("one-shot", "说一句就走：按一下开始，说完自动停、自动发送"), ("solo", "独奏模式：持续收音，说一句发一句，再按一下停止")], NOW),
+    f("interactionMode", "语音输入方式","插件 → 语音输入 → 交互模式", "说话键（第一个键）怎么用，和呼叫键一套说法。“自动”（点一下 = 说一句就走、按住 = 按住说话）写不进这里，写在热键表 voice-input.talk 那一条的 mode: \"auto\" 上（见 hotkeys.bindings）；从这里改会去掉第一个键上的 mode。", &[("push-to-talk", "按住说话：按住说，松开发送"), ("dictation", "录音笔：按一下开始，再按一下结束，预览确认后发送"), ("one-shot", "说一句就走：按一下开始，说完自动停、自动发送"), ("solo", "一直听：持续收音，说一句发一句，再按一下停止")], NOW),
     f("autoSend", "识别后自动发送", "插件 → 语音输入 → 交互模式", "true 时识别完直接发到游戏聊天，不等确认。", NONE, NOW),
     f("vadSilenceMs", "停顿多久算说完", "设置 → 调参", "毫秒，自动结束收音的静音时长。常用 500–1500。", NONE, NOW),
     f("vad.threshold", "人声检测灵敏度", "设置 → 调参", "0–1，越大越不容易把噪声当人声。", NONE, NOW),
@@ -116,8 +116,9 @@ pub const FIELDS: &[Field] = &[
     f("cyclePostProcessingHotkey", "切换文字处理流程热键", "设置 → 热键", "空 = 不用。", NONE, NOW),
     f("runtimeToggleHotkey", "启动 / 停止本地语音识别热键", "设置 → 热键", "只在用本地语音识别时显示和生效：按一下启动（把本地模型加载进内存），再按一下停止。在线识别打开 Kotone 就能用，没有启动这回事；换成在线识别时这个值保留，换回本地时还在。空 = 不用。", NONE, NOW),
     f("automationStopHotkey", "停下热键", "设置 → 热键", "停下：立刻停止她正在做的事（操作游戏、后台的事）和所有自动化，按住的键一起松开。也可以按 Esc（她操作游戏时）、说“停下”或用托盘菜单「停下」。空 = 不用（托盘仍能停）。", NONE, NOW),
+    f("hotkeys.holdMs", "自动里按住多久算按住说话", "设置 → 热键", "毫秒，150–1000，缺省 300。呼叫键、说话键选了“自动”时：按下松开短于它 = 点了一下（说一句就走，说完自动停）；按住超过它 = 按住说话（松开就交出去）。", NONE, NOW),
     f("hotkeyBackend", "热键实现方式", "设置 → 系统", "游戏里热键不灵时可以换。", &[("auto", "自动"), ("llhook", "低层键盘钩子"), ("register", "系统热键注册")], NOW),
-    f("hotkeys.bindings", "热键表", "设置 → 热键", "全部热键存在这里：数组，每条 {key, command}。command 是 <来源>.<命令>：kotone.call 呼叫、kotone.stop 停下、kotone.speech-toggle 启动 / 停止本地语音识别、voice-input.talk 说话、voice-input.channel-cycle 切换频道、voice-input.resend-last 重发上一句、voice-input.post-process-toggle 开关文字处理、voice-input.post-process-cycle 切换文字处理方案；英雄联盟的一键喊话（插件登记的预设，调 lol.shout，发队伍频道，默认没有键）lol.shout-enemy-flash 喊对面闪现、lol.shout-enemy-records 喊对面战绩、lol.shout-ally-records 喊我方战绩、lol.shout-premade 喊开黑情况。玩家自己加的不写 command，写要做的事，带 id（不写会补上）和可选的 label（名字）：快捷指令（跟她说一句）{key, say: \"帮我看看队友说了什么\", id, label}；运行已保存的自动化 {key, tool: \"automation.run\", args: {id: \"自动化 id\", args: {…}}, id, label}；调一个工具（带固定参数）{key, tool, args, id, label}；打开一个页面 {key, page: \"ui://kotone/…\", id, label}。调工具照这个工具在她的权限里的规则：默认允许的（发到游戏、运行已保存的自动化、只读的）写进来就生效；要问的（改设置、第三方插件的操作……）要玩家在「设置 → 热键」确认一次才生效，补丁里写的 confirmed 不算、会被去掉——告诉玩家去那里确认。按下时不再问。整组替换；只改一个键时照旧写 hotkey.key、channelCycleHotkey、assistant.hotkey 这些字段也行，会改进表里。改成和别的热键、Esc、游戏配置的聊天键一样的键会被拒绝（已经冲突着、这次没动的不拦）。看全部热键和冲突用 hotkeys.status，改之前用 hotkeys.conflicts 查。", NONE, NOW),
+    f("hotkeys.bindings", "热键表", "设置 → 热键", "全部热键存在这里：数组，每条 {key, command}。command 是 <来源>.<命令>：kotone.call 呼叫、kotone.stop 停下、kotone.speech-toggle 启动 / 停止本地语音识别、voice-input.talk 说话、voice-input.channel-cycle 切换频道、voice-input.resend-last 重发上一句、voice-input.post-process-toggle 开关文字处理、voice-input.post-process-cycle 切换文字处理方案；英雄联盟的一键喊话（插件登记的预设，调 lol.shout，发队伍频道，默认没有键）lol.shout-enemy-flash 喊对面闪现、lol.shout-enemy-records 喊对面战绩、lol.shout-ally-records 喊我方战绩、lol.shout-premade 喊开黑情况。玩家自己加的不写 command，写要做的事，带 id（不写会补上）和可选的 label（名字）：快捷指令（跟她说一句）{key, say: \"帮我看看队友说了什么\", id, label}；运行已保存的自动化 {key, tool: \"automation.run\", args: {id: \"自动化 id\", args: {…}}, id, label}；调一个工具（带固定参数）{key, tool, args, id, label}；打开一个页面 {key, page: \"ui://kotone/…\", id, label}。调工具照这个工具在她的权限里的规则：默认允许的（发到游戏、运行已保存的自动化、只读的）写进来就生效；要问的（改设置、第三方插件的操作……）要玩家在「设置 → 热键」确认一次才生效，补丁里写的 confirmed 不算、会被去掉——告诉玩家去那里确认。按下时不再问。同一个命令可以有几条（第一条是 assistant.hotkey、hotkey.key 这些字段的镜像；第二条起在「设置 → 热键」里行 id 是 <命令>~2）。每条可选 when：不写或 always = 一直管用；game = 认得的游戏窗口在最前面时才管用（不在游戏里时这个键原样给别的程序，鼠标侧键在桌面上照样是“后退”）；game:<游戏配置 id>（如 game:lol）= 只在这个游戏里。呼叫键（kotone.call）和说话（voice-input.talk）的一条可选 mode：auto 自动（点一下 = 说一句就走，按住超过 hotkeys.holdMs = 按住说话）、hold 按住说话（按住说，松开交出去）、one-shot 说一句就走、dictation 录音笔、continuous 一直听（她：接通通话；语音输入：说一句发一句）；不写就用全局的 assistant.callMode / interactionMode。玩家说“把呼叫键改成侧键，按住说话”：加一条 {key: \"Mouse5\", command: \"kotone.call\", mode: \"hold\", when: \"game\"}（侧键只在游戏里管用，原来的 Ctrl+~ 留着），或者把第一条的 key 换成 Mouse5、写 mode 和 when；只说“按住说话”就改 assistant.callMode。整组替换；只改一个键时照旧写 hotkey.key、channelCycleHotkey、assistant.hotkey 这些字段也行，会改进表里（改的是第一条）。改成和别的热键、Esc、游戏配置的聊天键一样的键会被拒绝（已经冲突着、这次没动的不拦）。看全部热键和冲突用 hotkeys.status，改之前用 hotkeys.conflicts 查。", NONE, NOW),
     f("postProcessing.enabled", "文字处理开关", "插件 → 语音输入 → 文字处理", "语音输入的识别结果发送前是否经过文字处理（屏蔽词、润色、翻译等）。", NONE, NOW),
     f("postProcessing.activePipelineId", "当前文字处理方案", "插件 → 语音输入 → 文字处理", "方案 ID（见 postProcessing.pipelines）。", NONE, NOW),
     f("postProcessing.pipelines", "文字处理方案列表", "插件 → 语音输入 → 文字处理", "整组替换；处理器用 postprocess.processors 查，可用 postprocess.test 试。", NONE, NOW),
@@ -134,9 +135,9 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
     // ---- 游戏陪玩（角色 / Agent）：呼叫 = 呼叫键、唤醒词、聊天页的呼叫按钮 ----
-    f("assistant.hotkey", "呼叫键", "设置 → 热键", "呼叫键，新用户默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在悬浮窗里听你说（怎么听看 assistant.callMode，缺省说完自动交给她）。空 = 不用。0.1.x 升级后还没启用她的用户没有呼叫键。", NONE, NOW),
+    f("assistant.hotkey", "呼叫键", "设置 → 热键", "呼叫键，新用户默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在悬浮窗里听你说（怎么听看 assistant.callMode，新装是自动：点一下说完自动交给她，按住就是按住说话）。可以再加几个呼叫键、只在游戏里管用（鼠标侧键），见 hotkeys.bindings。空 = 不用。0.1.x 升级后还没启用她的用户没有呼叫键。", NONE, NOW),
     f("assistant.connectionId", "API 连接", "聊天页 → 她用的模型", "她用哪条连接（连接 ID，用 connections.list 查）。", NONE, NOW),
-    f("assistant.callMode", "呼叫以后怎么听", "琴音 → 唤醒", "按呼叫键、喊唤醒词、点聊天页的呼叫按钮、按快捷指令以后怎么听。缺省 one-shot。说一句就走和录音笔里她答完就安静，只有她这次最后一句是问句（以“？”结尾）才再听一会儿（assistant.followUpSeconds）。", &[("one-shot", "说一句就走（缺省）：听你说一句，说完自动交给她；再按呼叫键可以提前结束"), ("dictation", "录音笔：按一下呼叫键开始听，再按一下结束、交给她；唤醒词、呼叫按钮、快捷指令照说一句就走"), ("call", "通话：一直在听，开口就是下一句；说“退下”、再按呼叫键或 assistant.callIdleSeconds 秒没人说话就挂断")], NOW),
+    f("assistant.callMode", "呼叫以后怎么听", "琴音 → 唤醒", "按呼叫键、喊唤醒词、点聊天页的呼叫按钮、按快捷指令以后怎么听（第一个呼叫键的方式；别的呼叫键在 hotkeys.bindings 那一条写 mode）。新装是 auto，老配置没写过的是 one-shot。说一句就走、录音笔、自动、按住说话里她答完就安静，只有她这次最后一句是问句（以“？”结尾）才再听一会儿（assistant.followUpSeconds）。从这里改会去掉第一个呼叫键上的 mode。", &[("auto", "自动（新装的缺省）：点一下呼叫键 = 说一句就走；按住超过 hotkeys.holdMs 毫秒 = 按住说话，松开交给她；唤醒词、呼叫按钮、快捷指令照说一句就走"), ("hold", "按住说话：按住呼叫键说，松开交给她；唤醒词、呼叫按钮、快捷指令照说一句就走"), ("one-shot", "说一句就走：听你说一句，说完自动交给她；再按呼叫键可以提前结束"), ("dictation", "录音笔：按一下呼叫键开始听，再按一下结束、交给她；唤醒词、呼叫按钮、快捷指令照说一句就走"), ("call", "一直听：接通通话，一直在听，开口就是下一句；说“退下”、再按呼叫键或 assistant.callIdleSeconds 秒没人说话就挂断")], NOW),
     f("assistant.followUpSeconds", "她问了一句以后再听几秒", "琴音 → 唤醒", "秒，0–30，缺省 8。说一句就走和录音笔里，她这次最后一句以问号结尾时，答完再听这么久，你直接回答就行；0 = 问了也不再听。通话里一直在听，不看这一项。", NONE, NOW),
     f("assistant.callIdleSeconds", "通话多久没人说话挂断", "琴音 → 唤醒", "秒，0–600，缺省 30。只在 assistant.callMode 是 call（通话）时有用：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话（旧的写法），按说一句就走。", NONE, NOW),
     f("assistant.echoCancellation", "开着音箱也能打断她（回声消除）", "琴音 → 唤醒", "true（缺省）时通话里消掉音箱放出来的声音（她的声音、游戏声），玩家直接开口就能打断她；false 时她说话时不听，要打断就按呼叫键。戴耳机开着也没坏处。", NONE, NOW),
@@ -343,6 +344,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("toolService.ocr", "旧字段，保留兼容"),
     ("ui.firstRunCompleted", "首次向导是否完成"),
     ("ui.legacyUpgrade", "由玩家在升级欢迎页或新手引导中选择"),
+    (
+        "ui.callKeyChosen",
+        "界面提示状态：聊天页“准备好了吗”里玩家点过“就用这个键”（ADR 054），呼叫键要玩家自己定",
+    ),
     (
         "assistant.interactionMode",
         "0.1.x 提醒助手热键的说话方式；提醒助手退掉了（ADR 052），只为旧版本能读保留",

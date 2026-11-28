@@ -1,6 +1,97 @@
+use super::capture::SessionOrigin;
 use super::*;
+use crate::hotkey_options::{auto_release_ends, VoiceKeyMode};
+use crate::interaction::InteractionMode;
 
 impl Orchestrator {
+    /// 说话键带了自己的方式（ADR 054：热键表那一条的 `mode`，或第一条跟着的全局方式）：按下 / 松开各来一次。
+    /// - 自动：按下照说一句就走开始，按着的时候静音判停不算数；松开时按了 `hold_ms` 以上 = 按住说话，照对讲机的
+    ///   松手宽限结束；短于它什么都不做，接着照说一句就走等说完。
+    /// - 按住说话：照对讲机。其余三种只看按下，照那个预设。
+    ///
+    /// `ticket` 是宿主给的入场票（命令行没有，现场取一张）。
+    pub async fn on_talk_key(
+        &self,
+        mode: VoiceKeyMode,
+        pressed: bool,
+        ticket: Option<u64>,
+        hold_ms: u32,
+    ) {
+        let ticket = ticket.unwrap_or_else(|| self.hotkey_input_ticket());
+        let purpose = SessionPurpose::Dictation;
+        match mode {
+            VoiceKeyMode::Auto if pressed => {
+                let at = std::time::Instant::now();
+                let _input = self.hold_input.lock().await;
+                *self.key_press.lock().unwrap() = None;
+                let (_, _, before) = self.hotkey_session_snapshot();
+                self.on_purpose_hotkey_toggle_preset(
+                    purpose,
+                    ticket,
+                    Some(InteractionMode::OneShot),
+                )
+                .await;
+                self.remember_press(before, purpose, at);
+            }
+            VoiceKeyMode::Auto => {
+                let _input = self.hold_input.lock().await;
+                if let Some(gen) = self.take_long_press(ticket, Some(hold_ms), purpose) {
+                    // 和对讲机一样留一小段松手宽限，句尾不被切掉
+                    self.schedule_release_end(gen, ticket);
+                }
+            }
+            VoiceKeyMode::Hold => {
+                self.on_purpose_hotkey_hold_preset(
+                    purpose,
+                    pressed,
+                    ticket,
+                    Some(InteractionMode::PushToTalk),
+                )
+                .await
+            }
+            _ if !pressed => {}
+            other => {
+                self.on_purpose_hotkey_toggle_preset(purpose, ticket, other.to_interaction())
+                    .await
+            }
+        }
+    }
+
+    /// 这一下按下开始了新会话（代际变了、正在听、是这个用途）：记下来，按着的时候静音判停不算数。
+    pub(super) fn remember_press(
+        &self,
+        before_gen: u64,
+        purpose: SessionPurpose,
+        at: std::time::Instant,
+    ) {
+        let (state, active, gen) = self.hotkey_session_snapshot();
+        if gen != before_gen && state == OrchestratorState::Listening && active == purpose {
+            self.key_held.store(true, Ordering::SeqCst);
+            *self.key_press.lock().unwrap() = Some((gen, at));
+        }
+    }
+
+    /// 松开：不再“按着”。这一下按下开始的会话还在听，并且（自动时）按了 `hold_ms` 以上，返回它的代际，由调用方结束。
+    /// `hold_ms` 为 None 是按住说话（松开就结束）。
+    pub(super) fn take_long_press(
+        &self,
+        ticket: u64,
+        hold_ms: Option<u32>,
+        purpose: SessionPurpose,
+    ) -> Option<u64> {
+        self.key_held.store(false, Ordering::SeqCst);
+        let (gen, at) = self.key_press.lock().unwrap().take()?;
+        if !self.input_ticket_is_current(Some(ticket)) {
+            return None;
+        }
+        if hold_ms.is_some_and(|ms| !auto_release_ends(at.elapsed(), ms)) {
+            return None;
+        }
+        let (state, active, current) = self.hotkey_session_snapshot();
+        (current == gen && state == OrchestratorState::Listening && active == purpose)
+            .then_some(gen)
+    }
+
     // ---------- 热键入口（hotkey 模块调用；ADR-006 单键语义表 + 策略路由） ----------
 
     /// 进行中的会话使用开始时的策略；热更新不偷换一次按住/松开配对的语义。
@@ -50,9 +141,21 @@ impl Orchestrator {
     }
 
     pub(super) async fn on_purpose_hotkey_toggle(&self, purpose: SessionPurpose, ticket: u64) {
+        self.on_purpose_hotkey_toggle_preset(purpose, ticket, None)
+            .await;
+    }
+
+    /// 同上；`preset` = 这个键带了自己的方式（ADR 054），开始的会话照它，不看 `interactionMode`。
+    pub(super) async fn on_purpose_hotkey_toggle_preset(
+        &self,
+        purpose: SessionPurpose,
+        ticket: u64,
+        preset: Option<InteractionMode>,
+    ) {
         if !self.input_ticket_is_current(Some(ticket)) {
             return;
         }
+        let origin = preset.map_or(SessionOrigin::Hotkey, SessionOrigin::HotkeyPreset);
         // 另一用途的热键只能取消旧会话，不结束它、确认它或把结果交给另一条管线。
         let (state, active_purpose, gen) = self.hotkey_session_snapshot();
         if state != OrchestratorState::Idle && active_purpose != purpose {
@@ -62,7 +165,7 @@ impl Orchestrator {
         match state {
             OrchestratorState::Idle => {
                 let _ = self
-                    .begin_inner(false, purpose, Some(gen), Some(ticket))
+                    .begin_inner_from(false, purpose, Some(gen), Some(ticket), origin)
                     .await;
             }
             OrchestratorState::Listening => {
@@ -85,13 +188,13 @@ impl Orchestrator {
             OrchestratorState::Success => {
                 self.cancel_inner(Some(ticket), Some(gen)).await;
                 let _ = self
-                    .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                    .begin_inner_from(false, purpose, Some(gen + 1), Some(ticket), origin)
                     .await;
             }
             OrchestratorState::Error if self.inner.lock().unwrap().pending_text.is_none() => {
                 self.cancel_inner(Some(ticket), Some(gen)).await;
                 let _ = self
-                    .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                    .begin_inner_from(false, purpose, Some(gen + 1), Some(ticket), origin)
                     .await;
             }
             _ => self.cancel_inner(Some(ticket), Some(gen)).await,
@@ -120,10 +223,23 @@ impl Orchestrator {
         pressed: bool,
         ticket: u64,
     ) {
+        self.on_purpose_hotkey_hold_preset(purpose, pressed, ticket, None)
+            .await;
+    }
+
+    /// 同上；`preset` 同 [`Self::on_purpose_hotkey_toggle_preset`]。
+    pub(super) async fn on_purpose_hotkey_hold_preset(
+        &self,
+        purpose: SessionPurpose,
+        pressed: bool,
+        ticket: u64,
+        preset: Option<InteractionMode>,
+    ) {
         let _input = self.hold_input.lock().await;
         if !self.input_ticket_is_current(Some(ticket)) {
             return;
         }
+        let origin = preset.map_or(SessionOrigin::Hotkey, SessionOrigin::HotkeyPreset);
         let (state, active_purpose, gen) = self.hotkey_session_snapshot();
         if state != OrchestratorState::Idle && active_purpose != purpose {
             if pressed {
@@ -145,13 +261,13 @@ impl Orchestrator {
             match state {
                 OrchestratorState::Idle => {
                     let _ = self
-                        .begin_inner(false, purpose, Some(gen), Some(ticket))
+                        .begin_inner_from(false, purpose, Some(gen), Some(ticket), origin)
                         .await;
                 }
                 OrchestratorState::Success => {
                     self.cancel_inner(Some(ticket), Some(gen)).await;
                     let _ = self
-                        .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                        .begin_inner_from(false, purpose, Some(gen + 1), Some(ticket), origin)
                         .await;
                 }
                 OrchestratorState::Error => {
@@ -162,7 +278,7 @@ impl Orchestrator {
                     } else {
                         self.cancel_inner(Some(ticket), Some(gen)).await;
                         let _ = self
-                            .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                            .begin_inner_from(false, purpose, Some(gen + 1), Some(ticket), origin)
                             .await;
                     }
                 }

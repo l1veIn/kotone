@@ -234,6 +234,9 @@ struct KeyArgs {
     /// 正在改的那一项的 id（不和自己比，ADR 040）；不传 = 新加的键。
     #[serde(default)]
     except: Option<String>,
+    /// 这个键什么时候管用（`always` / `game` / `game:<id>`，ADR 054）；不传 = 一直。
+    #[serde(default)]
+    when: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -663,8 +666,13 @@ pub async fn invoke_until(
             Ok(status)
         }
         c::TOOL_HOTKEYS_CONFLICTS => {
-            let KeyArgs { key, except } = parse(tool, args)?;
-            to_json(crate::hotkey_table_cmd::check(app, &key, except.as_deref()))
+            let KeyArgs { key, except, when } = parse(tool, args)?;
+            to_json(crate::hotkey_table_cmd::check_at(
+                app,
+                &key,
+                &kotone_core::hotkey_options::KeyWhen::parse(when.as_deref()),
+                except.as_deref(),
+            ))
         }
         c::TOOL_INPUT_CHECK => {
             let _: NoArgs = parse(tool, args)?;

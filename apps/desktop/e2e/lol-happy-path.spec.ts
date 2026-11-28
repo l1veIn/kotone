@@ -34,6 +34,15 @@ async function expectAllReady(page: Page) {
   await expect(page.getByTestId("chat-ready-all")).toHaveAttribute("data-rows", "key model call admin lol ocr");
 }
 
+/** 呼叫键还是默认的、玩家没定过（ADR 054）：清单里那一行点“就用 Ctrl + ~”。 */
+async function keepCallKey(page: Page) {
+  await expect(page.getByTestId("chat-ready-call")).toHaveAttribute("data-ok", "no");
+  await expect(page.getByTestId("chat-ready-call-hint")).toContainText("鼠标侧键");
+  await page.getByTestId("chat-ready-call-keep").click();
+  // 这一行 ✓（别的都 ✓ 时整个清单不显示）
+  await expect(page.locator('[data-testid="chat-ready-call"][data-ok="no"]')).toHaveCount(0);
+}
+
 async function addDeepSeekInConnections(page: Page) {
   await openSettingsTab(page, "connections");
   await page.getByTestId("connection-preset-deepseek").click();
@@ -65,6 +74,12 @@ test("a · new user: one key in onboarding → she and everything else on DeepSe
   expect(s.assistant.ttsModelId).toBe("deepseek-tts");
   expect(s.search.activeModelId).toBe("deepseek-search");
   await expect(page.getByTestId("composer-model")).toHaveAttribute("data-model", "deepseek-flash");
+  // 引导里没动呼叫键：只剩“按一下你想用的呼叫键”（ADR 054），点“就用 Ctrl + ~”也算定了
+  expect(await failing(page)).toEqual(["call"]);
+  await expect(page.getByTestId("chat-ready-call")).toContainText("Ctrl + ~");
+  await screenshot(page, { path: testInfo.outputPath("a-call-key.png") });
+  await keepCallKey(page);
+  expect((await settingsOf(page)).ui.callKeyChosen).toBe(true);
   await expectAllReady(page);
   await screenshot(page, { path: testInfo.outputPath("a-chat.png") });
 });
@@ -102,8 +117,9 @@ test("b2 · 0.1.x user who is on the old Qwen: adding DeepSeek in 「API 连接�
   await open(page, "#/settings?onboarding=never&mockLegacyUpgrade=optedIn&mockLegacyReminder=qwen");
   // 起点：已经启用了她，她用的是以前那条千问（那位老用户的情形）；读取以后和新用户一样在 assistant.connectionId
   await expect(page.getByTestId("composer-model")).toHaveAttribute("data-model", "qwen-turbo");
-  expect(await failing(page)).toEqual(["key", "ocr"]);
+  expect(await failing(page)).toEqual(["key", "call", "ocr"]);
   await screenshot(page, { path: testInfo.outputPath("b2-before.png") });
+  await keepCallKey(page);
   const before = await settingsOf(page);
 
   expect(before.ui.legacyUpgrade).toBe("notNeeded");
@@ -134,7 +150,8 @@ test("b2 · 0.1.x user who is on the old Qwen: adding DeepSeek in 「API 连接�
 
 test("b3 · 0.1.x user on Qwen fills the key from the checklist: her connection changes, the Qwen one stays in 「API 连接」", async ({ page }) => {
   await open(page, "#/settings?onboarding=never&mockLegacyUpgrade=optedIn&mockLegacyReminder=qwen");
-  expect(await failing(page)).toEqual(["key", "ocr"]);
+  expect(await failing(page)).toEqual(["key", "call", "ocr"]);
+  await keepCallKey(page);
   await page.getByTestId("chat-ready-key-fix").click();
   await page.getByTestId("onboarding-key-input").fill("sk-test-123");
   await page.getByTestId("onboarding-key-submit").click();
@@ -166,8 +183,9 @@ test("b4 · 0.1.x user who kept voice input adds DeepSeek in 「API 连接」: s
 test("c · 0.1.x user who already had DeepSeek: she stays on it and the one missing piece is fixed in place", async ({ page }) => {
   await open(page, "#/settings?onboarding=never&mockLegacyUpgrade=optedIn&mockLegacyReminder=deepseek");
   await expect(page.getByTestId("composer-model")).toHaveAttribute("data-model", "deepseek-chat");
-  // 0.1.x 没有文字识别：一键换成 DeepSeek 的
-  expect(await failing(page)).toEqual(["ocr"]);
+  // 0.1.x 没有文字识别：一键换成 DeepSeek 的；呼叫键是以前的默认，点一下“就用”
+  expect(await failing(page)).toEqual(["call", "ocr"]);
+  await keepCallKey(page);
   await page.getByTestId("chat-ready-ocr-fix").click();
   await expectAllReady(page);
   const s = await settingsOf(page);
@@ -199,7 +217,7 @@ test("the administrator and LoL rows: not elevated and plugin off show ✗, each
   await page.getByTestId("chat-key-input").fill("sk-test-123");
   await page.getByTestId("chat-key-submit").click();
   await page.getByTestId("onboarding-enter-chat").click();
-  expect(await failing(page)).toEqual(["admin", "lol"]);
+  expect(await failing(page)).toEqual(["call", "admin", "lol"]);
   await expect(page.getByTestId("chat-ready-lol")).toContainText("英雄联盟插件关着");
 
   await page.getByTestId("chat-ready-lol-fix").click();
@@ -223,4 +241,36 @@ test("a DeepSeek key that fails its test in 「API 连接」 is kept but she is 
   const s = await settingsOf(page);
   expect(s.assistant.connectionId).toBe("original-qwen");
   expect(s.ocr.activeModelId).toBe("");
+});
+
+// ADR 054 第 4 条：呼叫键那一行“按一下你想用的键”。侧键加成只在游戏里管用的第二个呼叫键（Ctrl + ~ 留着），别的键换掉呼叫键。
+test("the call key row: a mouse side button becomes an in-game call key and Ctrl + ~ stays", async ({ page }, testInfo) => {
+  await open(page, "#/settings?onboarding=never&mockLegacyUpgrade=optedIn&mockLegacyReminder=deepseek");
+  expect(await failing(page)).toEqual(["call", "ocr"]);
+  await expect(page.getByTestId("chat-ready-call-hint")).toContainText("鼠标侧键");
+  await screenshot(page.getByTestId("chat-ready"), { path: testInfo.outputPath("call-key-row.png") });
+  await page.getByTestId("chat-ready-call-capture").click();
+  await expect(page.getByTestId("chat-ready-call-capture")).toHaveAttribute("data-capturing", "yes");
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent("mousedown", { button: 4, bubbles: true, cancelable: true })));
+  await expect(page.getByTestId("chat-ready-call")).toHaveAttribute("data-ok", "yes");
+  const s = await settingsOf(page);
+  expect(s.hotkeys?.bindings.filter((b) => b.command === "kotone.call")).toEqual([
+    { key: "Ctrl+Backquote", command: "kotone.call" },
+    { key: "Mouse5", command: "kotone.call", when: "game" },
+  ]);
+  expect(s.assistant.hotkey).toBe("Ctrl+Backquote");
+  expect(s.ui.callKeyChosen).toBe(true);
+});
+
+test("the call key row: a keyboard key replaces the call key", async ({ page }) => {
+  await open(page, "#/settings?onboarding=never&mockLegacyUpgrade=optedIn&mockLegacyReminder=deepseek");
+  expect(await failing(page)).toEqual(["call", "ocr"]);
+  await page.getByTestId("chat-ready-call-capture").click();
+  await expect(page.getByTestId("chat-ready-call-capture")).toHaveAttribute("data-capturing", "yes");
+  await page.keyboard.press("F8");
+  await expect(page.getByTestId("chat-ready-call")).toHaveAttribute("data-ok", "yes");
+  await expect(page.getByTestId("chat-ready-call")).toContainText("F8");
+  const s = await settingsOf(page);
+  expect(s.assistant.hotkey).toBe("F8");
+  expect(s.hotkeys?.bindings.filter((b) => b.command === "kotone.call")).toEqual([{ key: "F8", command: "kotone.call" }]);
 });

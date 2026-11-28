@@ -8,7 +8,7 @@
   import { m } from "$lib/paraglide/messages.js";
 
   let {
-    id, statusId, title, value, placeholder = m.voice_hotkey_placeholder({ example: "Ctrl+F9" }), disabled = false, compact = false, onSave,
+    id, statusId, title, value, placeholder = m.voice_hotkey_placeholder({ example: "Ctrl+F9" }), disabled = false, compact = false, when, onSave,
   }: {
     id: string;
     /** 登记状态里的 id（`getHotkeyStatus().named[].id`，不写就是 `id`）；`record`（说话）的状态在主键那几项里。 */
@@ -18,6 +18,8 @@
     placeholder?: string;
     disabled?: boolean;
     compact?: boolean;
+    /** 这个键什么时候管用（ADR 054：always / game / game:<id>）；查冲突时只和同时管用的比。 */
+    when?: string;
     onSave: (key: string) => Promise<void>;
   } = $props();
 
@@ -70,7 +72,7 @@
     saving = true;
     try {
       // 冲突由后端查（ADR 040 D6）：别的热键、Esc、游戏配置的聊天键和控制台触发键
-      const conflict = key ? firstConflictName(await checkHotkey(key, id)) : null;
+      const conflict = key ? firstConflictName(await checkHotkey(key, id, when)) : null;
       if (disposed) return;
       if (conflict) {
         toast(false, m.voice_hotkey_conflict({ title, conflict, key }));

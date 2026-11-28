@@ -14,8 +14,9 @@ export interface HotkeyConfig {
 /** 交互模式预设（ADR-006；缺省 null = 由 hotkey.mode + autoSend 旧字段推导） */
 export type InteractionMode = "push-to-talk" | "dictation" | "one-shot" | "solo";
 export type AssistantInteractionMode = Exclude<InteractionMode, "solo">;
-/** 呼叫（呼叫键、唤醒词、呼叫按钮、快捷指令）以后怎么听：说一句就走 / 录音笔 / 通话（ADR 033 2026-11-26 修订）。 */
-export type CallMode = "one-shot" | "dictation" | "call";
+/** 呼叫（呼叫键、唤醒词、呼叫按钮、快捷指令）以后怎么听：自动 / 按住说话 / 说一句就走 / 录音笔 / 一直听（`call`）
+ *  （ADR 033 2026-11-26 修订、ADR 054）。 */
+export type CallMode = "auto" | "hold" | "one-shot" | "dictation" | "call";
 
 /** 桌面壳 UI 状态（core settings `ui` 段） */
 export interface UiConfig {
@@ -32,6 +33,8 @@ export interface UiConfig {
   startPage?: string;
   /** 左侧栏自己排的顺序和隐藏的页面（ADR 034 第六节；空 = 默认）。 */
   sidebar?: { order: string[]; hidden: string[] };
+  /** 聊天页“准备好了吗”里点过“就用这个键”（ADR 054；旧配置没有 = 没点过） */
+  callKeyChosen?: boolean;
 }
 
 export type StartPage = "chat" | "voiceInput";
@@ -226,11 +229,17 @@ export interface HotkeyBinding {
   page?: string;
   id?: string;
   label?: string;
+  /** 呼叫键、说话这一条的方式（ADR 054）；不写 = 跟着全局 */
+  mode?: string;
+  /** 什么时候管用（ADR 054）：不写 / always、game、game:<游戏配置 id> */
+  when?: string;
   [field: string]: unknown;
 }
 
 export interface HotkeysConfig {
   bindings: HotkeyBinding[];
+  /** 自动里按住多少毫秒算按住说话（ADR 054；旧后端没有 = 300） */
+  holdMs?: number;
 }
 
 export interface OcrConfig {
@@ -967,7 +976,19 @@ export interface KeyUse {
   blocked?: string;
   /** 自己加的最近一次按下的结果（这次启动以后） */
   lastRun?: { atMs: number; ok: boolean; message: string };
+  /** 什么时候管用（ADR 054）：always / game / game:<游戏配置 id>；游戏配置里的键是那个游戏。旧后端没有 = always */
+  when?: string;
+  /** 呼叫键、说话这一个键实际的方式（ADR 054）；别的命令没有 */
+  mode?: VoiceKeyMode;
+  /** 这一个键写着自己的方式（没写 = 跟着她的「唤醒」页 / 语音输入页的方式） */
+  ownMode?: boolean;
+  /** 这个命令的第几个键（第 2 个起行 id 是 `<命令>~<n>`）；第 1 个不写 */
+  nth?: number;
 }
+
+/** 说话键 / 呼叫键的方式（ADR 054）：自动 / 按住说话 / 说一句就走 / 录音笔 / 一直听。 */
+export type VoiceKeyMode = "auto" | "hold" | "one-shot" | "dictation" | "continuous";
+export const VOICE_KEY_MODES: VoiceKeyMode[] = ["auto", "hold", "one-shot", "dictation", "continuous"];
 
 /** hotkey_binding_options 的一个工具：「设置 → 热键」“加一个 → 调一个工具”能选的（ADR 040 第 3 期）。 */
 export interface BindableTool {

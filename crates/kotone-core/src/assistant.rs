@@ -97,19 +97,26 @@ pub struct AssistantConfig {
     pub call_idle_seconds: u32,
     /// 通话里做回声消除（ADR 033 第三节）：开着音箱也能直接开口打断她。新字段，缺省开。
     pub echo_cancellation: bool,
-    /// 呼叫（呼叫键、唤醒词、聊天页的呼叫按钮、快捷指令）以后怎么听（ADR 033 2026-11-26 修订）。
-    /// 新字段，缺省（旧配置没有）= 说一句就走。
+    /// 呼叫（呼叫键、唤醒词、聊天页的呼叫按钮、快捷指令）以后怎么听（ADR 033 2026-11-26 修订、ADR 054）。
+    /// 新装 = 自动；旧配置没有这一项 = 说一句就走（读取时写明，`settings::migrate_call_mode_json`）。
+    /// 热键表里呼叫键那一条写了 `mode` 时，那个键照它（[`crate::hotkey_options`]）。
     pub call_mode: CallMode,
 }
 
-/// 呼叫以后怎么听（ADR 033 2026-11-26 修订；说法和语音输入的交互方式一致）。不认识的值按说一句就走。
+/// 呼叫以后怎么听（ADR 033 2026-11-26 修订、ADR 054：和说话键一套，给玩家看的名字见
+/// [`crate::hotkey_options::VoiceKeyMode::label`]）。不认识的值按说一句就走（旧版本读到 `auto` / `hold` 也是）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CallMode {
+    /// 自动（ADR 054，新装的缺省）：点一下呼叫键 = 说一句就走；按住超过 `hotkeys.holdMs` = 按住说话。
+    /// 唤醒词、呼叫按钮、快捷指令没有“按住”，照说一句就走。
+    Auto,
+    /// 按住说话（ADR 054）：按住呼叫键说，松开交给她。唤醒词、呼叫按钮、快捷指令照说一句就走。
+    Hold,
     /// 录音笔：按一下呼叫键开始听，再按一下结束、交给她（不判停、没有预览）。唤醒词、呼叫按钮、
     /// 快捷指令没有“再按一下”，照说一句就走。答完照说一句就走。
     Dictation,
-    /// 通话（ADR 033 二–四）：一直在听，说“退下”、再按呼叫键或 `call_idle_seconds` 秒没人说话才挂断。
+    /// 一直听（以前叫通话，ADR 033 二–四）：接通以后一直在听，说“退下”、再按呼叫键或 `call_idle_seconds` 秒没人说话才挂断。
     Call,
     /// 说一句就走（缺省）：听你说一句，说完（静音判停）交给她；呼叫键可以提前结束。她答完不再听，
     /// 除非她这次最后一句是问句（`follow_up_seconds`）。
@@ -454,7 +461,8 @@ impl Default for AssistantConfig {
             follow_up_seconds: DEFAULT_FOLLOW_UP_SECONDS,
             call_idle_seconds: DEFAULT_CALL_IDLE_SECONDS,
             echo_cancellation: true,
-            call_mode: CallMode::default(),
+            // 新装是自动（ADR 054）；旧配置没有这一项时读取前写明说一句就走（`settings::migrate_call_mode_json`）
+            call_mode: CallMode::Auto,
         }
     }
 }
@@ -731,14 +739,13 @@ mod tests {
     }
 
     #[test]
-    fn call_mode_is_a_new_field_defaulting_to_one_shot() {
-        // 旧配置没有 callMode：都是说一句就走（玩家 2026-11-26 要的缺省），包括以前开着通话的
-        let old: AssistantConfig =
-            serde_json::from_str(r##"{"voiceId":"v","callIdleSeconds":30}"##).unwrap();
-        assert_eq!(old.call_mode, CallMode::OneShot);
-        assert_eq!(old.effective_call_mode(), CallMode::OneShot);
-        // 写出来的值和语音输入的交互方式同名（one-shot / dictation）再加 call
+    fn call_mode_is_auto_for_new_installs_and_old_values_still_load() {
+        // 新装是自动（ADR 054）；旧配置文件没有 callMode 的读成说一句就走在 settings 读取时做（migrate_call_mode_json）
+        assert_eq!(AssistantConfig::default().call_mode, CallMode::Auto);
+        // 写出来的值和语音输入的交互方式同名（one-shot / dictation）再加 call、auto、hold
         for (mode, value) in [
+            (CallMode::Auto, "auto"),
+            (CallMode::Hold, "hold"),
             (CallMode::OneShot, "one-shot"),
             (CallMode::Dictation, "dictation"),
             (CallMode::Call, "call"),

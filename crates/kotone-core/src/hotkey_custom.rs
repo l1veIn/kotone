@@ -280,6 +280,8 @@ pub fn registration_view(hotkeys: &HotkeysConfig) -> Value {
                 "kind": action.kind(),
                 // 确认了 / 确认作废了：从不登记变成登记，或者反过来
                 "confirmed": binding.confirmed(),
+                // 什么时候管用（ADR 054）：门跟着登记
+                "when": binding.when().as_string(),
             })),
             None => Some(binding.0.clone()),
         })

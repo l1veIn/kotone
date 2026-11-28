@@ -175,6 +175,8 @@
       if (callKeyTouched || ($settingsStore?.assistant.hotkey ?? "") !== callKey) {
         settingsStore.set(await setHotkey("kotone.call", callKey));
       }
+      // 这里点过“用推荐的”或录过键 = 玩家自己定的呼叫键（ADR 054 第 4 条：聊天页“准备好了吗”那一行算 ✓）
+      if (callKeyTouched && callKey) settingsStore.set(await updateSettings({ ui: { callKeyChosen: true } }));
       onDone("chat", m.shell_onboarding_first_prompt());
     } catch (error) {
       toast(false, m.shell_onboarding_save_call_key_failed({ error: errText(error) }));

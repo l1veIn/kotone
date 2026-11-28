@@ -241,3 +241,48 @@ test("a 0.1.x user who kept voice input has no call, stop or old reminder-assist
   await expect(page.getByTestId("hotkeys-row-kotone.stop")).toHaveCount(0);
   await expect(page.getByTestId("hotkeys-row-voice-input.talk")).toBeVisible();
 });
+
+// ADR 054：呼叫键、说话旁边有方式；能再加一个键（侧键只在游戏里），每个键自己的方式和“什么时候管用”。
+test("the call and talk keys show their way; a second key (side button, only in a game) has its own way and can be removed", async ({ page }, testInfo) => {
+  await page.goto("/#/settings?onboarding=never");
+  await openSettingsTab(page, "hotkeys");
+  const mode = page.getByTestId("hotkeys-mode-kotone.call");
+  // 预览是老用户：呼叫键说一句就走，说话按住说话；别的命令没有方式
+  await expect(mode).toHaveAttribute("data-value", "one-shot");
+  await expect(page.getByTestId("hotkeys-mode-voice-input.talk")).toHaveAttribute("data-value", "hold");
+  await expect(page.getByTestId("hotkeys-mode-kotone.stop")).toHaveCount(0);
+  // 第一个呼叫键选自动：写进她的「唤醒」页那个字段
+  await mode.click();
+  await page.getByRole("option", { name: "自动" }).click();
+  await expect(mode).toHaveAttribute("data-value", "auto");
+  expect((await mockSettings(page)).assistant.callMode).toBe("auto");
+
+  // 再加一个键：录到鼠标侧键 → 只在游戏里管用
+  await page.getByTestId("hotkeys-add-key-kotone.call").click();
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent("mousedown", { button: 4, bubbles: true, cancelable: true })));
+  const second = page.getByTestId("hotkeys-row-kotone.call~2");
+  await expect(second).toBeVisible();
+  await expect(second).toContainText("第 2 个键");
+  await expect(page.getByTestId("hotkeys-when-kotone.call~2")).toHaveAttribute("data-value", "game");
+  let calls = (await mockSettings(page)).hotkeys?.bindings.filter((b) => b.command === "kotone.call");
+  expect(calls).toEqual([{ key: "Ctrl+Backquote", command: "kotone.call" }, { key: "Mouse5", command: "kotone.call", when: "game" }]);
+
+  // 第二个键单独选按住说话，第一个照旧是自动
+  await page.getByTestId("hotkeys-mode-kotone.call~2").click();
+  await page.getByRole("option", { name: "按住说话" }).click();
+  await expect(page.getByTestId("hotkeys-mode-kotone.call~2")).toHaveAttribute("data-value", "hold");
+  await expect(mode).toHaveAttribute("data-value", "auto");
+  // 只在英雄联盟里
+  await page.getByTestId("hotkeys-when-kotone.call~2").click();
+  await page.getByRole("option", { name: /^只在《/ }).first().click();
+  await expect(page.getByTestId("hotkeys-when-kotone.call~2")).toHaveAttribute("data-value", /^game:/);
+  calls = (await mockSettings(page)).hotkeys?.bindings.filter((b) => b.command === "kotone.call");
+  expect(calls?.[1]).toMatchObject({ key: "Mouse5", mode: "hold" });
+  expect(String(calls?.[1].when)).toMatch(/^game:/);
+  await screenshot(page.getByTestId("hotkeys-page"), { path: testInfo.outputPath("call-two-keys.png") });
+
+  // 删掉第二个
+  await page.getByTestId("hotkeys-remove-key-kotone.call~2").click();
+  await expect(second).toHaveCount(0);
+  expect((await mockSettings(page)).hotkeys?.bindings.filter((b) => b.command === "kotone.call")).toEqual([{ key: "Ctrl+Backquote", command: "kotone.call" }]);
+});
