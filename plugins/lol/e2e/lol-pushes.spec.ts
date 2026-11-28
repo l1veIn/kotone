@@ -202,8 +202,13 @@ test("the champ-select card fits a narrow window (the floating window's mini win
   const root = app.getByTestId("lol-app-champ-select");
   expect(await root.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   const seats = app.getByTestId("lol-champ-select-seat");
-  const [a, b] = [await seats.nth(0).boundingBox(), await seats.nth(1).boundingBox()];
-  expect(b!.y).toBeGreaterThan(a!.y + 4);
+  // 换行由页面里量宽度的那一下决定，机器忙时晚一帧：等它排好再比
+  await expect
+    .poll(async () => {
+      const [a, b] = [await seats.nth(0).boundingBox(), await seats.nth(1).boundingBox()];
+      return b!.y - a!.y;
+    })
+    .toBeGreaterThan(4);
   const rate = app.getByTestId("lol-champ-select-row").first().locator(".rate");
   expect(await rate.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   await screenshot(page, { path: shot(testInfo, "chat-champ-select-narrow") });

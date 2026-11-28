@@ -311,8 +311,13 @@ test("when you die: one card with each enemy's level, KDA and items ordered by i
   await moved.evaluate(() => { document.body.style.width = "360px"; });
   expect(await movedRoot.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   const first = moved.getByTestId("lol-enemy-build-row").first();
-  const name = await first.locator(".name").boundingBox();
-  const items = await first.locator(".items").boundingBox();
-  expect(items!.y).toBeGreaterThan(name!.y + 4);
+  // 换行由页面里量宽度的那一下决定，机器忙时晚一帧：等它排好再比
+  await expect
+    .poll(async () => {
+      const name = await first.locator(".name").boundingBox();
+      const items = await first.locator(".items").boundingBox();
+      return items!.y - name!.y;
+    })
+    .toBeGreaterThan(4);
   await screenshot(page, { path: shot(testInfo, "chat-enemy-build-narrow") });
 });
