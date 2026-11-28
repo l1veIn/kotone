@@ -2934,6 +2934,7 @@ name = "kotone-script"
 version = "0.1.0"
 dependencies = [
  "kotone-core",
+ "kotone-plugin-api",
  "mlua",
  "serde_json",
 ]

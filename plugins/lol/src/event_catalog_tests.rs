@@ -574,20 +574,59 @@ fn a_condition_left_in_the_program_spends_the_once_per_match() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// ADR 050 第 6 条：内置的“这局打得特别好或特别差时她说几句”对得上插件登记的 `lol.game_end`：插件开着时触发是
-/// 有效的、不会被标成“不会发生”，保存时没有提醒；程序里的参数都由事件的同名字段填上；这局结算的一件事触发它。
+/// ADR 050 第 6 条：清单 `[[automations]]` 里的“这局打得特别好或特别差时她说几句”对得上插件登记的 `lol.game_end`：本体按
+/// 合并后的事件目录装上它（id 不变、默认开、不开一局一次、会叫她不绑窗口）；插件开着时触发是有效的、不会被标成“不会发生”，
+/// 保存时没有提醒；插件关着也装（事不来就不触发），删了不装回；程序里的参数都由事件的同名字段填上；这局结算的一件事触发它。
 #[test]
 fn the_builtin_game_end_automation_fits_the_registered_event() {
-    use kotone_core::automation::library::{event_args, BUILTIN_LOL_GAME_END_ID};
+    use kotone_core::automation::library::{event_args, validate_args};
+    const ID: &str = "builtin-lol-game-end-cheer";
     let dir = std::env::temp_dir().join(format!(
         "kotone-lol-game-end-builtin-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    let specs = &manifest().automations;
+    assert_eq!(
+        specs.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+        [ID]
+    );
+    // 插件关着：目录里照样有这件事（标着不会发生），照样装
+    let mut off = Settings::default();
+    off.plugins.insert(
+        "lol".into(),
+        serde_json::from_value(json!({"enabled": false})).unwrap(),
+    );
     let library = AutomationLibrary::open(dir.join("automations.json")).unwrap();
-    library.ensure_builtin().unwrap();
-    let a = library.get(BUILTIN_LOL_GAME_END_ID).unwrap();
+    assert!(library
+        .ensure_builtin(specs, &event_catalog([manifest()], &off))
+        .unwrap());
+    let a = library.get(ID).unwrap();
+    assert_eq!(a.name, "英雄联盟这局打得特别好或特别差时她说几句");
+    assert!(!a.description.contains("  "), "{}", a.description);
+    assert!(a.action.uses().asks && !a.action.uses().window);
+    let source = a.action.source();
+    assert!(
+        source.starts_with("-- 这局打得特别好或特别差才叫她"),
+        "{source}"
+    );
+    assert!(source.contains("local LOSS_STREAK = 3"), "{source}");
+    assert!(source.contains("ask(\"这局刚结束"), "{source}");
+    assert!(source.contains("没什么特别想说的就不说"), "{source}");
+    validate_args(&a.params, &Map::new()).unwrap();
+    {
+        let on = a.on.as_ref().unwrap();
+        assert!(on.enabled, "只在特别的局才叫她：默认开（ADR 050）");
+        assert_eq!(on.game.as_deref(), Some("lol"));
+        assert!(on.matches.is_empty() && !on.once_per_match && on.cooldown_seconds == 0);
+    }
+    // 删了不装回
+    library.delete(ID).unwrap();
+    assert!(!library
+        .ensure_builtin(specs, &event_catalog([manifest()], &off))
+        .unwrap());
+    assert!(library.get(ID).is_none());
     let on = a.on.clone().unwrap();
     let events = event_catalog([manifest()], &Settings::default());
     assert_eq!(validate_trigger(&on, &events).unwrap(), on);

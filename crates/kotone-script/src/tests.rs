@@ -719,18 +719,43 @@ fn bad_arguments_and_stop_are_reported_truthfully() {
 
 // ---------- 内置的常用按键程序（kotone-core 自动化库，ADR 013） ----------
 
-/// 内置自动化的源码，和按声明校验过的入参（`given` 之外的用缺省值）。
+/// 内置插件在清单 `[[automations]]` 里声明的内置自动化（`plugins/*/plugin.toml`，用插件契约的清单解析读）。
+fn plugin_builtins() -> Vec<kotone_plugin_api::BuiltinAutomation> {
+    let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(plugins).unwrap() {
+        let file = entry.unwrap().path().join("plugin.toml");
+        if file.is_file() {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let manifest = kotone_plugin_api::Manifest::parse(&text)
+                .unwrap_or_else(|e| panic!("{}：{e}", file.display()));
+            out.extend(manifest.automations);
+        }
+    }
+    out
+}
+
+/// 内置自动化（本体的，或内置插件清单里的）的源码，和按声明校验过的入参（`given` 之外的用缺省值）。
 fn builtin(
     id: &str,
     given: &serde_json::Map<String, serde_json::Value>,
 ) -> (String, serde_json::Map<String, serde_json::Value>) {
     use kotone_core::automation::library::{validate_args, AutomationLibrary};
-    let a = AutomationLibrary::builtin_programs_preview()
+    let (params, source) = match AutomationLibrary::builtin_programs_preview()
         .into_iter()
         .find(|a| a.id == id)
-        .unwrap();
-    let args = validate_args(&a.params, given).unwrap();
-    (a.action.source().to_string(), args)
+    {
+        Some(a) => (a.params.clone(), a.action.source().to_string()),
+        None => {
+            let a = plugin_builtins()
+                .into_iter()
+                .find(|a| a.id == id)
+                .unwrap_or_else(|| panic!("没有内置自动化 {id}"));
+            (a.params, a.source)
+        }
+    };
+    let args = validate_args(&params, given).unwrap();
+    (source, args)
 }
 
 fn go_builtin(id: &str, host: &Arc<Fake>, overrides: serde_json::Value) -> RunReport {
@@ -751,6 +776,11 @@ fn go_builtin(id: &str, host: &Arc<Fake>, overrides: serde_json::Value) -> RunRe
 fn every_builtin_program_compiles() {
     for a in kotone_core::automation::library::AutomationLibrary::builtin_programs_preview() {
         check_syntax(a.action.source()).unwrap_or_else(|e| panic!("{}: {e}", a.id));
+    }
+    let from_plugins = plugin_builtins();
+    assert!(!from_plugins.is_empty(), "英雄联盟插件的清单里有内置自动化");
+    for a in from_plugins {
+        check_syntax(&a.source).unwrap_or_else(|e| panic!("{}: {e}", a.id));
     }
 }
 
@@ -1126,7 +1156,8 @@ fn builtin_reminder_and_scout_run_without_a_window() {
     assert!(host.asked.lock().unwrap()[0].contains("lol.scout"));
 }
 
-/// ADR 050 第 6 条：这局打得特别好（赢了而且伤害第一、五杀）或特别差（今天三连败）才交给她，别的局什么都不做。
+/// ADR 050 第 6 条：英雄联盟插件清单里的“这局打得特别好或特别差时她说几句”，这局打得特别好（赢了而且伤害第一、五杀）
+/// 或特别差（今天三连败）才交给她，别的局什么都不做。
 #[test]
 fn builtin_game_end_cheer_asks_only_for_special_games() {
     let run = |args: serde_json::Value| {

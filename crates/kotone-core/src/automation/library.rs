@@ -1343,64 +1343,59 @@ fn builtin_lol_scout(now: u64) -> Automation {
     }
 }
 
-/// 内置自动化“英雄联盟这局打得特别好或特别差时她说几句”（ADR 050 第 6 条）：插件报 `lol.game_end`（只有事实），程序里
-/// 判断够不够“特别”，够了才 `ask()` 交给她（判断和措辞归她，照“突破口”的做法）。只在特别的局才叫她、每次一次 AI 调用，
-/// 所以**默认开**（和突破口不一样）；在「自动化」页可以关。不开“一局一次”：一局只有一件 `lol.game_end`，开了反而让
-/// 保存时多一条“判断不满足也占掉一局一次”的提醒（[`trigger_hints`]）。
-pub const BUILTIN_LOL_GAME_END_ID: &str = "builtin-lol-game-end-cheer";
+/// 内置插件在自己的 `plugin.toml` 里声明的内置自动化（`[[automations]]`，ADR 050 第 6 条的实现情况）：本体照装自己的内置
+/// 自动化的规矩装它们（[`AutomationLibrary::ensure_builtin`]：按 id 只装一次，玩家删了不装回，老用户升级时也装上），装的时候
+/// 按合并后的事件目录校验（和玩家保存一样，[`AutomationDraft`] 的规矩）。插件的事件名只写在插件的清单里，本体不写。
+/// **只给内置插件**（`kotone-plugin-api` 的 `Manifest`）：第三方插件的清单（ADR 047 外层）没有这个字段。
+/// 默认开不开写在 `on.enabled`（不写 = 开）；id 以 `builtin-<插件 id>-` 开头（清单的检查查）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuiltinAutomation {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub params: Vec<ParamSpec>,
+    /// 程序（Luau）。
+    pub source: String,
+    /// 游戏事件触发（照 `automations.json` 里的写法：`event`、`game`、`match`、`oncePerMatch`、`enabled`……）。
+    #[serde(default)]
+    pub on: Option<EventTrigger>,
+}
 
-/// 交给她的那句话。不能拼事件里的值（`ask()` 的护栏）：这局的结果她看附上的游戏事件，卡片上那句在这局总结的说明里。
-const LOL_GAME_END_ASK: &str = "这局刚结束，这局总结的卡片上已经有一句预置的话了（给你的说明里写着）。这局的结果看附上的游戏事件。用你的口气说一两句给玩家情绪价值的话，可以接着卡片上那句说，别重复它。没什么特别想说的就不说：不调用 speak、也不写字，直接结束。";
-
-/// 程序：`args.*` 由 `lol.game_end` 的同名字段自动填上（[`event_args`]）；阈值写在程序里，玩家可以改。
-const LOL_GAME_END_SOURCE: &str = r#"
--- 这局打得特别好或特别差才叫她（args.* 由“这局结算了”自动填上）。下面的数字可以改
-local LOSS_STREAK = 3 -- 今天连败到几局算“特别差”
-local great = (args.win and args.damage_rank == 1) or args.penta_kill
-local rough = args.today_loss_streak >= LOSS_STREAK
-if not (great or rough) then
-  return
-end
-"#;
-
-fn builtin_lol_game_end(now: u64) -> Automation {
-    let filled = |name: &str, label: &str, kind: ParamKind, default: Value| {
-        param(name, label, "由“这局结算了”自动填上", kind, default)
-    };
-    let mut a = program(
-        BUILTIN_LOL_GAME_END_ID,
-        "英雄联盟这局打得特别好或特别差时她说几句",
-        "一局结束时，赢了而且伤害全队第一、拿了五杀，或者今天已经三连败，她接着这局总结卡片上那句再说一两句。         只在这样的局才叫她，每次花一次 AI 调用；不想要就关掉。",
-        vec![
-            filled("win", "赢了没有", ParamKind::Boolean, Value::Bool(false)),
-            filled(
-                "damage_rank",
-                "伤害在我们队排第几",
-                number(0.0, 100.0),
-                Value::from(0),
-            ),
-            filled("penta_kill", "有没有五杀", ParamKind::Boolean, Value::Bool(false)),
-            filled(
-                "today_loss_streak",
-                "今天现在几连败",
-                number(0.0, 1000.0),
-                Value::from(0),
-            ),
-        ],
-        &format!("{}ask({})", LOL_GAME_END_SOURCE.trim_start(), lua_string(LOL_GAME_END_ASK)),
-        now,
-    );
-    a.on = Some(EventTrigger {
-        event: vec!["lol.game_end".into()],
-        game: Some("lol".into()),
-        matches: Map::new(),
-        for_seconds: 0,
-        mode: Default::default(),
-        once_per_match: false,
-        cooldown_seconds: 0,
-        enabled: true,
-    });
-    a
+impl BuiltinAutomation {
+    /// 校验（照玩家保存的规矩，事件按合并后的目录 `events` 认）并做成要装的自动化。
+    fn install(&self, events: &EventCatalog, now: u64) -> Result<Automation, String> {
+        if !self.id.starts_with("builtin-") {
+            return Err(format!("内置自动化的 id “{}” 要以 builtin- 开头", self.id));
+        }
+        let draft = AutomationDraft {
+            id: None,
+            name: self.name.clone(),
+            description: self.description.clone(),
+            params: self.params.clone(),
+            action: AutomationBody::Program(ProgramBody {
+                source: self.source.clone(),
+            }),
+            schedule: None,
+            on: self.on.clone(),
+        }
+        .normalized(events)?;
+        Ok(Automation {
+            id: self.id.clone(),
+            name: draft.name,
+            description: draft.description,
+            params: draft.params,
+            action: draft.action,
+            created_by: CreatedBy::User,
+            created_at_ms: now,
+            updated_at_ms: now,
+            schedule: None,
+            on: draft.on,
+            confirmed: BTreeMap::new(),
+        })
+    }
 }
 
 /// 内置的常用按键程序（照 AutoHotkey / 按键精灵的常见宏：连发、连点、按住、连招、定时喊话、
@@ -1784,15 +1779,32 @@ impl AutomationLibrary {
         Ok(saved)
     }
 
-    /// 装上内置的自动化（每个只装一次：玩家删了不再装回；以后新加的内置自动化老用户也会装上）。
-    /// 返回这次有没有装。
-    pub fn ensure_builtin(&self) -> Result<bool, String> {
+    /// 装上内置的自动化（每个只装一次：玩家删了不再装回；以后新加的内置自动化老用户也会装上）：本体自己的，加上
+    /// 内置插件在清单里声明的 `plugins`（[`BuiltinAutomation`]，按合并后的事件目录 `events` 校验；校验不过的不装、
+    /// 也不记成装过，记日志，修好的版本下次照装）。插件关着照样装：它的事不来就不触发。返回这次有没有装。
+    pub fn ensure_builtin(
+        &self,
+        plugins: &[BuiltinAutomation],
+        events: &EventCatalog,
+    ) -> Result<bool, String> {
         let mut state = self.state.lock().unwrap();
         let now = now_ms();
-        let missing: Vec<Automation> = all_builtin(now)
+        let mut missing: Vec<Automation> = all_builtin(now)
             .into_iter()
             .filter(|a| !state.builtin.contains(&a.id))
             .collect();
+        for spec in plugins {
+            if state.builtin.contains(&spec.id) || missing.iter().any(|a| a.id == spec.id) {
+                continue;
+            }
+            match spec.install(events, now) {
+                Ok(automation) => missing.push(automation),
+                Err(e) => crate::log::log(&format!(
+                    "automation: builtin {} from a plugin not installed: {e}",
+                    spec.id
+                )),
+            }
+        }
         let mut next = state.clone();
         let refreshed = refresh_builtin(&mut next.automations, now);
         if missing.is_empty() && refreshed.is_empty() {
@@ -1811,7 +1823,7 @@ impl AutomationLibrary {
         Ok(true)
     }
 
-    /// 全部内置自动化的定义（“X 秒之后提醒我”、突破口、这局打得特别好或特别差时她说几句、按键程序；测试与文档用）。
+    /// 本体自己的内置自动化的定义（“X 秒之后提醒我”、突破口、按键程序；测试与文档用）。内置插件声明的在插件的清单里。
     pub fn builtin_programs_preview() -> Vec<Automation> {
         all_builtin(0)
     }
@@ -1893,11 +1905,7 @@ impl AutomationLibrary {
 }
 
 fn all_builtin(now: u64) -> Vec<Automation> {
-    let mut all = vec![
-        builtin_remind(now),
-        builtin_lol_scout(now),
-        builtin_lol_game_end(now),
-    ];
+    let mut all = vec![builtin_remind(now), builtin_lol_scout(now)];
     all.extend(builtin_programs(now));
     all
 }
@@ -2176,7 +2184,9 @@ mod tests {
     fn the_builtin_reminder_is_installed_once_and_stays_deleted() {
         let dir = tempfile::tempdir().unwrap();
         let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
-        assert!(library.ensure_builtin().unwrap());
+        assert!(library
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
         let builtin = library.get(BUILTIN_REMIND_ID).unwrap();
         assert_eq!(builtin.name, "X 秒之后提醒我");
         assert_eq!(builtin.action.source(), "say(args.text, { toast = true })");
@@ -2187,10 +2197,14 @@ mod tests {
         as_draft(&builtin)
             .normalized(&EventCatalog::generic())
             .unwrap();
-        assert!(!library.ensure_builtin().unwrap());
+        assert!(!library
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
         library.delete(BUILTIN_REMIND_ID).unwrap();
         let reopened = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
-        assert!(!reopened.ensure_builtin().unwrap());
+        assert!(!reopened
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
         assert!(reopened.get(BUILTIN_REMIND_ID).is_none());
     }
 
@@ -2235,15 +2249,11 @@ mod tests {
             a.params[0].default = Some(json!("来个辅助")); // 玩家改过缺省的话
             a
         };
-        let all_ids: Vec<String> = [
-            BUILTIN_REMIND_ID,
-            BUILTIN_LOL_SCOUT_ID,
-            BUILTIN_LOL_GAME_END_ID,
-        ]
-        .iter()
-        .chain(BUILTIN_PROGRAM_IDS)
-        .map(|s| s.to_string())
-        .collect();
+        let all_ids: Vec<String> = [BUILTIN_REMIND_ID, BUILTIN_LOL_SCOUT_ID]
+            .iter()
+            .chain(BUILTIN_PROGRAM_IDS)
+            .map(|s| s.to_string())
+            .collect();
         let write = |path: &std::path::Path, a: Automation| {
             let stored = StoredAutomations {
                 version: 1,
@@ -2258,7 +2268,12 @@ mod tests {
 
         write(&path, installed(CHAT_REPEAT_SOURCE_BEFORE_ADR041));
         let library = AutomationLibrary::open(path.clone()).unwrap();
-        assert!(library.ensure_builtin().unwrap(), "换了要写盘");
+        assert!(
+            library
+                .ensure_builtin(&[], &EventCatalog::generic())
+                .unwrap(),
+            "换了要写盘"
+        );
         let a = library.get(CHAT_REPEAT_ID).unwrap();
         let source = a.action.source();
         assert!(source.contains("chat(args.text)") && !source.contains("key("));
@@ -2273,14 +2288,23 @@ mod tests {
             Some(json!("来个辅助")),
             "玩家改过的缺省值保留"
         );
-        assert!(!library.ensure_builtin().unwrap(), "只换一次");
+        assert!(
+            !library
+                .ensure_builtin(&[], &EventCatalog::generic())
+                .unwrap(),
+            "只换一次"
+        );
         let reopened = AutomationLibrary::open(path.clone()).unwrap();
-        assert!(!reopened.ensure_builtin().unwrap());
+        assert!(!reopened
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
 
         let edited = CHAT_REPEAT_SOURCE_BEFORE_ADR041.replace("wait(200)", "wait(300)");
         write(&path, installed(&edited));
         let library = AutomationLibrary::open(path).unwrap();
-        assert!(!library.ensure_builtin().unwrap());
+        assert!(!library
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
         let a = library.get(CHAT_REPEAT_ID).unwrap();
         assert!(
             a.action.source().contains("wait(300)"),
@@ -2300,13 +2324,14 @@ mod tests {
         )
         .unwrap();
         let library = AutomationLibrary::open(path.clone()).unwrap();
-        assert!(library.ensure_builtin().unwrap());
+        assert!(library
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
         assert!(library.get(BUILTIN_REMIND_ID).is_none(), "删过的不装回");
         assert!(
             library.get(BUILTIN_LOL_SCOUT_ID).is_some(),
             "新加的内置项老用户也装上"
         );
-        assert!(library.get(BUILTIN_LOL_GAME_END_ID).is_some());
         for id in BUILTIN_PROGRAM_IDS {
             let a = library.get(id).unwrap_or_else(|| panic!("{id}"));
             let draft = as_draft(&a)
@@ -2316,10 +2341,14 @@ mod tests {
             validate_args(&draft.params, &Map::new()).unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(a.action.uses().window, "按键程序都用到游戏窗口：{id}");
         }
-        assert!(!library.ensure_builtin().unwrap());
+        assert!(!library
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
         library.delete("builtin-key-repeat").unwrap();
         let reopened = AutomationLibrary::open(path).unwrap();
-        assert!(!reopened.ensure_builtin().unwrap());
+        assert!(!reopened
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap());
         assert!(reopened.get("builtin-key-repeat").is_none());
     }
 
@@ -2452,84 +2481,115 @@ mod tests {
         );
     }
 
-    /// ADR 050 第 6 条：“这局打得特别好或特别差时她说几句”按 `lol.game_end` 触发、默认开（只在特别的局才叫她）、
-    /// 不开一局一次（一局只有一件，开了保存时会多一条误导的提醒）；参数都由事件的同名字段填上，缺省值能跑；
-    /// 交给她的话是写死的（不拼事件里的值）、说了可以不说。
+    /// 内置插件在清单里声明的内置自动化（`[[automations]]`，ADR 050 第 6 条）：照本体的内置自动化装——按 id 只装一次、
+    /// 删了不装回、老用户也装上；默认开不开照 `on.enabled`；装的时候按合并后的事件目录校验，校验不过的不装、不记成
+    /// 装过（修好的版本下次照装）。事件用假的 `demo.finished`（本体不写插件的事件名）。
     #[test]
-    fn the_lol_game_end_cheer_is_installed_switched_on_and_valid() {
-        let dir = tempfile::tempdir().unwrap();
-        let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
-        library.ensure_builtin().unwrap();
-        let a = library.get(BUILTIN_LOL_GAME_END_ID).unwrap();
-        let on = a.on.clone().unwrap();
-        assert!(on.enabled, "只在特别的局才叫她：默认开（ADR 050）");
-        assert_eq!(on.event, ["lol.game_end"]);
-        assert_eq!(on.game.as_deref(), Some("lol"));
-        assert!(on.matches.is_empty() && !on.once_per_match && on.cooldown_seconds == 0);
-        assert_eq!(
-            a.action.uses(),
-            ProgramUses {
-                window: false,
-                asks: true,
-                speaks: false
-            }
-        );
-        let source = a.action.source();
-        assert!(source.contains("local LOSS_STREAK = 3"), "{source}");
-        assert!(source.contains("ask(\"这局刚结束"), "{source}");
-        assert!(LOL_GAME_END_ASK.contains("没什么特别想说的就不说"));
-        assert!(LOL_GAME_END_ASK.chars().count() <= 500);
-        // 事件目录里有 lol.game_end 时能保存（和玩家在「自动化」页改了再存一样），保存时没有提醒
+    fn plugin_builtin_automations_are_checked_installed_once_and_stay_deleted() {
+        let spec: BuiltinAutomation = serde_json::from_value(json!({
+            "id": "builtin-demo-cheer", "name": "示例跑完了她说一句", "description": "示例插件的内置自动化",
+            "params": [{"name": "rank", "label": "第几", "type": "number", "min": 0, "max": 10,
+                        "integer": true, "default": 0}],
+            "source": "
+if args.rank == 1 then
+  ask(\"跑完了\")
+end
+",
+            "on": {"event": ["demo.finished"], "game": "demo"}
+        }))
+        .unwrap();
         let mut catalog = EventCatalog::generic();
         catalog
             .add(crate::games::CatalogEntry {
                 spec: crate::games::EventSpec {
-                    kind: "lol.game_end".into(),
-                    label: "这局结算了".into(),
-                    data: ["win", "damageRank", "pentaKill", "todayLossStreak"]
-                        .iter()
-                        .map(|f| (f.to_string(), String::new()))
-                        .collect(),
+                    kind: "demo.finished".into(),
+                    label: "跑完了".into(),
+                    data: [("rank".to_string(), String::new())].into_iter().collect(),
                     needs: Vec::new(),
                     private: Vec::new(),
                 },
-                adapter: "lol".into(),
-                plugin: Some(("lol".into(), "英雄联盟".into())),
-                games: vec!["lol".into()],
-                off: None,
+                adapter: "demo".into(),
+                plugin: Some(("demo".into(), "示例".into())),
+                games: vec!["demo".into()],
+                // 插件关着：照样装（事不来就不触发）
+                off: Some("示例插件关着".into()),
             })
             .unwrap();
-        let draft = as_draft(&a).normalized(&catalog).unwrap();
-        assert_eq!(draft.on, a.on);
-        validate_args(&draft.params, &Map::new()).unwrap();
-        assert!(trigger_hints(&a, &catalog).is_empty());
-        // 参数都由事件的同名字段填上
-        let event = crate::games::GameEvent {
-            id: "lol-1".into(),
-            kind: "lol.game_end".into(),
-            game: "lol".into(),
-            match_id: String::new(),
-            time: 1,
-            game_time: None,
-            source: "lol/client".into(),
-            data: args(
-                json!({"win": true, "queue": "海克斯大乱斗", "damageRank": 1,
-                              "pentaKill": false, "todayWinStreak": 2, "todayLossStreak": 0}),
-            ),
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("automations.json");
+
+        // 事件目录里没有这件事：不装，也不记成装过
+        let library = AutomationLibrary::open(path.clone()).unwrap();
+        library
+            .ensure_builtin(std::slice::from_ref(&spec), &EventCatalog::generic())
+            .unwrap();
+        assert!(library.get(&spec.id).is_none());
+        let bad_id = BuiltinAutomation {
+            id: "auto-9".into(),
+            ..spec.clone()
         };
-        let filled = event_args(&a.params, &event);
+        assert!(!library.ensure_builtin(&[bad_id], &catalog).unwrap());
+
+        // 有了：装上，默认开，和玩家保存一样整理过
+        assert!(library
+            .ensure_builtin(std::slice::from_ref(&spec), &catalog)
+            .unwrap());
+        let a = library.get(&spec.id).unwrap();
+        assert_eq!(a.name, "示例跑完了她说一句");
+        assert_eq!(a.created_by, CreatedBy::User);
         assert_eq!(
-            Value::Object(filled.clone()),
-            json!({"win": true, "damage_rank": 1, "penta_kill": false, "today_loss_streak": 0})
+            a.action.source(),
+            "if args.rank == 1 then
+  ask(\"跑完了\")
+end"
         );
-        validate_args(&a.params, &filled).unwrap();
+        let on = a.on.clone().unwrap();
+        assert!(on.enabled, "不写 enabled = 开");
+        assert_eq!(on.event, ["demo.finished"]);
+        assert_eq!(on.game.as_deref(), Some("demo"));
+        assert!(a.action.uses().asks && !a.action.uses().window);
+        validate_args(&a.params, &Map::new()).unwrap();
+        assert!(!library
+            .ensure_builtin(std::slice::from_ref(&spec), &catalog)
+            .unwrap());
+
+        // 删了不装回（重开也一样）
+        library.delete(&spec.id).unwrap();
+        let reopened = AutomationLibrary::open(path.clone()).unwrap();
+        assert!(!reopened
+            .ensure_builtin(std::slice::from_ref(&spec), &catalog)
+            .unwrap());
+        assert!(reopened.get(&spec.id).is_none());
+
+        // 老用户（本体的内置项都装过、没见过这一条）升级时也装上；写了 enabled = false 的装上是关着的
+        let old_user = || {
+            let all: Vec<String> = all_builtin(0).into_iter().map(|a| a.id).collect();
+            std::fs::write(
+                &path,
+                json!({"version": 1, "nextId": 1, "automations": [], "builtin": all}).to_string(),
+            )
+            .unwrap();
+            AutomationLibrary::open(path.clone()).unwrap()
+        };
+        let library = old_user();
+        assert!(library
+            .ensure_builtin(std::slice::from_ref(&spec), &catalog)
+            .unwrap());
+        assert!(library.get(&spec.id).is_some());
+        let mut off = spec.clone();
+        off.on.as_mut().unwrap().enabled = false;
+        let library = old_user();
+        library.ensure_builtin(&[off], &catalog).unwrap();
+        assert!(!library.get(&spec.id).unwrap().on.unwrap().enabled);
     }
 
     #[test]
     fn the_lol_scout_template_is_installed_switched_off_and_valid() {
         let dir = tempfile::tempdir().unwrap();
         let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
-        library.ensure_builtin().unwrap();
+        library
+            .ensure_builtin(&[], &EventCatalog::generic())
+            .unwrap();
         let a = library.get(BUILTIN_LOL_SCOUT_ID).unwrap();
         let on = a.on.clone().unwrap();
         assert!(!on.enabled, "每次花一次 AI 调用：默认关（ADR 036 D8）");

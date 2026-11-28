@@ -996,6 +996,22 @@ mod tests {
         assert_eq!(p.manifest.watches.len(), 1, "不认识的字段不影响别的");
     }
 
+    /// 内置自动化（`automations`）只给内置插件的 `plugin.toml`（ADR 050 第 6 条的实现情况）：第三方清单里写了也是不认识的
+    /// 字段——忽略、列出来给作者看，不报错、不影响别的（别人不能借清单默认开一个会花钱的 `ask()`）。
+    #[test]
+    fn automations_are_not_for_third_party_plugins() {
+        let p = parse(json!({
+            "events": [{"name": "done", "label": "跑完了"}],
+            "automations": [{"id": "builtin-x-cheer", "name": "跑完了叫她", "source": "ask('x')",
+                             "on": {"event": ["x.done"]}}]
+        }));
+        assert_eq!(p.unknown, ["automations"]);
+        assert!(p.problems.is_empty(), "{:?}", p.problems);
+        assert_eq!(p.manifest.events.len(), 1);
+        let out = serde_json::to_value(&p.manifest).unwrap();
+        assert!(out.get("automations").is_none());
+    }
+
     #[test]
     fn wrong_types_count_as_missing_and_bad_entries_are_dropped() {
         let p = parse(json!({

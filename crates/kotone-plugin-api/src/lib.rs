@@ -12,7 +12,9 @@
 //! - **MCP App 资源和素材**（[`resource`] 模块，ADR 039 D5、D6）：清单里的页面可以由插件做成独立的 HTML
 //!   （[`Plugin::resource`]），Kotone 和外部宿主显示同一份；图片这类素材经 [`Plugin::asset`] 取；
 //! - **推送**（[`push`] 模块，ADR 043 D3–D5）：清单 `[[pushes]]` 声明的“时机 → 推送”（卡片 / 一行 / 语音），
-//!   插件经 [`Host::push`] 发，宿主按清单和玩家的开关执行。
+//!   插件经 [`Host::push`] 发，宿主按清单和玩家的开关执行；
+//! - **内置自动化**（清单 `[[automations]]`，[`BuiltinAutomation`]）：插件随清单带的自动化，本体照装自己的内置自动化
+//!   的规矩装（ADR 050 第 6 条的实现情况）。
 //!
 //! 插件 crate 只依赖这个 crate、`kotone-core` 的纯数据类型和自己的第三方库；可以用系统适配层
 //! （`kotone-platform-windows`）里没有状态的系统调用（音频设备、重采样、打字注入……），不碰 Tauri、桌面端、
@@ -28,6 +30,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+pub use kotone_core::automation::library::BuiltinAutomation;
 pub use kotone_core::games::{EventSpec, Observation, Phase};
 pub use kotone_core::hotkey_commands::{CommandKind, CommandSpec};
 pub use kotone_core::inject::CancelToken;
@@ -107,6 +110,13 @@ pub struct Manifest {
     /// 可选，没写就不显示（只加不改：发给界面时没写的不带这个字段）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<ReferenceSpec>,
+    /// 内置自动化（ADR 050 第 6 条的实现情况，`[[automations]]`：id、名字、说明、参数、程序、触发 `on`，默认开不开写在
+    /// `on.enabled`）。本体照装自己的内置自动化的规矩装（按 id 只装一次、删了不装回、老用户也装上，装的时候按合并后的
+    /// 事件目录校验，`AutomationLibrary::ensure_builtin`）；插件的事件名只写在这里，本体不写。id 以 `builtin-<插件 id>-`
+    /// 开头；触发只写 `game.*` 和自己登记的事。**只给内置插件**：第三方插件的清单（ADR 047 外层）没有这个字段（免得别人
+    /// 默认开一个会花钱的 `ask()`）。不发给界面（「自动化」页从自动化库里看）。
+    #[serde(default, skip_serializing)]
+    pub automations: Vec<BuiltinAutomation>,
 }
 
 fn yes() -> bool {
@@ -274,7 +284,56 @@ impl Manifest {
         self.check_pushes()?;
         self.check_notices()?;
         self.check_references()?;
+        self.check_automations()?;
         self.check_events()
+    }
+
+    /// 内置自动化（`[[automations]]`）：id 以 `builtin-<插件 id>-` 开头（后面是小写字母、数字和连字符）、不重名；有名字和
+    /// 程序；触发里的事只能是 `game.*` 或自己登记的范围（[`Self::event_scope`]），`game` 写的是自己挂的游戏。程序、参数、
+    /// 事件在不在目录里，装的时候照玩家保存的规矩再查一遍（`AutomationLibrary::ensure_builtin`）。
+    fn check_automations(&self) -> Result<(), String> {
+        let prefix = format!("builtin-{}-", self.id);
+        let own = format!("{}.", self.event_scope());
+        let mut seen = std::collections::HashSet::new();
+        for a in &self.automations {
+            let rest = a.id.strip_prefix(&prefix).unwrap_or_default();
+            if rest.is_empty()
+                || a.id.len() > 64
+                || !rest
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                || !seen.insert(a.id.as_str())
+            {
+                return Err(format!(
+                    "插件 {} 的内置自动化 “{}” 要以 {prefix} 开头（后面只用小写字母、数字和连字符），并且不重名",
+                    self.id, a.id
+                ));
+            }
+            if a.name.trim().is_empty() || a.source.trim().is_empty() {
+                return Err(format!(
+                    "插件 {} 的内置自动化 {} 要写 name 和 source",
+                    self.id, a.id
+                ));
+            }
+            let Some(on) = &a.on else { continue };
+            if let Some(bad) = on
+                .event
+                .iter()
+                .find(|e| !e.starts_with("game.") && !e.starts_with(&own))
+            {
+                return Err(format!(
+                    "插件 {} 的内置自动化 {} 的触发 “{bad}” 不是 game.* 也不是自己登记的事（{own}…）",
+                    self.id, a.id
+                ));
+            }
+            if let Some(game) = on.game.as_ref().filter(|g| !self.games.contains(g)) {
+                return Err(format!(
+                    "插件 {} 的内置自动化 {} 的 game “{game}” 要写在 games 里",
+                    self.id, a.id
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 参考（`[[references]]`）：有名字，地址是 `https://` 开头、不带空白的完整地址。
@@ -1199,6 +1258,64 @@ description = \"发到队伍聊天\"
             reference("x", "http://github.com/x/y"),
             reference("x", "https://"),
             format!("{SAMPLE}\n[[references]]\nname = \"x\"\nurl = \"https://x.example\"\nlicense = \"MIT\"\n"),
+        ] {
+            assert!(Manifest::parse(&text).is_err(), "{text}");
+        }
+    }
+
+    /// 内置自动化（`[[automations]]`，ADR 050 第 6 条的实现情况）：读得出参数、程序、触发（不写 enabled = 开）；不发给界面；
+    /// id 要以 `builtin-<插件 id>-` 开头、不重名，要有名字和程序，触发只写 `game.*` 和自己的事、游戏是自己挂的，拼错的字段拒。
+    #[test]
+    fn builtin_automations_are_parsed_and_checked() {
+        let automation = |id: &str, extra: &str, on: &str| {
+            format!(
+                "{SAMPLE}\n[[automations]]\nid = \"{id}\"\nname = \"示例\"\nsource = '''\nask(\"x\")\n'''\n{extra}{on}\n\
+                 [[automations.params]]\nname = \"win\"\ntype = \"boolean\"\ndefault = false\n"
+            )
+        };
+        let on = "on = { event = [\"lol.done\"], game = \"lol\" }\n";
+        let m = Manifest::parse(&automation("builtin-lol-cheer", "", on)).unwrap();
+        let a = &m.automations[0];
+        assert_eq!(a.id, "builtin-lol-cheer");
+        assert_eq!(a.source.trim(), "ask(\"x\")");
+        assert_eq!(a.params[0].name, "win");
+        assert_eq!(a.params[0].default, Some(Value::Bool(false)));
+        let trigger = a.on.as_ref().unwrap();
+        assert_eq!(trigger.event, ["lol.done"]);
+        assert!(trigger.enabled, "不写 enabled = 开");
+        assert!(serde_json::to_value(&m)
+            .unwrap()
+            .get("automations")
+            .is_none());
+        let off = Manifest::parse(&automation(
+            "builtin-lol-cheer",
+            "",
+            "on = { event = [\"game.match_ended\"], enabled = false }\n",
+        ))
+        .unwrap();
+        assert!(!off.automations[0].on.as_ref().unwrap().enabled);
+        assert!(Manifest::parse(SAMPLE).unwrap().automations.is_empty());
+        for text in [
+            automation("lol-cheer", "", on),
+            automation("builtin-cs2-cheer", "", on),
+            automation("builtin-lol-", "", on),
+            automation("builtin-lol-Cheer", "", on),
+            automation("builtin-lol-cheer", "", "on = { event = [\"cs2.round\"] }\n"),
+            automation(
+                "builtin-lol-cheer",
+                "",
+                "on = { event = [\"lol.x\"], game = \"cs2\" }\n",
+            ),
+            automation("builtin-lol-cheer", "colour = \"red\"\n", on),
+            automation(
+                "builtin-lol-cheer",
+                "",
+                "on = { event = [\"lol.x\"], once = true }\n",
+            ),
+            format!(
+                "{}\n[[automations]]\nid = \"builtin-lol-cheer\"\nname = \"又一个\"\nsource = \"ask('y')\"\n",
+                automation("builtin-lol-cheer", "", on)
+            ),
         ] {
             assert!(Manifest::parse(&text).is_err(), "{text}");
         }

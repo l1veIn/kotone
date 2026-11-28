@@ -396,6 +396,61 @@ data.pentaKill = "这局我有没有五杀（结算详情里没有这一项时�
 data.todayWinStreak = "算上这局，今天现在几连胜（不是连胜是 0；读不到今天的战绩时不给）"
 data.todayLossStreak = "算上这局，今天现在几连败（不是连败是 0；读不到今天的战绩时不给）"
 
+# 内置自动化（ADR 050 第 6 条）：“这局打得特别好或特别差时她说几句”。插件报 lol.game_end（只有事实），程序里判断够不够
+# “特别”，够了才 ask() 交给她（判断和措辞归她，照“突破口”的做法）。只在特别的局才叫她、每次一次 AI 调用，所以默认开（on
+# 不写 enabled = 开）；在「自动化」页可以关。不开“一局一次”：一局只有一件 lol.game_end，开了反而让保存时多一条“判断不满足
+# 也占掉一局一次”的提醒。参数由事件的同名字段自动填上（ADR 036 D6）。ask() 的话是写死的，不拼事件里的值（护栏会拒）。
+# 本体照装自己的内置自动化的规矩装它：按 id 只装一次，玩家删了不装回，老用户升级时也装上（AutomationLibrary::ensure_builtin）。
+[[automations]]
+id = "builtin-lol-game-end-cheer"
+name = "英雄联盟这局打得特别好或特别差时她说几句"
+description = "一局结束时，赢了而且伤害全队第一、拿了五杀，或者今天已经三连败，她接着这局总结卡片上那句再说一两句。只在这样的局才叫她，每次花一次 AI 调用；不想要就关掉。"
+on = { event = ["lol.game_end"], game = "lol" }
+source = '''
+-- 这局打得特别好或特别差才叫她（args.* 由“这局结算了”自动填上）。下面的数字可以改
+local LOSS_STREAK = 3 -- 今天连败到几局算“特别差”
+local great = (args.win and args.damage_rank == 1) or args.penta_kill
+local rough = args.today_loss_streak >= LOSS_STREAK
+if not (great or rough) then
+  return
+end
+ask("这局刚结束，这局总结的卡片上已经有一句预置的话了（给你的说明里写着）。这局的结果看附上的游戏事件。用你的口气说一两句给玩家情绪价值的话，可以接着卡片上那句说，别重复它。没什么特别想说的就不说：不调用 speak、也不写字，直接结束。")
+'''
+
+[[automations.params]]
+name = "win"
+label = "赢了没有"
+description = "由“这局结算了”自动填上"
+type = "boolean"
+default = false
+
+[[automations.params]]
+name = "damage_rank"
+label = "伤害在我们队排第几"
+description = "由“这局结算了”自动填上"
+type = "number"
+min = 0
+max = 100
+integer = true
+default = 0
+
+[[automations.params]]
+name = "penta_kill"
+label = "有没有五杀"
+description = "由“这局结算了”自动填上"
+type = "boolean"
+default = false
+
+[[automations.params]]
+name = "today_loss_streak"
+label = "今天现在几连败"
+description = "由“这局结算了”自动填上"
+type = "number"
+min = 0
+max = 1000
+integer = true
+default = 0
+
 [agent]
 overview = "英雄联盟里查这局玩家的战绩、查任何人的战绩、记对面交的召唤师技能，查英雄的强度、克制、出装和海斗海克斯"
 rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回）：这局的样子、“谁没闪”“对面谁没带闪”用 lol.match；\

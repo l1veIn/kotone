@@ -88,9 +88,24 @@ fn library(app: &AppHandle) -> Result<Arc<AutomationLibrary>, String> {
     app.state::<AutomationManager>().library.clone()
 }
 
-/// 旧用户只有在启用琴音后才安装内置程序；既有删除记录继续有效。
+/// 旧用户只有在启用琴音后才安装内置程序；既有删除记录继续有效。本体自己的内置自动化，加上内置插件在清单
+/// `[[automations]]` 里声明的（只有内置插件的清单有这个字段，第三方插件没有），按合并后的事件目录校验。
 pub fn ensure_builtin(app: &AppHandle) {
-    if let Err(e) = library(app).and_then(|library| library.ensure_builtin()) {
+    let from_plugins: Vec<_> = crate::plugins::registry()
+        .iter()
+        .flat_map(|p| p.manifest().automations.iter().cloned())
+        .collect();
+    let events = {
+        let settings = app
+            .state::<crate::SharedState>()
+            .settings
+            .read()
+            .unwrap()
+            .clone();
+        crate::games::event_catalog(&settings)
+    };
+    if let Err(e) = library(app).and_then(|library| library.ensure_builtin(&from_plugins, &events))
+    {
         kotone_core::log::log(&format!("automation: builtin not installed: {e}"));
     }
 }

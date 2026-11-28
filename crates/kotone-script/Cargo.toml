@@ -12,5 +12,7 @@ serde_json.workspace = true
 
 
 [dev-dependencies]
-# 测试内置自动化（定义在 kotone-core 的自动化库里）真的能跑：只在测试里用。
+# 测试内置自动化（本体的定义在 kotone-core 的自动化库里，内置插件的在各自 plugin.toml 的 [[automations]]，
+# 用插件契约的清单解析读）真的能跑：只在测试里用。
 kotone-core.workspace = true
+kotone-plugin-api.workspace = true
