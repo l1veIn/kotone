@@ -15,7 +15,7 @@
 | 界面文字（`plugin_lol_*`，中文要和 `plugin.toml` 一致，有测试） | `messages/` |
 | 页面的测试（桌面端的 Playwright 一起跑） | `e2e/` |
 | 网上的统计（腾讯 101、aramhex-data、外号和名字表、OP.GG）和它的工具 `lol.champion` / `lol.tier` | `src/stats/`、`src/stats_tools.rs` |
-| 推送：选英雄卡片、海斗三选一的卡片 + 语音（照 aramhex 的判断规则，本地文字识别，只看名字那一横条；原来的两个覆盖层，ADR 043 D7）；对局中的提醒（对面到 6 级、出成装了（对面的出声，队友和你自己的只显示一行）和第一次有重伤（不管你玩什么英雄）、技能转好、资源快刷（说几点刷，快速模式 Swiftplay 不报）、对面阵亡（还要 30 秒以上才复活的到 3 个），语音 + 一行；你阵亡时对面装备的卡片）和等级、装备两类事件（B 轮）；开局战绩、这局总结 | `src/pushes.rs`、`src/pushes/`（`alerts.rs` 是对局中的提醒）、`app/src/pages/ChampSelect.svelte`、`AugmentPick.svelte`、`EnemyBuild.svelte`、`AugmentOcr.svelte`；`src/watcher/auto_cards.rs` |
+| 推送：选英雄卡片、海斗三选一的卡片 + 语音（照 aramhex 的判断规则，本地文字识别，只看名字那一横条；原来的两个覆盖层，ADR 043 D7）；对局中的提醒（关键等级（到 6 级；卡萨丁、天使、蒙多 16 级，船长 13 级）、出成装了（对面的出声，队友和你自己的只显示一行）和第一次有重伤（不管你玩什么英雄）、技能转好、资源快刷（说几点刷，快速模式 Swiftplay 不报）、对面阵亡（还要 30 秒以上才复活的到 3 个），语音 + 一行；你阵亡时对面装备的卡片）和等级、装备两类事件（B 轮）；开局战绩、这局总结 | `src/pushes.rs`、`src/pushes/`（`alerts.rs` 是对局中的提醒）、`app/src/pages/ChampSelect.svelte`、`AugmentPick.svelte`、`EnemyBuild.svelte`、`AugmentOcr.svelte`；`src/watcher/auto_cards.rs` |
 | 页面的数据（这局、战绩、单局详情；图只给 id 和客户端路径） | `src/pages.rs` |
 | 素材层：页面要的图（英雄、召唤师头像、段位、海克斯、装备、技能、符文），见下面“素材” | `src/client/assets.rs` |
 | 用录下来的真实数据离线跑三个工具的文字；真接口跑一遍统计 | `examples/render_probe.rs`、`examples/stats_probe.rs` |

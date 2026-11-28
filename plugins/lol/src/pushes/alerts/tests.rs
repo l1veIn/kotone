@@ -939,6 +939,87 @@ fn simultaneous_milestones_show_both_teams_and_the_player() {
     assert!(alerts.step(7, None, &after, None, &[]).pushes.is_empty());
 }
 
+/// 关键等级（2026-11-28 玩家：“卡萨丁天使蒙多到 16 级，船长 13 级”）：我是中单阿狸（一直 5 级），队友上单蒙多；
+/// 对面上单船长、中单卡萨丁（对线对手）、下路天使。`levels` 依次是蒙多、船长、卡萨丁、天使的等级。
+fn spikes(time: f64, levels: [i64; 4]) -> LiveGame {
+    parse_all_game_data(&json!({
+        "activePlayer": {"riotId": "玩家#1"},
+        "allPlayers": [
+            rift_player("玩家", "Ahri", "ORDER", "MIDDLE", 5),
+            rift_player("队友", "DrMundo", "ORDER", "TOP", levels[0]),
+            rift_player("敌人一", "Gangplank", "CHAOS", "TOP", levels[1]),
+            rift_player("敌人二", "Kassadin", "CHAOS", "MIDDLE", levels[2]),
+            rift_player("敌人三", "Kayle", "CHAOS", "BOTTOM", levels[3]),
+        ],
+        "events": {"Events": []},
+        "gameData": {"gameMode": "CLASSIC", "gameTime": time},
+    }))
+    .unwrap()
+}
+
+fn level_pushes(out: &Out) -> Vec<&Push> {
+    out.pushes
+        .iter()
+        .filter(|p| p.trigger == PUSH_ENEMY_ULT)
+        .collect()
+}
+
+/// 6 级照旧（船长是远距离大招、卡萨丁是对线对手；蒙多、天使 6 级不说）；船长 13 级、卡萨丁 天使 蒙多 16 级各说一次，
+/// 双方都说，同一轮同一级的并成一句；之后再升级不再说。
+#[test]
+fn key_levels_cover_power_spikes_for_both_teams() {
+    let mut alerts = Alerts::default();
+    alerts.step(7, None, &spikes(400.0, [5, 5, 5, 5]), None, &[]);
+    let out = alerts.step(7, None, &spikes(402.0, [6, 6, 6, 6]), None, &[]);
+    let six = level_pushes(&out);
+    assert_eq!(six.len(), 1);
+    assert_well_formed(six[0]);
+    assert_eq!(six[0].voice[0], "对面船长、中单 6 级了");
+
+    let out = alerts.step(7, None, &spikes(800.0, [12, 13, 12, 12]), None, &[]);
+    let gp = level_pushes(&out);
+    assert_eq!(gp.len(), 1);
+    assert_well_formed(gp[0]);
+    assert_eq!(
+        gp[0].line.as_ref().unwrap().cells,
+        [cell("对面船长", Some(PushTone::Bad)), cell("13 级了", None)]
+    );
+    assert_eq!(gp[0].voice, ["对面船长 13 级了", "船长到 13 级了"]);
+
+    let out = alerts.step(7, None, &spikes(1500.0, [16, 15, 16, 16]), None, &[]);
+    let sixteen = level_pushes(&out);
+    assert_eq!(sixteen.len(), 1);
+    assert_well_formed(sixteen[0]);
+    assert_eq!(
+        sixteen[0].line.as_ref().unwrap().cells,
+        [
+            cell("对面卡萨丁、天使", Some(PushTone::Bad)),
+            cell("我方蒙多", Some(PushTone::Good)),
+            cell("16 级了", None),
+        ]
+    );
+    assert_eq!(sixteen[0].voice[0], "对面卡萨丁、天使、我方蒙多 16 级了");
+
+    let out = alerts.step(7, None, &spikes(1600.0, [17, 16, 17, 17]), None, &[]);
+    assert!(level_pushes(&out).is_empty());
+}
+
+/// 几个等级碰在同一轮：一行写成一整句；连起来超过 20 个字时只说“好几个人到关键等级了”。
+#[test]
+fn different_key_levels_in_one_tick_are_joined() {
+    let mut alerts = Alerts::default();
+    alerts.step(7, None, &spikes(400.0, [12, 12, 15, 12]), None, &[]);
+    let out = alerts.step(7, None, &spikes(402.0, [12, 13, 16, 12]), None, &[]);
+    let joined = level_pushes(&out);
+    assert_eq!(joined.len(), 1);
+    assert_well_formed(joined[0]);
+    assert_eq!(
+        joined[0].line.as_ref().unwrap().cells,
+        [cell("对面船长 13 级了，对面卡萨丁 16 级了", None)]
+    );
+    assert_eq!(joined[0].voice, ["好几个人到关键等级了"]);
+}
+
 /// 峡谷用的一小份装备资料（照 2026-11-23 录的 `items.json`）：无尽之刃、灭世者的死亡之帽、心之钢、海克斯注力刚壁是成装，
 /// 暴风之剑（1300，能合成无尽）不是。
 fn rift_items() -> GameData {

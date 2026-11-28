@@ -164,7 +164,8 @@ pub fn spoken_chars(text: &str) -> usize {
         .count()
 }
 
-/// 送去合成前的清理：Markdown 记号、表情、多余空白（照 xiaozhi `MarkdownCleaner`）。
+/// 送去合成前的清理：Markdown 记号、表情、多余空白（照 xiaozhi `MarkdownCleaner`），
+/// 挨着中文的空格去掉（[`tighten`]）。
 /// 句末标点保留（合成要靠它停顿），开头的标点去掉。
 pub fn clean(raw: &str) -> String {
     let mut lines = Vec::new();
@@ -186,10 +187,50 @@ pub fn clean(raw: &str) -> String {
     }
     let joined = lines.join(" ");
     let collapsed = joined.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed
+    tighten(&collapsed)
         .trim_start_matches(|c: char| !c.is_alphanumeric() && !is_open_quote(c))
         .trim()
         .to_string()
+}
+
+/// 念之前去掉挨着中文的空格：屏幕上的话按界面用语在数字、英文两边留半角空格
+/// （“卡牌大师到 6 级了”“10 分 30 秒刷新”），合成会在空格处停顿，念成“到六……级了”。
+/// 空白（连续的算一处）只要有一边是中日文字、全角标点或全角字符就去掉；两边都是
+/// 英文、数字时保留（“Faker is back”照常念，“3 4”不会并成“34”）。重复调用结果不变。
+pub fn tighten(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_whitespace() {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        let before = start.checked_sub(1).map(|j| chars[j]);
+        let after = chars.get(i).copied();
+        if !(before.is_some_and(is_cjk) || after.is_some_and(is_cjk)) {
+            out.extend(&chars[start..i]);
+        }
+    }
+    out
+}
+
+/// 中日文字、CJK 标点、全角字符（含全角标点）。
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3000..=0x303F     // CJK 标点（。、「」《》）和全角空格
+        | 0x3040..=0x30FF   // 平假名、片假名
+        | 0x3400..=0x4DBF   // 扩展 A
+        | 0x4E00..=0x9FFF   // 基本汉字
+        | 0xF900..=0xFAFF   // 兼容汉字
+        | 0xFF00..=0xFFEF   // 全角 ASCII、全角标点（，！？：）
+        | 0x20000..=0x3FFFF // 扩展 B 及以后
+    )
 }
 
 fn is_open_quote(c: char) -> bool {
@@ -324,9 +365,9 @@ mod tests {
         assert_eq!(
             feed(&["12:30 开团，3,000 金币够了。看 https://op.gg/champions 就行。"]),
             vec![
-                "12:30 开团，",
-                "3,000 金币够了。",
-                "看 https://op.gg/champions 就行。"
+                "12:30开团，",
+                "3,000金币够了。",
+                "看https://op.gg/champions就行。"
             ]
         );
         // 半角句读后跟着空格才切；还看不到后一个字时先等
@@ -379,10 +420,32 @@ mod tests {
     }
 
     #[test]
+    fn spaces_next_to_chinese_are_not_spoken() {
+        // 英雄联盟插件的推送原话（屏幕上留空格，念的时候不留）
+        assert_eq!(tighten("卡牌大师到 6 级了"), "卡牌大师到6级了");
+        assert_eq!(tighten("对面卡萨丁 16 级了"), "对面卡萨丁16级了");
+        assert_eq!(tighten("大龙 10 分 30 秒刷新"), "大龙10分30秒刷新");
+        assert_eq!(tighten("对面最快 12 秒复活"), "对面最快12秒复活");
+        assert_eq!(tighten("对面 EZ 6 级了，小心"), "对面EZ 6级了，小心");
+        // 全角标点、CJK 标点两边的空格也去掉
+        assert_eq!(tighten("好了 ， 走吧 。"), "好了，走吧。");
+        assert_eq!(tighten("「Faker」 回来了"), "「Faker」回来了");
+        // 两边都是英文、数字：保留
+        assert_eq!(tighten("Faker is back"), "Faker is back");
+        assert_eq!(tighten("3 4"), "3 4");
+        assert_eq!(tighten("12:30 3,000"), "12:30 3,000");
+        // 连续空白算一处；重复调用不变
+        assert_eq!(tighten("到  	 6 级"), "到6级");
+        assert_eq!(tighten(&tighten("到 6 级")), "到6级");
+        // 走 clean 也一样
+        assert_eq!(clean("卡牌大师到 6 级了"), "卡牌大师到6级了");
+    }
+
+    #[test]
     fn mixed_english_and_chinese() {
         assert_eq!(
             feed(&["OK，这把 ADC 是 Jinx。她 late game 很强！"]),
-            vec!["OK，", "这把 ADC 是 Jinx。", "她 late game 很强！"]
+            vec!["OK，", "这把ADC是Jinx。", "她late game很强！"]
         );
     }
 }

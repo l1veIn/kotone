@@ -127,8 +127,10 @@ pub mod disk {
     fn file(key: &str, text: &str) -> Option<PathBuf> {
         let config = CONFIG.lock().unwrap();
         let config = config.as_ref()?;
-        let text = text.trim();
-        (config.texts.iter().any(|t| t == text) || EXTRA.lock().unwrap().iter().any(|t| t == text))
+        // 合成线程送来的文字去掉过挨着中文的空格（`segment::tighten`），登记的话也照样比
+        let text = crate::segment::tighten(text.trim());
+        let same = |t: &String| crate::segment::tighten(t) == text;
+        (config.texts.iter().any(same) || EXTRA.lock().unwrap().iter().any(same))
             .then(|| path_for(&config.dir, key))
     }
 

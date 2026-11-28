@@ -306,7 +306,7 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
     let _finished = WorkerFinished(control.clone());
     let mut engine: Option<KokoroEngine> = None;
     while !control.stopped.load(Ordering::SeqCst) {
-        let command = match receiver.recv_timeout(Duration::from_secs(60)) {
+        let mut command = match receiver.recv_timeout(Duration::from_secs(60)) {
             Ok(WorkerCommand::Speak(command)) => command,
             Ok(WorkerCommand::Close) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -316,6 +316,9 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
+        // 所有合成（她的回答、推送、等待话、预取）都从这里过：挨着中文的空格不念，
+        // 不然“到 6 级了”会在数字两边停顿。缓存键也用去掉空格后的文字。
+        command.request.text = segment::tighten(&command.request.text);
         let result = (|| {
             // 预取不看票据：开始录音时的取消不该让缓存白做。
             if command.play && !control.current(command.ticket) {

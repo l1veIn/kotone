@@ -4,7 +4,7 @@
 //!
 //! | 推送（清单 id） | 什么时候 | 样子 | 多要紧 |
 //! |---|---|---|---|
-//! | `enemy-ult` | 你、双方全图 / 远距离大招的英雄（[`LONG_ULTS`]）、峡谷里你的对线对手到 6 级 | 语音 + 一行 | 普通 |
+//! | `enemy-ult`（关键等级） | 你、双方全图 / 远距离大招的英雄（[`LONG_ULTS`]）、峡谷里你的对线对手到 6 级；双方到关键等级的英雄（[`POWER_SPIKES`]：卡萨丁、天使、蒙多 16 级，船长 13 级） | 语音 + 一行 | 普通 |
 //! | `enemy-item`（出成装了） | 双方谁出了一件成装（[`events::completed`]，和 `lol.item` 同一个判断；说的时候用玩家的叫法 [`SHORT_ITEMS`]）；复活甲、中娅、水银、女妖、巨蛇之牙（[`KEY_ITEMS`]，水银饰带不是成装也算）；谁身上第一次有了带重伤的装备（[`GRIEVOUS`]，小件也算） | 对面的成装、关键装备、重伤：语音 + 一行；队友和你自己别的成装：只有一行 | 低 |
 //! | `spell-ready` | 你或她记下的召唤师技能（`lol.spell`）转好了 | 语音 + 一行 | 普通 |
 //! | `objective` | 峡谷的小龙、远古龙、虚空巢虫、峡谷先锋、大龙刷新前 30 秒（[`RIFT_RULES`]，只在峡谷，快速模式不报）；说游戏里的时间（“小龙 12 分 30 秒刷新”） | 语音 + 一行 | 普通 |
@@ -12,13 +12,13 @@
 //! | `my-death` | 你阵亡时：对面每个人的等级、KDA、装备（按装备总价排），上次阵亡以后新出的标出来 | 卡片（一局一张，每次阵亡原地更新、再弹一次） | 普通 |
 //!
 //! 谁先说、20 秒冷却、过时不说由宿主管（`kotone_agent::push_voice`）：同一轮里来了几条，宿主只说最要紧的那句，别的只显示
-//! 一行、记进聊天。插件这边只管同一件事不重复（同一个人到 6 级只说一次、同一个人同一件装备只说一次）。大乱斗、海斗没有分路
-//! 和峡谷资源：只有“关键英雄到 6 级”“出成装了”“技能转好”“对面阵亡”“你阵亡”。
+//! 一行、记进聊天。插件这边只管同一件事不重复（同一个人到同一个关键等级只说一次、同一个人同一件装备只说一次）。大乱斗、海斗
+//! 没有分路和峡谷资源：只有“关键等级”（不算对线对手）“出成装了”“技能转好”“对面阵亡”“你阵亡”。
 //!
 //! 等级、装备、阵亡这几类游戏事件（`lol.level`、`lol.item`、`lol.death` 和“我阵亡了 / 我复活了”，给自动化和她）也在
 //! 这里报，规矩在 `client/events.rs`：阵亡和“你阵亡时”的卡片、“对面阵亡”用的是同一份前后数据、同一个判断（ADR 046 D7）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kotone_core::log;
 use kotone_plugin_api::{Host, Push, PushCard, PushCell, PushLine, PushOutcome, PushTone};
@@ -67,6 +67,17 @@ pub(crate) const LONG_ULTS: &[(&str, &str)] = &[
     ("Quinn", "奎因"),
     ("Sion", "塞恩"),
     ("Smolder", "斯莫德"),
+];
+
+/// 关键等级（英文 id，说的时候的叫法，几级）：到这一级强一大截的英雄，双方谁到了都说，每个人每个等级说一次
+/// （2026-11-28 玩家点名：卡萨丁、天使、蒙多 16 级，船长 13 级）。6 级另有规矩（你、[`LONG_ULTS`]、对线对手），
+/// 不用写在这里。玩家要再加英雄（“某某到几级也报一下”）就往这里加一行；英文 id 对客户端的英雄资料
+/// （`champion-summary.json` 的 `alias`）。
+pub(crate) const POWER_SPIKES: &[(&str, &str, i64)] = &[
+    ("Kassadin", "卡萨丁", 16),
+    ("Kayle", "天使", 16),
+    ("DrMundo", "蒙多", 16),
+    ("Gangplank", "船长", 13),
 ];
 
 /// 关键装备（装备 id 的后四位，说的时候的叫法）：复活甲、中娅、水银（饰带、弯刀、密银黎明都带净化）、女妖、
@@ -211,13 +222,78 @@ fn position_name(position: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// 说的时候怎么叫这个人：有外号的用外号，否则用英雄的短名（“亚索”）。
+/// 说的时候怎么叫这个人：有外号的用外号（[`LONG_ULTS`]、[`POWER_SPIKES`]），否则用英雄的短名（“亚索”）。
 fn spoken(p: &LivePlayer, data: Option<&GameData>) -> String {
     LONG_ULTS
         .iter()
         .find(|(alias, _)| alias.eq_ignore_ascii_case(&p.alias))
-        .map(|(_, name)| name.to_string())
+        .map(|(_, name)| *name)
+        .or_else(|| {
+            POWER_SPIKES
+                .iter()
+                .find(|(alias, _, _)| alias.eq_ignore_ascii_case(&p.alias))
+                .map(|(_, name, _)| *name)
+        })
+        .map(str::to_string)
         .unwrap_or_else(|| crate::client::text::champion_names(p, data).1)
+}
+
+/// 同一轮到了同一个关键等级的人。
+#[derive(Debug, Default)]
+struct Reached {
+    enemies: Vec<String>,
+    allies: Vec<String>,
+    me: bool,
+}
+
+impl Reached {
+    /// 这一级的一行（几格）和几个说法。6 级说“有大招”，别的等级只说几级。
+    fn words(&self, level: i64) -> (Vec<PushCell>, Vec<String>) {
+        let enemy_names = summarize_names(&self.enemies);
+        let allied_names = match (self.me, self.allies.is_empty()) {
+            (true, true) => "你".to_string(),
+            (true, false) => format!("你和我方{}", summarize_names(&self.allies)),
+            (false, false) => format!("我方{}", summarize_names(&self.allies)),
+            (false, true) => String::new(),
+        };
+        let ult = level == 6;
+        let mut cells = Vec::new();
+        let mut voice = Vec::new();
+        match (enemy_names.is_empty(), allied_names.is_empty()) {
+            (true, true) => {}
+            (true, false) => {
+                cells.push(compact_cell(&allied_names, PushTone::Good));
+                voice.push(format!("{allied_names} {level} 级了"));
+                if ult {
+                    voice.push(format!("{allied_names}有大招了"));
+                }
+                voice.push(format!("{allied_names}到 {level} 级了"));
+            }
+            (false, true) => {
+                cells.push(compact_cell(&format!("对面{enemy_names}"), PushTone::Bad));
+                voice.push(format!("对面{enemy_names} {level} 级了"));
+                if ult {
+                    voice.push(format!("对面{enemy_names}有大招了"));
+                }
+                voice.push(format!("{enemy_names}到 {level} 级了"));
+            }
+            (false, false) => {
+                cells.push(compact_cell(&format!("对面{enemy_names}"), PushTone::Bad));
+                cells.push(compact_cell(&allied_names, PushTone::Good));
+                voice.push(format!("对面{enemy_names}、{allied_names} {level} 级了"));
+                voice.push(format!("双方都有人到 {level} 级了"));
+            }
+        }
+        cells.push(cell(
+            if ult {
+                "6 级了，有大招".to_string()
+            } else {
+                format!("{level} 级了")
+            },
+            None,
+        ));
+        (cells, voice)
+    }
 }
 
 /// 峡谷里你的对线对手（同一个分路的对面那个人）。
@@ -508,8 +584,8 @@ pub struct Alerts {
     roster: Option<Roster>,
     /// 每个人这局第一次看到时的样子（[`LivePlayer::key`]）：阵亡事件里的英雄名按它（佛耶戈附身时还是佛耶戈）。
     first_seen: HashMap<String, LivePlayer>,
-    /// 到 6 级已经说过的人（[`LivePlayer::key`]）。
-    ult_said: HashSet<String>,
+    /// 到关键等级已经说过的（`<人>:<几级>`，人是 [`LivePlayer::key`]）。
+    level_said: HashSet<String>,
     /// 说过的、或者早就在身上的装备（`<人>:<装备后四位>`，重伤是 `<人>:grievous`）：同一个人同一件只说一次，刚连上时
     /// 身上已经有的不说（[`Alerts::remember_items`]）。
     item_said: HashSet<String>,
@@ -566,7 +642,7 @@ impl Alerts {
             &mut self.item_reported,
         ));
         let key = |kind: &str| format!("{kind}:{game_id}:{}", game.time.round() as i64);
-        if let Some(push) = self.level_six(&changes, game, data, key(PUSH_ENEMY_ULT)) {
+        if let Some(push) = self.key_levels(&changes, game, data, key(PUSH_ENEMY_ULT)) {
             out.pushes.push(push);
         }
         if let Some(push) = self.key_items(&before, &changes, game, data, key(PUSH_ENEMY_ITEM)) {
@@ -591,8 +667,9 @@ impl Alerts {
         out
     }
 
-    /// 你、双方远距离大招的英雄和你的对线对手到 6 级。同一轮的并成一条。
-    fn level_six(
+    /// 关键等级：你、双方远距离大招的英雄和你的对线对手到 6 级；双方 [`POWER_SPIKES`] 里的英雄到他们那一级。
+    /// 同一轮的并成一条（同一级的人并在一起说；几个等级碰在同一轮就连起来说）。
+    fn key_levels(
         &mut self,
         changes: &events::Changes,
         game: &LiveGame,
@@ -604,74 +681,75 @@ impl Alerts {
             return None;
         }
         let opponent = lane_opponent(game).map(LivePlayer::key);
-        let mut enemies = Vec::new();
-        let mut allies = Vec::new();
-        let mut self_leveled = false;
+        let mut reached: BTreeMap<i64, Reached> = BTreeMap::new();
         for up in &changes.levels {
             let p = up.player;
-            if p.team.is_empty() || !(up.from < 6 && p.level >= 6) {
+            if p.team.is_empty() {
                 continue;
             }
+            let crossed = |level: i64| up.from < level && p.level >= level;
             let is_me = p.riot_id == game.me;
             let long = LONG_ULTS
                 .iter()
                 .any(|(alias, _)| alias.eq_ignore_ascii_case(&p.alias));
             let player_key = p.key();
             let lane = opponent.as_deref() == Some(player_key.as_str());
-            if !(is_me || long || lane) || !self.ult_said.insert(player_key) {
-                continue;
+            let mut levels = Vec::new();
+            if crossed(6) && (is_me || long || lane) {
+                levels.push(6);
             }
-            if is_me {
-                self_leveled = true;
-            } else if p.team == my_team {
-                allies.push(spoken(p, data));
-            } else {
-                // 对线对手没有外号时按分路叫（“对面中单”）。
-                enemies.push(if lane && !long {
-                    position_name(&p.position)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| spoken(p, data))
+            levels.extend(
+                POWER_SPIKES
+                    .iter()
+                    .filter(|(alias, _, level)| {
+                        alias.eq_ignore_ascii_case(&p.alias) && *level != 6 && crossed(*level)
+                    })
+                    .map(|(_, _, level)| *level),
+            );
+            for level in levels {
+                if !self.level_said.insert(format!("{player_key}:{level}")) {
+                    continue;
+                }
+                let group = reached.entry(level).or_default();
+                if is_me {
+                    group.me = true;
+                } else if p.team == my_team {
+                    group.allies.push(spoken(p, data));
                 } else {
-                    spoken(p, data)
-                });
+                    // 6 级的对线对手没有外号时按分路叫（“对面中单”）。
+                    group.enemies.push(if level == 6 && lane && !long {
+                        position_name(&p.position)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| spoken(p, data))
+                    } else {
+                        spoken(p, data)
+                    });
+                }
             }
         }
-        let enemy_names = summarize_names(&enemies);
-        let allied_names = match (self_leveled, allies.is_empty()) {
-            (true, true) => "你".to_string(),
-            (true, false) => format!("你和我方{}", summarize_names(&allies)),
-            (false, false) => format!("我方{}", summarize_names(&allies)),
-            (false, true) => String::new(),
-        };
-        let mut cells = Vec::new();
-        let voice = match (enemies.is_empty(), allied_names.is_empty()) {
-            (true, true) => return None,
-            (true, false) => {
-                cells.push(compact_cell(&allied_names, PushTone::Good));
-                vec![
-                    format!("{allied_names} 6 级了"),
-                    format!("{allied_names}有大招了"),
-                    format!("{allied_names}到 6 级了"),
-                ]
-            }
-            (false, true) => {
-                cells.push(compact_cell(&format!("对面{enemy_names}"), PushTone::Bad));
-                vec![
-                    format!("对面{enemy_names} 6 级了"),
-                    format!("对面{enemy_names}有大招了"),
-                    format!("{enemy_names}到 6 级了"),
-                ]
-            }
-            (false, false) => {
-                cells.push(compact_cell(&format!("对面{enemy_names}"), PushTone::Bad));
-                cells.push(compact_cell(&allied_names, PushTone::Good));
-                vec![
-                    format!("对面{enemy_names}、{allied_names} 6 级了"),
-                    "双方都有人到 6 级了".into(),
-                ]
+        let mut lines: Vec<(Vec<PushCell>, Vec<String>)> = reached
+            .iter()
+            .map(|(level, group)| group.words(*level))
+            .filter(|(_, voice)| !voice.is_empty())
+            .collect();
+        let (cells, voice) = match lines.len() {
+            0 => return None,
+            1 => lines.remove(0),
+            // 几个等级碰在同一轮（很少）：一整句写在一格里，念的时候连起来；连起来太长就只说有人到了
+            _ => {
+                let joined = lines
+                    .iter()
+                    .map(|(_, voice)| voice[0].as_str())
+                    .collect::<Vec<_>>()
+                    .join("，");
+                let mut voice = vec![joined.clone()];
+                if joined.chars().count() > Push::VOICE_MAX {
+                    voice = vec!["好几个人到关键等级了".into()];
+                }
+                let text: String = joined.chars().take(PushCell::ONE_CELL_MAX_CHARS).collect();
+                (vec![cell(text, None)], voice)
             }
         };
-        cells.push(cell("6 级了，有大招", None));
         Some(line_push(PUSH_ENEMY_ULT, key, cells, voice))
     }
 
