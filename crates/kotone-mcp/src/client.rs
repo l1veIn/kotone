@@ -270,6 +270,9 @@ fn with_note(error: McpError, note: &str) -> McpError {
             McpError::Spawn("程序启动后还没握手就关掉了输出".into())
         }
         McpError::Closed => McpError::Spawn(note.to_string()),
+        // 它在我们发握手之前就退出了：写标准输入失败（Windows 上是 “The pipe is being closed”）。
+        // 原因在退出码和 stderr 里，不是“连不上”
+        McpError::Connect(_) if !note.is_empty() => McpError::Spawn(note.to_string()),
         McpError::Spawn(m) if !note.is_empty() => McpError::Spawn(format!("{m}。{note}")),
         other => other,
     }
@@ -289,3 +292,22 @@ const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Arc<McpClient>>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 程序退得比握手快时，写标准输入失败成了 Connect：照样说退出码和它最后说的话（CI 上偶发过）。
+    #[test]
+    fn a_write_to_an_exited_program_says_why_it_exited() {
+        let note = "程序退出了（退出码 3）。它最后说：KOTONE_TEST_TOKEN is missing";
+        let error = with_note(
+            McpError::Connect("The pipe is being closed. (os error 232)".into()),
+            note,
+        );
+        assert_eq!(error, McpError::Spawn(note.into()));
+        // 没有说明时还是原来的错
+        let error = with_note(McpError::Connect("x".into()), "");
+        assert_eq!(error, McpError::Connect("x".into()));
+    }
+}
