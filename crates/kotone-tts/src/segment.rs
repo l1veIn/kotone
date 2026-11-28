@@ -193,45 +193,8 @@ pub fn clean(raw: &str) -> String {
         .to_string()
 }
 
-/// 念之前去掉挨着中文的空格：屏幕上的话按界面用语在数字、英文两边留半角空格
-/// （“卡牌大师到 6 级了”“10 分 30 秒刷新”），合成会在空格处停顿，念成“到六……级了”。
-/// 空白（连续的算一处）只要有一边是中日文字、全角标点或全角字符就去掉；两边都是
-/// 英文、数字时保留（“Faker is back”照常念，“3 4”不会并成“34”）。重复调用结果不变。
-pub fn tighten(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if !chars[i].is_whitespace() {
-            out.push(chars[i]);
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < chars.len() && chars[i].is_whitespace() {
-            i += 1;
-        }
-        let before = start.checked_sub(1).map(|j| chars[j]);
-        let after = chars.get(i).copied();
-        if !(before.is_some_and(is_cjk) || after.is_some_and(is_cjk)) {
-            out.extend(&chars[start..i]);
-        }
-    }
-    out
-}
-
-/// 中日文字、CJK 标点、全角字符（含全角标点）。
-fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x3000..=0x303F     // CJK 标点（。、「」《》）和全角空格
-        | 0x3040..=0x30FF   // 平假名、片假名
-        | 0x3400..=0x4DBF   // 扩展 A
-        | 0x4E00..=0x9FFF   // 基本汉字
-        | 0xF900..=0xFAFF   // 兼容汉字
-        | 0xFF00..=0xFFEF   // 全角 ASCII、全角标点（，！？：）
-        | 0x20000..=0x3FFFF // 扩展 B 及以后
-    )
-}
+/// 挨着中文的空格念之前去掉：规矩在 core（Windows 系统语音不经过这里，也要用），见 [`kotone_core::speech::tighten`]。
+pub use kotone_core::speech::tighten;
 
 fn is_open_quote(c: char) -> bool {
     PAIRS.iter().any(|(open, _)| *open == c) || c == '"'

@@ -227,8 +227,8 @@ mod imp {
                     .ok_or_else(|| "所选 Windows 语音已不可用，请重新选择".to_string())?,
                 None => self.default_voice.clone(),
             };
-            let text: Vec<u16> = request
-                .text
+            // 挨着中文的空格念的时候去掉（“到 6 级了”不在空格处停顿），和在线 / 本地语音同一个规矩
+            let text: Vec<u16> = kotone_core::speech::tighten(&request.text)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect();

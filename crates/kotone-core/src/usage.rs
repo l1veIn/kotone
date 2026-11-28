@@ -409,17 +409,19 @@ pub fn claim_speech(text: &str, owner: Owner) {
 /// （分句合成）时保留登记，后面的句子还要认领。
 fn speech_owner(claims: &mut Vec<(String, Owner, u64)>, text: &str, now: u64) -> Option<Owner> {
     claims.retain(|(_, _, at)| now.saturating_sub(*at) < SPEECH_CLAIM_MS);
-    let text = text.trim();
+    // 合成那边念之前去掉了挨着中文的空格（`speech::tighten`），认领时记的是原文：两边都收紧了再比
+    let text = crate::speech::tighten(text.trim());
     if text.is_empty() {
         return None;
     }
-    if let Some(i) = claims.iter().position(|(t, _, _)| t == text) {
+    let claimed = |t: &str| crate::speech::tighten(t);
+    if let Some(i) = claims.iter().position(|(t, _, _)| claimed(t) == text) {
         return Some(claims.remove(i).1);
     }
     claims
         .iter()
         .rev()
-        .find(|(t, _, _)| t.contains(text))
+        .find(|(t, _, _)| claimed(t).contains(&text))
         .map(|(_, owner, _)| owner.clone())
 }
 
@@ -978,6 +980,12 @@ mod tests {
         );
         assert!(claims.is_empty());
         assert_eq!(speech_owner(&mut claims, "  ", 0), None);
+        // 合成那边念的是去掉了挨着中文空格的话：照样认得出是谁的
+        claims.push(("对面卡萨丁 16 级了".into(), owner(3), 5_000));
+        assert_eq!(
+            speech_owner(&mut claims, "对面卡萨丁16级了", 5_000),
+            Some(owner(3))
+        );
     }
 
     #[test]
