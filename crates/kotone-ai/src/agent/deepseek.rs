@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use kotone_core::cancel::CancellationToken;
-use kotone_core::connection::ResolvedConnection;
+use kotone_core::connection::{ConnectionKind, ResolvedConnection};
 use serde_json::{json, Map, Value};
 
 use super::model::NameMap;
@@ -37,6 +37,85 @@ const REMINDER_TAIL: &str = ",,App,中文";
 /// 这个连接是不是 DeepSeek 官方接口。
 pub fn is_deepseek(connection: &ResolvedConnection) -> bool {
     connection.provider == "deepseek" || connection.base_url.contains("api.deepseek.com")
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct BalanceAmount {
+    pub currency: String,
+    #[serde(rename(deserialize = "total_balance"))]
+    pub amount: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BalanceResponse {
+    balance_infos: Vec<BalanceAmount>,
+}
+
+impl BalanceResponse {
+    fn amounts(self) -> Result<Vec<BalanceAmount>, String> {
+        let balances = self.balance_infos;
+        let mut currencies = std::collections::HashSet::new();
+        if balances.is_empty()
+            || !balances.iter().all(|value| {
+                matches!(value.currency.as_str(), "CNY" | "USD")
+                    && currencies.insert(value.currency.as_str())
+                    && value.amount.parse::<f64>().is_ok_and(f64::is_finite)
+            })
+        {
+            return Err("DeepSeek 返回的余额格式不正确".into());
+        }
+        Ok(balances)
+    }
+}
+
+fn official_balance_origin(base_url: &str) -> bool {
+    // 对话客户端还兼容自定义网关。余额只使用配置在 DeepSeek 官方域名上的 Key。
+    reqwest::Url::parse(base_url.trim()).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str() == Some("api.deepseek.com")
+            && url.port().is_none()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+
+/// 从 DeepSeek 官方的账户余额接口取金额，保留它返回的十进制精度。
+pub async fn account_balance(
+    connection: &ResolvedConnection,
+) -> Result<Option<Vec<BalanceAmount>>, String> {
+    if connection.kind != ConnectionKind::Remote || !official_balance_origin(&connection.base_url) {
+        return Ok(None);
+    }
+    let Some(key) = connection
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    else {
+        return Ok(None);
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "无法连接 DeepSeek 查询余额")?;
+    let response = client
+        .get("https://api.deepseek.com/user/balance")
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|_| "无法连接 DeepSeek 查询余额")?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "DeepSeek 余额查询失败（HTTP {}）",
+            response.status().as_u16()
+        ));
+    }
+    let payload = response
+        .json::<BalanceResponse>()
+        .await
+        .map_err(|_| "无法读取 DeepSeek 余额")?;
+    payload.amounts().map(Some)
 }
 
 fn client() -> reqwest::Client {
@@ -517,6 +596,68 @@ impl ModelClient for DeepSeekModel {
             biased;
             _ = cancel.cancelled() => Err(AiError::Cancelled),
             result = work => result,
+        }
+    }
+}
+
+#[cfg(test)]
+mod balance_tests {
+    use super::*;
+
+    #[test]
+    fn account_balance_accepts_only_the_official_https_origin() {
+        for base_url in [
+            "https://api.deepseek.com",
+            "https://api.deepseek.com/v1/",
+            "https://api.deepseek.com/anthropic",
+        ] {
+            assert!(official_balance_origin(base_url), "{base_url}");
+        }
+        for base_url in [
+            "http://api.deepseek.com/v1",
+            "https://api.deepseek.com:8443/v1",
+            "https://api.deepseek.com.example.com/v1",
+            "https://example.com/api.deepseek.com/v1",
+            "https://api.deepseek.com@example.com/v1",
+            "https://example.com@api.deepseek.com/v1",
+        ] {
+            assert!(!official_balance_origin(base_url), "{base_url}");
+        }
+    }
+
+    #[test]
+    fn account_balance_preserves_zero_and_decimal_precision() {
+        let payload: BalanceResponse = serde_json::from_value(json!({
+            "is_available": false,
+            "balance_infos": [
+                {"currency": "CNY", "total_balance": "0.00", "granted_balance": "0.00"},
+                {"currency": "USD", "total_balance": "0.012345678901234567"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(payload.amounts().unwrap()).unwrap(),
+            json!([
+                {"currency": "CNY", "amount": "0.00"},
+                {"currency": "USD", "amount": "0.012345678901234567"}
+            ])
+        );
+    }
+
+    #[test]
+    fn account_balance_rejects_missing_invalid_and_duplicate_amounts() {
+        for balances in [
+            json!([]),
+            json!([{"currency": "CNY", "total_balance": "NaN"}]),
+            json!([{"currency": "EUR", "total_balance": "0.00"}]),
+            json!([
+                {"currency": "USD", "total_balance": "1.00"},
+                {"currency": "USD", "total_balance": "2.00"}
+            ]),
+        ] {
+            let payload: BalanceResponse =
+                serde_json::from_value(json!({"balance_infos": balances})).unwrap();
+            assert!(payload.amounts().is_err(), "{balances}");
         }
     }
 }

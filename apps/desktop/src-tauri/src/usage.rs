@@ -5,6 +5,7 @@
 use kotone_ai::agent::{now_ms, TokenUsage};
 use kotone_core::usage::{self, UsageKind, UsageLedger, UsageRecord};
 use serde_json::{json, Value};
+use tauri::{AppHandle, Manager};
 
 /// 启动时打开账本（`<KOTONE_HOME>/usage.jsonl`）；之后各处的在线调用都记到这里。
 pub fn start() {
@@ -139,6 +140,32 @@ pub fn conversation(id: &str, since_ms: u64) -> Value {
 #[tauri::command]
 pub fn usage_summary() -> Value {
     summary()
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBalance {
+    connection_name: String,
+    balances: Vec<kotone_ai::agent::deepseek::BalanceAmount>,
+}
+
+/// 用量详情打开时才查询余额，聊天里的今日花费照旧从本机账本读取。
+#[tauri::command]
+pub async fn usage_balance(app: AppHandle) -> Result<Option<UsageBalance>, String> {
+    let settings = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .clone();
+    let Ok(connection) = crate::companion::connection_ready(&app, &settings) else {
+        return Ok(None);
+    };
+    let balances = kotone_ai::agent::deepseek::account_balance(&connection).await?;
+    Ok(balances.map(|balances| UsageBalance {
+        connection_name: connection.display_name,
+        balances,
+    }))
 }
 
 #[tauri::command]

@@ -45,8 +45,8 @@ pub const LABEL: &str = "floating";
 pub const EVENT: &str = "kotone://floating";
 /// 窗口离工作区边缘多远（逻辑像素）。页面四周还留 8 给阴影，内容离边 24，和原来的气泡一样。
 const MARGIN: f64 = 16.0;
-/// 小窗最高占工作区高度的多少（讨论记录第三节：“屏幕高度的 40% 左右”）。
-const MAX_HEIGHT_SHARE: f64 = 0.4;
+/// 卡片多留一些展示空间，小窗最多占当前屏幕工作区的四分之三。
+const MAX_HEIGHT_SHARE: f64 = 0.75;
 /// 界面一直没报大小时，过多久照旧显示。
 const LAYOUT_FALLBACK: Duration = Duration::from_millis(1_500);
 /// 收起先让界面把气泡 / 小窗折回头像；此期间保留原来的窗口大小和区域。
@@ -105,7 +105,7 @@ pub struct Shown {
     #[serde(flatten)]
     pub view: View,
     pub corner: BubbleCorner,
-    /// 聊天小窗最高多少（逻辑像素）：游戏所在那块屏工作区高度的 40%。
+    /// 聊天小窗最高多少（逻辑像素），按前台显示器的工作区和缩放计算。
     pub max_height: u32,
 }
 

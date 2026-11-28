@@ -232,7 +232,7 @@ fn level_and_item_events_over_a_whole_mayhem_game() {
         .all(|id| crate::client::events::KEY_ITEM_IDS.contains(&base_item(*id))));
 }
 
-/// 那一把海斗里的提醒：对面岩雀（塔莉垭，远距离大招）到 6 级说一次；维克托出了中娅、岩雀（湮灭宝珠）和蕾欧娜
+/// 那一把海斗里的提醒：双方到 6 级的关键英雄和你自己各提醒一次；维克托出了中娅、岩雀（湮灭宝珠）和蕾欧娜
 /// （棘刺背心）第一次有了重伤各说一次；没有峡谷资源；对面同时死 3 个的时候很多，但还要 30 秒以上才复活的到 3 个只有
 /// 17 分钟那一次（以前的规矩“同时死了 3 个、45 秒一次”在这把里说了 9 次）；我每次阵亡同一张卡片原地更新，第二次起再弹一次。
 #[test]
@@ -246,10 +246,15 @@ fn alerts_over_a_whole_mayhem_game() {
         }
     }
     let ults = pushes_of(&outs, PUSH_ENEMY_ULT);
-    assert_eq!(ults.len(), 1, "只有岩雀是远距离大招（大乱斗没有对线对手）");
+    assert_eq!(
+        ults.len(),
+        2,
+        "岩雀、我和卡牌同一轮到 6 级，寒冰下一轮到 6 级"
+    );
     assert!((200.0..=210.0).contains(&ults[0].0));
-    assert_eq!(ults[0].1.voice[0], "对面岩雀 6 级了");
+    assert_eq!(ults[0].1.voice[0], "对面岩雀、你和我方卡牌 6 级了");
     assert_eq!(ults[0].1.line.as_ref().unwrap().cells[0].text, "对面岩雀");
+    assert_eq!(ults[1].1.voice[0], "我方寒冰 6 级了");
     let items = pushes_of(&outs, PUSH_ENEMY_ITEM);
     let said: Vec<&str> = items.iter().map(|(_, p)| p.voice[0].as_str()).collect();
     assert_eq!(
@@ -607,6 +612,51 @@ fn level_six_names_long_ults_and_the_lane_opponent() {
     assert!(out.pushes.iter().all(|p| p.trigger != PUSH_OBJECTIVE));
 }
 
+#[test]
+fn simultaneous_milestones_show_both_teams_and_the_player() {
+    let item = |id| crate::client::live::LiveItem {
+        id,
+        name: String::new(),
+    };
+    let mut before = rift(400.0, 5, json!([]));
+    before.players[0].level = 5;
+    before.players[1].level = 5;
+    let mut after = rift(402.0, 6, json!([]));
+    after.players[0].items = vec![item(3140)];
+    after.players[1].items = vec![item(3102)];
+    after.players[2].items = vec![item(3157)];
+    let mut alerts = Alerts::default();
+    assert!(alerts.step(7, &before, None, &[]).pushes.is_empty());
+    let out = alerts.step(7, &after, None, &[]);
+    assert_eq!(out.pushes.len(), 2);
+    let levels = &out.pushes[0];
+    assert_eq!(levels.trigger, PUSH_ENEMY_ULT);
+    assert_well_formed(levels);
+    assert_eq!(
+        levels.line.as_ref().unwrap().cells,
+        [
+            cell("对面慎、中单", Some(PushTone::Bad)),
+            cell("你和我方金克丝", Some(PushTone::Good)),
+            cell("6 级了，有大招", None),
+        ]
+    );
+    assert_eq!(levels.voice[0], "对面慎、中单、你和我方金克丝 6 级了");
+    let items = &out.pushes[1];
+    assert_eq!(items.trigger, PUSH_ENEMY_ITEM);
+    assert_well_formed(items);
+    assert_eq!(
+        items.line.as_ref().unwrap().cells,
+        [
+            cell("对面慎 中娅", Some(PushTone::Bad)),
+            cell("你 水银", Some(PushTone::Good)),
+            cell("我方金克丝 女妖", Some(PushTone::Good)),
+        ]
+    );
+    assert_eq!(items.voice[0], "对面慎出中娅，你出水银");
+    after.time = 404.0;
+    assert!(alerts.step(7, &after, None, &[]).pushes.is_empty());
+}
+
 /// 记下的闪现转好了：峡谷里按分路说（“中单闪现好了”），大乱斗按英雄；只在跨过好的那一刻说一次。
 #[test]
 fn a_marked_spell_coming_back_is_said_once() {
@@ -686,7 +736,7 @@ fn a_teamfight_tick_brings_one_push_per_kind_ranked_by_priority() {
         .unwrap();
     assert_eq!(items.voice[0], "对面慎出了中娅，还有 2 件");
     assert_eq!(items.line.as_ref().unwrap().cells.len(), 3);
-    assert_eq!(items.line.as_ref().unwrap().cells[0].text, "慎 中娅");
+    assert_eq!(items.line.as_ref().unwrap().cells[0].text, "对面慎 中娅");
     // 下一轮还都死着：不再说
     let mut g2 = g1.clone();
     g2.time = 604.0;

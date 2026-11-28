@@ -583,6 +583,16 @@ export async function usageConversation(id: string, sinceMs: number): Promise<Co
   };
 }
 
+export interface UsageBalance {
+  connectionName: string;
+  balances: { currency: "CNY" | "USD"; amount: string }[];
+}
+
+/** 当前聊天连接的账户余额；只在打开费用详情时查询。 */
+export async function usageBalance(): Promise<UsageBalance | null> {
+  return isTauri ? invoke<UsageBalance | null>("usage_balance") : null;
+}
+
 export async function usageSummary(): Promise<UsageSummary> {
   if (isTauri) return invoke("usage_summary");
   const today: UsageTotals = { ...emptyTotals(), requests: 12, inputTokens: 182_000, cacheHitTokens: 171_000, outputTokens: 2_400, characters: 640, hitRate: 171_000 / 182_000, cost: { CNY: 0.0412 } };

@@ -573,6 +573,7 @@ pub fn run() {
             automation::automation_run_saved,
             automation::automation_stop,
             usage::usage_summary,
+            usage::usage_balance,
             usage::usage_conversation,
             roles::roles_list,
             roles::roles_get,

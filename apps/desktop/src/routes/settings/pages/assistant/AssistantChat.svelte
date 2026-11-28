@@ -199,7 +199,7 @@
       <!-- 输入框底栏（rc2 玩家反馈）：左边一行用量小字；右边 她用的模型、权限图标、呼叫图标（悬停看快捷键）、发送。
            选模型 2026-11-21 挪进过设置，2026-11-25 玩家要放回聊天页（交接第十一节第 8 条）。 -->
       {#snippet tools()}
-        <UsagePanel compact messages={chat.conversation?.messages ?? []} running={chat.runningHere} {costs} />
+        <UsagePanel messages={chat.conversation?.messages ?? []} running={chat.runningHere} {costs} />
       {/snippet}
       {#snippet options()}
         <ModelMenu {connections} {active} openRequest={modelRequest + localModelRequest} {onOpenConnections} onchanged={() => void chat.refresh().catch(() => {})} />

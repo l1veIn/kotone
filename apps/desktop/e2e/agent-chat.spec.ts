@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
+import type { UsageBalance } from "../src/lib/agent";
 import { openSettingsTab } from "./nav";
 import { screenshot } from "./screenshot.cjs";
 
@@ -10,6 +11,7 @@ declare global {
   interface Window {
     agentTest: {
       calls: AgentCall[];
+      balance: UsageBalance | null | "error";
       state: { current: string | null; running: string | null; notReadyReason: string | null; conversations: { id: string; title: string; createdAtMs: number; updatedAtMs: number; messageCount: number }[] };
       conversations: Record<string, { version: number; id: string; title: string; createdAtMs: number; updatedAtMs: number; messages: unknown[] }>;
       event(conversationId: string, event: unknown): Promise<void>;
@@ -50,6 +52,7 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
     let connectionModel = "test";
     const bridge = {
       calls: [] as { command: string; args?: Record<string, unknown> }[], state, conversations,
+      balance: null as UsageBalance | null | "error",
       async event(conversationId: string, event: unknown) {
         // 与后端一致：每条 appended 的消息同时存盘
         const e = event as { kind: string; message?: unknown };
@@ -70,7 +73,7 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
     await browser.updateSettings({ assistant: { connectionId: "test-ai" } });
     mockWindows("settings");
     mockIPC(async (command, args) => {
-      if (command.startsWith("agent_") || command === "ui_open_reply") bridge.calls.push({ command, args: args as Record<string, unknown> });
+      if (command.startsWith("agent_") || command === "ui_open_reply" || command === "usage_balance") bridge.calls.push({ command, args: args as Record<string, unknown> });
       switch (command) {
         case "agent_state": return structuredClone({ ...state, permissions: { mode: "default", rules: {} } });
         case "agent_conversation": return structuredClone(conversations[(args as { id: string }).id] ?? null);
@@ -104,6 +107,10 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
           return true;
         }
         case "automation_runs": return { runs: [] };
+        case "usage_balance": {
+          if (bridge.balance === "error") throw new Error("balance query failed");
+          return bridge.balance;
+        }
         case "usage_summary": {
           const today = { requests: 9, inputTokens: 182_000, cacheHitTokens: 179_000, outputTokens: 1_200, characters: 300, audioMs: 65_000, images: 2, hitRate: 179_000 / 182_000, cost: { CNY: 0.0251 }, unpriced: 0 };
           return { today, month: { ...today, cost: { CNY: 1.204 }, unpriced: 3 }, byKind: [{ kind: "chat", label: "对话", totals: today }, { kind: "compaction", label: "压缩", totals: { ...today, requests: 1 } }],
@@ -545,10 +552,11 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   await screenshot(usage, { path: testInfo.outputPath("usage.png"), animations: "disabled" });
 });
 
-test("the chat shows today's and this conversation's usage; details by day and by call", async ({ page }, testInfo) => {
+test("the composer shows today's spending; details show the balance, daily usage and call history", async ({ page }, testInfo) => {
   await openChat(page);
   await page.evaluate(async (T) => {
     const t = window.agentTest;
+    t.balance = { connectionName: "DeepSeek", balances: [{ currency: "CNY", amount: "12.34" }, { currency: "USD", amount: "0.00" }] };
     await t.event("c-old", { kind: "step", step: 1 });
     await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "好", usage: { inputTokens: 20_000, cachedInputTokens: 19_800, outputTokens: 50, cost: 0.0015, currency: "CNY" }, atMs: T + 1000 } });
     await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "嗯", usage: { inputTokens: 18_000, cachedInputTokens: 100, outputTokens: 40, cost: 0.036, currency: "CNY" }, atMs: T + 2000 } });
@@ -556,11 +564,14 @@ test("the chat shows today's and this conversation's usage; details by day and b
     await t.event("c-old", { kind: "idle" });
   }, T);
   const pill = page.getByTestId("usage-pill");
-  await expect(page.getByTestId("usage-pill-today")).toHaveText("今天 ¥0.025 · 命中 98%");
-  // 本段对话：(19800 + 100) / 38000 = 52%
-  await expect(page.getByTestId("usage-pill-conversation")).toHaveText("本段对话 ¥0.037 · 命中 52%");
+  await expect(pill).toHaveText("今天 ¥0.025");
+  expect(await page.evaluate(() => window.agentTest.calls.filter((call) => call.command === "usage_balance"))).toHaveLength(0);
   await pill.click();
   const dialog = page.getByTestId("usage-dialog");
+  await expect(dialog.getByTestId("usage-balance")).toContainText("余额");
+  await expect(dialog.getByTestId("usage-balance")).toContainText("DeepSeek");
+  await expect(dialog.getByTestId("usage-balance-amounts").locator("span")).toHaveText(["¥12.34", "$0.00"]);
+  await expect(dialog).toContainText("命中 98%");
   await expect(dialog.getByTestId("usage-day")).toHaveCount(2);
   await expect(dialog.getByTestId("usage-day").first()).toHaveAttribute("data-day", "2026-11-18");
   await dialog.getByTestId("usage-day").first().click();
@@ -568,11 +579,29 @@ test("the chat shows today's and this conversation's usage; details by day and b
   await expect(dialog.getByTestId("usage-day-detail")).toContainText("deepseek/deepseek-flash");
   await screenshot(page, { path: testInfo.outputPath("usage-days.png"), animations: "disabled" });
   await dialog.getByTestId("usage-tab-conversation").click();
+  // (19800 + 100) / 38000 = 52%
+  await expect(dialog.getByTestId("usage-conversation-total")).toHaveText("本段对话：输入 38,000（命中 52%）· 输出 90 · ¥0.037");
   await expect(dialog.getByTestId("usage-call")).toHaveCount(2);
   // 新的在前；没命中的那次标出来
   await expect(dialog.getByTestId("usage-call").first()).toContainText("1%");
   await expect(dialog.getByTestId("usage-call").first().locator("td.text-warning")).toHaveCount(1);
   await screenshot(page, { path: testInfo.outputPath("usage-calls.png"), animations: "disabled" });
+});
+
+test("a failed or unsupported balance query leaves the local usage details available", async ({ page }) => {
+  await openChat(page);
+  const pill = page.getByTestId("usage-pill");
+  const dialog = page.getByTestId("usage-dialog");
+  await page.evaluate(() => { window.agentTest.balance = "error"; });
+  await pill.click();
+  await expect(dialog.getByTestId("usage-balance")).toContainText("暂时查不到余额");
+  await expect(dialog.getByTestId("usage-day")).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await page.evaluate(() => { window.agentTest.balance = null; });
+  await pill.click();
+  await expect(dialog.getByTestId("usage-balance")).toContainText("当前连接无法查询余额");
+  await expect(dialog.getByTestId("usage-day")).toHaveCount(2);
 });
 
 test("web search lists its sources under the tool card", async ({ page }) => {
@@ -656,10 +685,10 @@ test("voice, screen-reading and search costs are listed separately per turn and 
   await expect(page.getByTestId("agent-turn").first().getByTestId("agent-turn-usage")).toHaveCount(0);
   await screenshot(page, { path: testInfo.outputPath("turn-costs.png"), animations: "disabled" });
   // 本段对话：合计含语音、读屏、搜索；明细里分开
-  await expect(page.getByTestId("usage-pill-conversation")).toHaveText("本段对话 ¥0.014 · 命中 95%");
   await page.getByTestId("usage-pill").click();
   const dialog = page.getByTestId("usage-dialog");
   await dialog.getByTestId("usage-tab-conversation").click();
+  await expect(dialog.getByTestId("usage-conversation-total")).toHaveText("本段对话：输入 2,000（命中 95%）· 输出 12 · ¥0.014");
   await expect(dialog.getByTestId("usage-conversation-breakdown")).toHaveText("对话 ¥0.0020 · 语音 ¥0.0050 · 读屏 ¥0.0015 · 搜索 ¥0.0055");
   await screenshot(page, { path: testInfo.outputPath("conversation-costs.png"), animations: "disabled" });
 });

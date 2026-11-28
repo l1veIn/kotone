@@ -4,8 +4,8 @@
 //!
 //! | 推送（清单 id） | 什么时候 | 样子 | 多要紧 |
 //! |---|---|---|---|
-//! | `enemy-ult` | 对面全图 / 远距离大招的英雄（[`LONG_ULTS`]）、峡谷里你的对线对手到 6 级 | 语音 + 一行 | 普通 |
-//! | `enemy-item` | 对面出了复活甲、中娅、水银、女妖、巨蛇之牙（[`KEY_ITEMS`]）；对面谁身上第一次有了带重伤的装备（[`GRIEVOUS`]，小件也算；不管你玩什么英雄） | 语音 + 一行 | 低 |
+//! | `enemy-ult` | 你、双方全图 / 远距离大招的英雄（[`LONG_ULTS`]）、峡谷里你的对线对手到 6 级 | 语音 + 一行 | 普通 |
+//! | `enemy-item` | 双方出了复活甲、中娅、水银、女妖、巨蛇之牙（[`KEY_ITEMS`]）；谁身上第一次有了带重伤的装备（[`GRIEVOUS`]，小件也算） | 语音 + 一行 | 低 |
 //! | `spell-ready` | 你或她记下的召唤师技能（`lol.spell`）转好了 | 语音 + 一行 | 普通 |
 //! | `objective` | 峡谷的小龙、远古龙、虚空巢虫、峡谷先锋、大龙刷新前 30 秒（[`RIFT_RULES`]，只在峡谷） | 语音 + 一行 | 普通 |
 //! | `enemies-down` | 对面阵亡、还要 30 秒以上才复活的（[`DOWN_RESPAWN`]）这一份刚到 3 个（60 秒内只说一次） | 语音 + 一行 | 要紧 |
@@ -182,6 +182,21 @@ fn cell(text: impl Into<String>, tone: Option<PushTone>) -> PushCell {
     }
 }
 
+fn compact_cell(text: &str, tone: PushTone) -> PushCell {
+    cell(
+        text.chars().take(PushCell::MAX_CHARS).collect::<String>(),
+        Some(tone),
+    )
+}
+
+fn summarize_names(names: &[String]) -> String {
+    if names.len() > 2 {
+        format!("{}等 {} 个", names[..2].join("、"), names.len())
+    } else {
+        names.join("、")
+    }
+}
+
 fn line_push(trigger: &str, key: String, cells: Vec<PushCell>, voice: Vec<String>) -> Push {
     Push {
         trigger: trigger.into(),
@@ -343,10 +358,10 @@ impl Alerts {
             &mut self.item_reported,
         ));
         let key = |kind: &str| format!("{kind}:{game_id}:{}", game.time.round() as i64);
-        if let Some(push) = self.enemy_ults(&changes, game, data, key(PUSH_ENEMY_ULT)) {
+        if let Some(push) = self.level_six(&changes, game, data, key(PUSH_ENEMY_ULT)) {
             out.pushes.push(push);
         }
-        if let Some(push) = self.enemy_items(&before, &changes, game, data, key(PUSH_ENEMY_ITEM)) {
+        if let Some(push) = self.key_items(&before, &changes, game, data, key(PUSH_ENEMY_ITEM)) {
             out.pushes.push(push);
         }
         out.pushes
@@ -364,70 +379,92 @@ impl Alerts {
         out
     }
 
-    /// 对面到 6 级的：全图 / 远距离大招的英雄，峡谷里加上你的对线对手。同一轮的并成一条。
-    fn enemy_ults(
+    /// 你、双方远距离大招的英雄和你的对线对手到 6 级。同一轮的并成一条。
+    fn level_six(
         &mut self,
         changes: &events::Changes,
         game: &LiveGame,
         data: Option<&GameData>,
         key: String,
     ) -> Option<Push> {
+        let my_team = game.my_team();
+        if my_team.is_empty() {
+            return None;
+        }
         let opponent = lane_opponent(game).map(LivePlayer::key);
-        let mut names = Vec::new();
+        let mut enemies = Vec::new();
+        let mut allies = Vec::new();
+        let mut self_leveled = false;
         for up in &changes.levels {
             let p = up.player;
-            if game.my_team().is_empty()
-                || p.team == game.my_team()
-                || !(up.from < 6 && p.level >= 6)
-            {
+            if p.team.is_empty() || !(up.from < 6 && p.level >= 6) {
                 continue;
             }
+            let is_me = p.riot_id == game.me;
             let long = LONG_ULTS
                 .iter()
                 .any(|(alias, _)| alias.eq_ignore_ascii_case(&p.alias));
-            let lane = opponent.as_deref() == Some(p.key().as_str());
-            if !(long || lane) || !self.ult_said.insert(p.key()) {
+            let player_key = p.key();
+            let lane = opponent.as_deref() == Some(player_key.as_str());
+            if !(is_me || long || lane) || !self.ult_said.insert(player_key) {
                 continue;
             }
-            // 对线对手没有外号时按分路叫（“对面中单”），有外号的照外号
-            names.push(if lane && !long {
-                position_name(&p.position)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| spoken(p, data))
+            if is_me {
+                self_leveled = true;
+            } else if p.team == my_team {
+                allies.push(spoken(p, data));
             } else {
-                spoken(p, data)
-            });
+                // 对线对手没有外号时按分路叫（“对面中单”）。
+                enemies.push(if lane && !long {
+                    position_name(&p.position)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| spoken(p, data))
+                } else {
+                    spoken(p, data)
+                });
+            }
         }
-        if names.is_empty() {
-            return None;
-        }
-        let who = if names.len() > 2 {
-            format!("{}等 {} 个", names[..2].join("、"), names.len())
-        } else {
-            names.join("、")
+        let enemy_names = summarize_names(&enemies);
+        let allied_names = match (self_leveled, allies.is_empty()) {
+            (true, true) => "你".to_string(),
+            (true, false) => format!("你和我方{}", summarize_names(&allies)),
+            (false, false) => format!("我方{}", summarize_names(&allies)),
+            (false, true) => String::new(),
         };
-        // 一格最多 12 个字：放不下“对面”就不写
-        let label = match format!("对面{who}") {
-            l if l.chars().count() <= PushCell::MAX_CHARS => l,
-            _ => who.clone(),
+        let mut cells = Vec::new();
+        let voice = match (enemies.is_empty(), allied_names.is_empty()) {
+            (true, true) => return None,
+            (true, false) => {
+                cells.push(compact_cell(&allied_names, PushTone::Good));
+                vec![
+                    format!("{allied_names} 6 级了"),
+                    format!("{allied_names}有大招了"),
+                    format!("{allied_names}到 6 级了"),
+                ]
+            }
+            (false, true) => {
+                cells.push(compact_cell(&format!("对面{enemy_names}"), PushTone::Bad));
+                vec![
+                    format!("对面{enemy_names} 6 级了"),
+                    format!("对面{enemy_names}有大招了"),
+                    format!("{enemy_names}到 6 级了"),
+                ]
+            }
+            (false, false) => {
+                cells.push(compact_cell(&format!("对面{enemy_names}"), PushTone::Bad));
+                cells.push(compact_cell(&allied_names, PushTone::Good));
+                vec![
+                    format!("对面{enemy_names}、{allied_names} 6 级了"),
+                    "双方都有人到 6 级了".into(),
+                ]
+            }
         };
-        Some(line_push(
-            PUSH_ENEMY_ULT,
-            key,
-            vec![
-                cell(label, Some(PushTone::Bad)),
-                cell("6 级了，有大招", None),
-            ],
-            vec![
-                format!("对面{who} 6 级了"),
-                format!("对面{who}有大招了"),
-                format!("{who}到 6 级了"),
-            ],
-        ))
+        cells.push(cell("6 级了，有大招", None));
+        Some(line_push(PUSH_ENEMY_ULT, key, cells, voice))
     }
 
-    /// 对面出了关键装备、身上第一次有了重伤（都不管你玩什么英雄）。同一轮的并成一条，最多写三个。
-    fn enemy_items(
+    /// 谁出了关键装备、身上第一次有了重伤。同一轮的并成一条，最多写三个。
+    fn key_items(
         &mut self,
         before: &Roster,
         changes: &events::Changes,
@@ -435,11 +472,16 @@ impl Alerts {
         data: Option<&GameData>,
         key: String,
     ) -> Option<Push> {
+        let my_team = game.my_team();
+        if my_team.is_empty() {
+            return None;
+        }
         let grievous = |items: &[i64]| items.iter().any(|i| GRIEVOUS.contains(&base_item(*i)));
-        let mut found: Vec<(String, String)> = Vec::new();
+        let mut enemies = Vec::new();
+        let mut allies = Vec::new();
         for bought in &changes.items {
             let p = bought.player;
-            if game.my_team().is_empty() || p.team == game.my_team() {
+            if p.team.is_empty() {
                 continue;
             }
             let base = base_item(bought.item.id);
@@ -459,23 +501,58 @@ impl Alerts {
                 None
             };
             if let Some(what) = what {
-                found.push((spoken(p, data), what));
+                if p.riot_id == game.me {
+                    allies.insert(0, ("你".into(), what));
+                } else if p.team == my_team {
+                    allies.push((format!("我方{}", spoken(p, data)), what));
+                } else {
+                    enemies.push((spoken(p, data), what));
+                }
             }
         }
+        if let (Some(enemy), Some(ally)) = (enemies.first(), allies.first()) {
+            let enemy_cell = |(who, what): &(String, String)| {
+                compact_cell(&format!("对面{who} {what}"), PushTone::Bad)
+            };
+            let ally_cell = |(who, what): &(String, String)| {
+                compact_cell(&format!("{who} {what}"), PushTone::Good)
+            };
+            let cells = [enemy_cell(enemy), ally_cell(ally)]
+                .into_iter()
+                .chain(enemies.iter().skip(1).map(enemy_cell))
+                .chain(allies.iter().skip(1).map(ally_cell))
+                .take(PushLine::MAX_CELLS)
+                .collect();
+            let (enemy, enemy_item) = enemy;
+            let (ally, ally_item) = ally;
+            return Some(line_push(
+                PUSH_ENEMY_ITEM,
+                key,
+                cells,
+                vec![
+                    format!("对面{enemy}出{enemy_item}，{ally}出{ally_item}"),
+                    "双方都出了关键装备".into(),
+                ],
+            ));
+        }
+        let (found, side, tone) = if enemies.is_empty() {
+            (allies, "", PushTone::Good)
+        } else {
+            (enemies, "对面", PushTone::Bad)
+        };
         let (who, what) = found.first().cloned()?;
         let cells = found
             .iter()
-            .take(3)
+            .take(PushLine::MAX_CELLS)
             .enumerate()
             .map(|(i, (who, what))| {
-                cell(
-                    if found.len() == 1 {
-                        format!("对面{who}出了{what}")
-                    } else {
-                        format!("{who} {what}")
-                    },
-                    (i == 0).then_some(PushTone::Bad),
-                )
+                let text = if found.len() == 1 {
+                    format!("{side}{who}出了{what}")
+                } else {
+                    format!("{side}{who} {what}")
+                };
+                let text = text.chars().take(PushCell::MAX_CHARS).collect::<String>();
+                cell(text, (i == 0).then_some(tone))
             })
             .collect();
         let more = if found.len() > 1 {
@@ -488,9 +565,13 @@ impl Alerts {
             key,
             cells,
             vec![
-                format!("对面{who}出了{what}{more}"),
-                format!("{who}出了{what}{more}"),
-                format!("对面{who}有{what}了"),
+                format!("{side}{who}出了{what}{more}"),
+                if side.is_empty() {
+                    format!("{who}出{what}了{more}")
+                } else {
+                    format!("{who}出了{what}{more}")
+                },
+                format!("{side}{who}有{what}了"),
             ],
         ))
     }

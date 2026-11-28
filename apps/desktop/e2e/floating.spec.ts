@@ -664,8 +664,8 @@ test("bubble: her line and the newest three push lines share one bubble (no mini
   await expect(floating).toHaveAttribute("data-mode", "mini");
 });
 
-test("mini chat: a card taller than the list fades at the bottom and offers the full one in Kotone; the wheel over it scrolls the list", async ({ page }) => {
-  await open(page);
+test("mini chat: a card fits when there is enough room and fades with an open link when it exceeds the list", async ({ page }) => {
+  await open(page, { width: 460, height: 820 });
   await page.evaluate(() => window.floatingTest.view({
     revision: 10, maxHeight: 360, ring: { totalMs: 5_000, leftMs: 5_000, running: true, atMs: Date.now() },
     mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" },
@@ -675,6 +675,19 @@ test("mini chat: a card taller than the list fades at the bottom and offers the 
   await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   await expect.poll(() => page.frames().some((f) => /\/app\/lol\/match$/.test(f.url()))).toBe(true);
   const app = page.frames().find((f) => /\/app\/lol\/match$/.test(f.url()))!;
+  await app.getByTestId("lol-match-card").evaluate((el) => { el.style.minHeight = "460px"; });
+  const iframe = frame.getByTestId("mcp-app-iframe");
+  const more = frame.getByTestId("mcp-app-more");
+  await expect.poll(async () => (await iframe.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(460);
+  await expect(frame).toHaveAttribute("data-clipped", "true");
+  await page.evaluate(() => window.floatingTest.view({
+    revision: 11, maxHeight: 750,
+    mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" },
+  }));
+  await expect(frame).toHaveAttribute("data-clipped", "false");
+  await expect(iframe).toBeInViewport({ ratio: 0.99 });
+  await expect(more).toHaveCount(0);
+
   // App 长高到 1500 多（插件页面很长时）：iframe 跟着长、自己不滚，外面那一块不超过列表
   await app.evaluate(() => {
     const tall = document.createElement("div");
@@ -683,7 +696,6 @@ test("mini chat: a card taller than the list fades at the bottom and offers the 
     document.body.appendChild(tall);
   });
   await expect(frame).toHaveAttribute("data-clipped", "true");
-  const iframe = frame.getByTestId("mcp-app-iframe");
   await expect.poll(async () => (await iframe.boundingBox())?.height ?? 0).toBeGreaterThan(1500);
   expect(await app.evaluate(() => document.documentElement.scrollHeight - document.documentElement.clientHeight)).toBeLessThanOrEqual(1);
   const list = page.getByTestId("floating-list");
@@ -693,7 +705,6 @@ test("mini chat: a card taller than the list fades at the bottom and offers the 
   expect(boxHeight).toBeGreaterThanOrEqual(120);
   // 底部渐隐（mask），中间一个“在 Kotone 里看完整的”
   expect(await frame.evaluate((el) => getComputedStyle(el.firstElementChild as HTMLElement).maskImage)).toContain("linear-gradient");
-  const more = frame.getByTestId("mcp-app-more");
   await expect(more).toHaveText("在 Kotone 里看完整的");
   // 滚轮落在卡片上：滚的是列表
   await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
