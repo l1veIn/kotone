@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0-rc.15 — 2026-11-28
+
 rc.14 试玩反馈：
 
 - **“对面阵亡”只在关键时候说**：对面倒了 3 个、而且都还要 30 秒以上才复活时才提醒（一分钟最多一次），峡谷、大乱斗、海斗同一条。前中期、海斗的快节奏里不会再一直报。
@@ -16,6 +18,16 @@ rc.14 试玩反馈：
 - **她的声音（第 1 步，后端；[ADR 048](docs/adr/048-her-voice-in-one-place.md)）**：在线声音加了 MiniMax、阿里云百炼、硅基流动三家；“自动”改成跟着她用的模型走（DeepSeek、MiniMax、百炼有 Key 就用那家的声音，否则 Windows 系统语音）；“OpenAI 兼容”改名“自定义（OpenAI 兼容接口）”、不再写死默认模型。语音识别里火山、讯飞的 Key 从 `config.json` 挪进 Windows 凭据库（旧的启动时自动迁过去），在「模型 → 语音识别」里那一格会显示成空的、照常能用。新设置页见下一条。
 - **她的声音只在一处配（ADR 048 第 2 步）**：「琴音 → 交互 → 声音与弹幕」里选服务商、就地填 Key（保存前先试一次，Key 不对不存；已有同一家的 API 连接就直接用它的 Key）、选声音（带试听，MiniMax 在线列出声音和你复刻的声音），页面底下写明发给谁、怎么计费；「设置 → 模型」里的语音合成只剩一行跳转。语音识别里火山、讯飞的 Key 显示“已保存”，不回显。
 - 外部 Agent 看到的变化：`automation.save` 的 `triggerNotes` 多了上面这条提醒；推送界面事件多了 `kind: "moved"`。`speech.status` 多了 `engine`、`providers`。
+
+插件标准（[ADR 047](docs/adr/047-plugin-standard.md) 第 1–4 期）：
+
+- **CS2 插件（内置，默认开）**：收 Valve 官方的游戏状态推送（GSI），自动往 CS2 的 cfg 目录写 `gamestate_integration_kotone.cfg`（插件页能关、写明写在哪；只听本机、带随机令牌）。插件页有这一局的比分、回合和你的数据；推送：下包后自己倒数的卡片、炸弹还剩 10 秒（一行 + 她说）、赛点（只说一次）、半场、比赛结束卡片。还没在真对局里核对。
+- **原神插件（内置，默认关）**：驱动你自己装的 BetterGI。找到它的安装，列出一条龙配置、配置组和计划，能直接跑；跑完、出错时一张卡片原地更新；Webhook 地址能复制或“一键填好”（BetterGI 关着时，先备份）。跑任务要原神配置里“允许自动化输入”开着；BetterGI 开着时只能交计划；停止没有接口，会写出 BetterGI 里的停止热键。BetterGI 启动时会以管理员身份重开自己，默认 UAC 设置下每次弹一次授权。打开前先看“风险和许可”。
+- **第三方插件的事件**：第三方插件的设置页多一块“事件”，每个事件写明它怎么来（比如“每 30 秒调一次 get_run_status，state 变成 success 时算”），第一次打开要你确认，也能自己加。只在它挂的游戏开着时查（游戏退出后再查 3 分钟），连续失败就停，卡片上写明，能重试。这些事件**只给自动化用**：她看不到、也不推送，要推就在自动化里写 `push()`；自动化的“当……的时候”能选到它们。
+- **绝区零一条龙**：插件里加一条龙的地址（`http://127.0.0.1:23001/mcp`）时用上 Kotone 带的预设（跑完了 / 出错了两个事件），模板“一条龙跑完推一行”。游戏中心多了绝区零、原神（聊天键是资料值，还没在游戏里核对；删了不会随升级装回）。
+- **第三方插件的“Kotone 清单”和“风险和许可”**：插件自己声明属于哪些游戏、有哪些事件，设置页多一节“Kotone 清单”说明清单从哪来；第三方插件也有“风险和许可”弹窗，原来设置页里的风险框挪了进去。
+- 给插件作者：[Kotone 插件标准 0.1（草案）](docs/plugin-standard.md)——插件就是一个 MCP 服务器，加一份 MCP 资源 `kotone://manifest`；发布前用 `kotone-cli plugin check` 检查。示例插件 [kotone-plugin-steam](https://github.com/l1veIn/kotone-plugin-steam)（读本机 Steam 的库、时长、成就，暂时要自己编译）。
+- 外部 Agent 看到的变化：新工具 `cs2.state`、`cs2.rounds`、`cs2.status`、`cs2.cfg`、`genshin.list`、`genshin.status`、`genshin.run`、`genshin.stop`、`genshin.webhook`；新事件 `cs2.round_started` / `round_ended` / `bomb_planted` / `bomb_defused` / `bomb_exploded` / `halftime` / `match_point` / `match_ended` / `my_death`、`genshin.run_finished` / `run_failed`；第三方事件叫 `<插件 id>.<名字>`，只出现在自动化的触发里，不在 `game.state` 的最近事件里。
 
 ## 0.2.0-rc.14 — 2026-11-27
 
