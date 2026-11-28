@@ -2360,6 +2360,12 @@ const MAIN_TOOLS_BEFORE: &[&str] = &[
     "agent.stop",
 ];
 
+/// 1.5 期以后补进主会话的（以前漏了）。
+const MAIN_TOOLS_ADDED: &[&str] = &[
+    // 请玩家粘贴 Key：她的规矩让她用，ADR 029 第二期起却没给她（2026-11-28 补）
+    "connections.request_key",
+];
+
 /// 主会话拿哪些工具改成登记时自己标（`ToolEntry::main`、`ToolSpec::instant`、工具服务的看 `SERVICE_MAIN`）以后，
 /// 名单和改之前（写死的 `MAIN_TOOLS` + 马上返回的本体 / 插件工具 + 已保存的自动化）一模一样。
 #[test]
@@ -2412,6 +2418,7 @@ fn the_main_session_gets_the_same_tools_as_before_1_5() {
         .iter()
         .filter(|e| {
             MAIN_TOOLS_BEFORE.contains(&e.name.as_str())
+                || MAIN_TOOLS_ADDED.contains(&e.name.as_str())
                 || matches!(e.source, Source::Saved { .. })
                 || instant.contains(&e.name)
         })

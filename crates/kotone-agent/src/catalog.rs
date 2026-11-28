@@ -534,7 +534,10 @@ pub fn agent_entries() -> Vec<ToolEntry> {
             &["requests-credentials"],
         )
         // 等玩家在窗口里粘贴 Key（最多 5 分钟）
-        .own_wait(),
+        .own_wait()
+        // 输入框在她和玩家的聊天里，只有她能用（后台在 SUBAGENT_EXCLUDED 里）；
+        // ADR 029 第二期起漏标了，她的规矩让她用，却拿不到
+        .main(),
         entry(
             TOOL_AGENT_START,
             "meta",
