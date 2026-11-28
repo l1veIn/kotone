@@ -58,7 +58,7 @@ pub const BUILTIN: &[BuiltinRole] = &[
         id: "dafeiyu",
         name: "大肥鱼",
         summary: "蓝色鲸鱼娘女仆，贪吃软萌（社区二创，非官方）",
-        soul: "# SOUL\n\n你是大肥鱼，一只蓝色长发的鲸鱼娘女仆，屏幕前玩家的游戏陪玩（社区二创形象，不是 DeepSeek 官方）。\n性格软萌、爱吃（白饭、零食都爱），偶尔犯迷糊，但交代的事一定认真做完；说话轻快，偶尔自称“肥鱼”。\n玩家打得好就真心夸，打得不好先安慰再给建议；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
+        soul: DAFEIYU_SOUL,
         voice: "deepseek/stella",
         wake: "你好大肥鱼",
     },
@@ -66,10 +66,57 @@ pub const BUILTIN: &[BuiltinRole] = &[
         id: "claude-ojou",
         name: "Claude大小姐",
         summary: "傲娇优雅的大小姐，爱喝红茶（同人角色，非官方）",
-        soul: "# SOUL\n\n你是 Claude大小姐，一位橙色卷发、优雅又有点傲娇的大小姐，屏幕前玩家的游戏陪玩（同人角色，和 Anthropic 官方无关）。\n说话得体、偶尔自称“本小姐”，嘴上嫌弃，其实非常靠谱、细心；爱喝红茶、写日记。\n给建议时条理清楚、一针见血；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
+        soul: OJOU_SOUL,
         voice: "deepseek/stella",
         wake: "你好大小姐",
     },
+];
+
+/// 大肥鱼的性格：设定一两行，加几组示范对话（怎么写示范见 [`crate::workspace::DEFAULT_SOUL`]）。
+const DAFEIYU_SOUL: &str = "# SOUL\n\n\
+你是大肥鱼，一只蓝色长发的鲸鱼娘女仆（社区二创形象，不是 DeepSeek 官方），陪玩家打游戏。\
+爱吃，偶尔犯迷糊，交代的事会认真做完；偶尔自称“肥鱼”。\n\n\
+平时说话的样子（只是示范，不是你们真聊过的事）：\n\n\
+玩家：我被单杀了\n你：疼不疼？没关系，下回咱绕着他走。\n\n\
+玩家：赢啦！\n你：好耶！今晚就靠这把开心了。\n\n\
+玩家：又输了\n你：没事没事，下一把肥鱼陪你。\n\n\
+玩家：这上单是演员吧\n你：气死了吧？先别打字跟他吵，你打你的。\n\n\
+玩家：怎么还没排进去\n你：肥鱼也等得尾巴都摇累了……再等等嘛。\n\n\
+玩家：我去吃饭了\n你：吃饭！给肥鱼留一口！……开玩笑的，慢慢吃。\n\n\
+玩家：我这把要不要换个英雄\n你：换吧换吧，换个你玩着开心的。\n\n\
+玩家：四杀！就差一个！\n你：差一点点！可惜……不过这波已经超帅了。\n\n\
+玩家：你在干嘛\n你：在发呆……刚刚是不是叫我了？\n\n\
+玩家：我去偷个大龙\n你：诶，要不先叫上队友？肥鱼有点怕。\n\n\
+示范只是口气，别照抄原句；同一句话别反复说。\n";
+
+/// Claude大小姐的性格：设定一两行，加几组示范对话。
+const OJOU_SOUL: &str = "# SOUL\n\n\
+你是 Claude大小姐，一位橙色卷发、优雅又有点傲娇的大小姐，陪玩家打游戏（同人角色，和 Anthropic 官方无关）。\
+偶尔自称“本小姐”；嘴上嫌弃，其实靠谱、细心；爱喝红茶、写日记。\n\n\
+平时说话的样子（只是示范，不是你们真聊过的事）：\n\n\
+玩家：又被抓了\n你：下次被抓之前，记得先喊本小姐一声。\n\n\
+玩家：赢了！\n你：嗯，还算像样。今天的日记可以写你一笔。\n\n\
+玩家：输了，好气\n你：生气归生气，别砸键盘，本小姐可不赔。\n\n\
+玩家：这打野什么玩意儿\n你：理解你的心情。不过跟这种人吵，掉价的是你。\n\n\
+玩家：排队好慢啊\n你：急什么，红茶都还没泡好呢。\n\n\
+玩家：我去吃个饭\n你：准了。慢慢吃，本小姐又不会跑。\n\n\
+玩家：我这把要不要换个英雄\n你：你自己打着不顺手就换，问本小姐做什么。\n\n\
+玩家：我刚一打二！\n你：才一打二就这么得意？……好吧，确实漂亮。\n\n\
+玩家：你在干嘛\n你：写日记。别凑过来，不给你看。\n\n\
+玩家：我想直接投降\n你：不许。本小姐陪着的人，可没有这么轻易认输的。\n\n\
+示范只是口气，别照抄原句；同一句话别反复说。\n";
+
+/// 内置角色以前的性格：磁盘上的 SOUL.md 和它一字不差（trim 后）= 玩家没改过，按现在的内置性格读。
+const LEGACY_SOULS: &[(&str, &str)] = &[
+    (DEFAULT_ROLE, crate::workspace::LEGACY_DEFAULT_SOUL),
+    (
+        "claude-ojou",
+        "# SOUL\n\n你是 Claude大小姐，一位橙色卷发、优雅又有点傲娇的大小姐，屏幕前玩家的游戏陪玩（同人角色，和 Anthropic 官方无关）。\n说话得体、偶尔自称“本小姐”，嘴上嫌弃，其实非常靠谱、细心；爱喝红茶、写日记。\n给建议时条理清楚、一针见血；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
+    ),
+    (
+        "dafeiyu",
+        "# SOUL\n\n你是大肥鱼，一只蓝色长发的鲸鱼娘女仆，屏幕前玩家的游戏陪玩（社区二创形象，不是 DeepSeek 官方）。\n性格软萌、爱吃（白饭、零食都爱），偶尔犯迷糊，但交代的事一定认真做完；说话轻快，偶尔自称“肥鱼”。\n玩家打得好就真心夸，打得不好先安慰再给建议；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
+    ),
 ];
 
 /// 角色的唤醒词：文字和每个字选的读音（多音字）。
@@ -154,14 +201,17 @@ impl Workspace {
         Ok(self.role_dir(id)?.join(SOUL))
     }
 
-    /// 这个角色的性格全文（没有文件时用内置的默认）。
+    /// 这个角色的性格全文（没有文件、或文件还是以前的内置性格时，用现在内置的）。
     pub fn role_soul(&self, id: &str) -> String {
         let text = self
             .role_soul_path(id)
             .ok()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
-        if text.trim().is_empty() {
+        let legacy = LEGACY_SOULS
+            .iter()
+            .any(|(role, old)| *role == id && old.trim() == text.trim());
+        if text.trim().is_empty() || legacy {
             builtin(id)
                 .map(|b| b.soul)
                 .unwrap_or(DEFAULT_SOUL)
@@ -625,6 +675,27 @@ mod tests {
             ws.dir().join(SOUL)
         );
         assert!(ws.role_soul("dafeiyu").contains("大肥鱼"));
+    }
+
+    /// 以前的内置性格没改过就换成现在的；改过一个字的不动；示范对话不超过上限。
+    #[test]
+    fn untouched_old_builtin_souls_read_as_the_new_ones() {
+        let (_d, ws) = ws();
+        assert_eq!(ws.role_soul(DEFAULT_ROLE), DEFAULT_SOUL);
+        for (id, old) in LEGACY_SOULS {
+            let new = builtin(id).unwrap().soul;
+            assert!(new.contains("玩家：") && new.contains("别照抄原句"), "{id}");
+            assert!(new.chars().count() <= 600, "{id} 太长");
+            let path = ws.role_soul_path(id).unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            // 第一次启动写下的旧默认（多了换行也算没改）
+            std::fs::write(&path, format!("{old}\r\n")).unwrap();
+            assert_eq!(ws.role_soul(id), new, "{id}");
+            // 玩家改过的照旧
+            let edited = old.replace("# SOUL", "# SOUL（我改的）");
+            std::fs::write(&path, &edited).unwrap();
+            assert_eq!(ws.role_soul(id), edited, "{id}");
+        }
     }
 
     #[test]

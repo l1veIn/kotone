@@ -1292,6 +1292,12 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
     assert!(game.starts_with("入口：通话"));
     assert!(game.contains("英雄联盟") && game.contains("聊天在左下角") && game.contains("14:05"));
     assert!(game.contains("游戏配置 id：lol"), "记忆工具要用 id");
+    // 通话的附注最后一句是风格提醒（越靠后影响越大；在用户消息里，不动系统提示）。
+    assert!(game.ends_with("\n说话照你人格里的口气，短。"), "{game}");
+    assert!(!prompt.contains("说话照你人格里的口气"));
+    // 通话规则：像真人，不像调度员；不再给会被照抄的版本号例子。
+    assert!(prompt.contains("可以先接一句反应") && prompt.contains("没看到、不知道的就直说"));
+    assert!(!prompt.contains("只说结论") && !prompt.contains("26.22"));
     let chat = turn_context(&TurnContext {
         entry: Entry::Chat,
         game: "",
@@ -2807,4 +2813,73 @@ async fn tools_that_wait_on_purpose_are_not_timed() {
     assert_eq!(took, std::time::Duration::from_secs(5));
     assert!(!last_tool_moved(&history));
     assert!(builtin.moved.lock().unwrap().is_empty());
+}
+
+// ---------- 活人感评测（scripts/manual-e2e/humanlike_eval.py） ----------
+
+/// 把三个内置角色在通话入口的系统提示、附注和主会话通话里常用的工具导出成 JSON，给评测脚本用真 Key 对比新旧提示。
+/// 手动跑：`KOTONE_EVAL_OUT=<目录> KOTONE_EVAL_TAG=new cargo test -p kotone-agent export_humanlike_eval_prompts -- --ignored`。
+#[test]
+#[ignore]
+fn export_humanlike_eval_prompts() {
+    use crate::prompt::{capability_overview, turn_context, TurnContext};
+    let out = std::path::PathBuf::from(std::env::var("KOTONE_EVAL_OUT").expect("KOTONE_EVAL_OUT"));
+    let tag = std::env::var("KOTONE_EVAL_TAG").unwrap_or_else(|_| "new".into());
+    std::fs::create_dir_all(&out).unwrap();
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let catalog = Catalog::build(&specs, &[], &[]);
+    let overview = capability_overview(&catalog);
+    let speak = catalog.get("speak").unwrap();
+    let search = catalog.get("web.search").unwrap();
+    // 通话规则里提到、主会话真有的工具（评测时她调了就算“先去做了”，不算编工具名）
+    let tools: Vec<Value> = [
+        "speak",
+        "web.search",
+        "screen.at_speech",
+        "agent.start",
+        "reply.ask",
+    ]
+    .iter()
+    .map(|name| {
+        let entry = catalog.get(name).unwrap();
+        json!({"name": name, "description": entry.description, "parameters": entry.parameters})
+    })
+    .collect();
+    for role in ["kotone", "dafeiyu", "claude-ojou"] {
+        let builtin = crate::roles::BUILTIN.iter().find(|b| b.id == role).unwrap();
+        let snapshot = crate::workspace::Snapshot {
+            name: builtin.name.into(),
+            soul: builtin.soul.into(),
+            ..Default::default()
+        };
+        let system = system_prompt(&PromptContext {
+            automations: &[],
+            workspace: Some(&snapshot),
+            capabilities: &overview,
+            plugin_rules: "",
+        });
+        let context = turn_context(&TurnContext {
+            entry: Entry::Call,
+            game: "英雄联盟",
+            game_id: "lol",
+            game_notes: None,
+            game_memory: None,
+            now: "2026-11-28 周六 21:40",
+            calling: None,
+        });
+        let doc = json!({
+            "system": format!("{}\n\n{}", system.trim(), kotone_ai::agent::DATA_RULE),
+            "user_prefix": kotone_ai::agent::render_user(&context, "", &[]),
+            "soul": builtin.soul,
+            "speak": {"description": speak.description, "parameters": speak.parameters},
+            "web_search": {"description": search.description, "parameters": search.parameters},
+            "tools": tools,
+        });
+        std::fs::write(
+            out.join(format!("{tag}-{role}.json")),
+            serde_json::to_string_pretty(&doc).unwrap(),
+        )
+        .unwrap();
+    }
 }
