@@ -32,6 +32,7 @@
     type ConnectionPresetGroup,
   } from "../../../../lib/ipc";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { isDeepSeekConnection, switchToDeepSeek } from "../../../../lib/deepseekSetup";
   import { m } from "$lib/paraglide/messages.js";
   import { getLocale } from "$lib/paraglide/runtime.js";
 
@@ -113,16 +114,46 @@
     if (!editing || saving) return;
     saving = true;
     const id = editing.id;
+    // 存了 DeepSeek 的 Key（新加或换 Key）：她换成它，其余能力跟着换（ADR 051，和引导里填 Key 一样）
+    const newDeepSeekKey = isDeepSeekConnection(editing) && !!apiKey.trim();
     try {
       settingsStore.set(await upsertConnection(editing, apiKey || undefined));
       connections = await listConnections();
       closeEditor();
-      toast(true, m.system_connections_saved());
-      if (useAfterSave) await useForAgent(id);
+      if (newDeepSeekKey) await useDeepSeek(id);
+      else {
+        toast(true, m.system_connections_saved());
+        if (useAfterSave) await useForAgent(id);
+      }
     } catch (error) {
       toast(false, m.system_connections_save_failed({ error: errText(error) }));
     } finally {
       saving = false;
+    }
+  }
+
+  /** 测一次刚存的 DeepSeek Key（读模型列表，不花钱）：通过了她就换成它；没通过就留在本页，什么都不换。 */
+  async function useDeepSeek(id: string) {
+    let result: CompanionCheck;
+    try {
+      result = await connectionSelfCheck(id);
+    } catch (error) {
+      result = { connectionId: id, baseUrl: "", model: "", passed: false, checkedAtMs: Date.now(), message: errText(error) } as CompanionCheck;
+    }
+    if (!result.passed) {
+      otherChecks = { ...otherChecks, [id]: result };
+      toast(false, m.system_connections_deepseek_not_switched({ name: $companionName, error: result.message }));
+      return;
+    }
+    try {
+      const switched = await switchToDeepSeek(id, $settingsStore);
+      settingsStore.set(switched.settings);
+      const failed = switched.items.filter((item) => !item.ok).map((item) => item.label);
+      toast(true, failed.length
+        ? m.system_connections_deepseek_switched_partly({ name: $companionName, failed: failed.join("、") })
+        : m.system_connections_deepseek_switched({ name: $companionName }));
+    } catch (error) {
+      toast(false, m.system_connections_use_failed({ name: $companionName, error: errText(error) }));
     }
   }
 
@@ -353,7 +384,10 @@
             placeholder={editingSaved?.hasApiKey ? m.system_connections_key_placeholder_saved() : m.system_connections_key_placeholder_new()} />
           <p class="m-0 text-[11px] text-muted-foreground">{m.system_connections_key_hint()}</p>
         </div>
-        {#if companionEnabled && editing.id !== agentConnectionId}
+        {#if isDeepSeekConnection(editing)}
+          <!-- DeepSeek：存了 Key 她就换成它（ADR 051），不用再勾 -->
+          <p class="m-0 rounded-xl bg-muted/50 px-3 py-2.5 text-xs text-foreground/85" data-testid="connection-deepseek-note">{m.system_connections_deepseek_note({ name: $companionName })}</p>
+        {:else if companionEnabled && editing.id !== agentConnectionId}
           <label class="flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2.5 text-xs">
             <input type="checkbox" class="mt-0.5 accent-[var(--color-primary)]" bind:checked={useAfterSave} data-testid="connection-use-after-save" />
             <span><span class="font-medium text-foreground">{m.system_connections_use_after_save({ name: $companionName })}</span></span>

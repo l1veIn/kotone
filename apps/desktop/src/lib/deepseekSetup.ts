@@ -1,6 +1,8 @@
 /*
  * 一个 DeepSeek Key 打开全部功能（ADR 028）。引导里的「填 Key」、聊天页的 Key 卡片、
- * 0.1.x 用户的「添加 DeepSeek Key，认识琴音」都走这里。
+ * 0.1.x 用户的「添加 DeepSeek Key，认识琴音」都走 `connectDeepSeek`；「设置 → API 连接」里
+ * 存了 DeepSeek 的 Key、聊天页“准备好了吗”里的「换成 DeepSeek」走 `switchToDeepSeek`（ADR 051：
+ * 不管从哪存的 DeepSeek Key，她都换成 DeepSeek）。之后玩家在“她用的模型”里自己换，就照他的。
  *
  * Key 的本地格式检查照搬 DeepSeek Harness 桌面端（MIT，ca33fd68，
  * apps/desktop/src/client/WelcomePage.tsx `saveKey`）：只能是可打印 ASCII、不能是
@@ -48,20 +50,18 @@ export interface DeepSeekSetupResult {
   settings: Settings;
 }
 
+/** DeepSeek 的连接（和后端 `Settings::deepseek_connection_id` 同一条规则）。 */
+export function isDeepSeekConnection(connection: { provider: string; baseUrl: string }): boolean {
+  return connection.provider === "deepseek" || connection.baseUrl.includes("api.deepseek.com");
+}
+
 /**
- * 保存 Key → 测试连接 → 把对话、语音识别、文字识别、语音合成、联网搜索都换成 DeepSeek。
- *
- * - 新用户：五项都换。只有一个例外：玩家已经自己下好并选了本地识别模型（走过“只想用语音输入？”），
- *   语音识别保持本地——不在玩家没选择的情况下换掉他选的识别方式。
- * - 0.1.x 升级用户（`legacy`）：语音识别一律不动（ADR 028 / 027），新连接写进
- *   `assistant.companionBindings`，旧提醒助手的键和连接原样保留；落地页改成聊天（D5）。
- *
+ * 保存 Key → 测试连接 → 她和其余能力都换成 DeepSeek（见 `switchToDeepSeek`）。
  * 测试没通过时删掉刚建的连接并抛出可读的原因。
  */
 export async function connectDeepSeek(rawKey: string, current: Settings | null): Promise<DeepSeekSetupResult> {
   const problem = deepseekKeyProblem(rawKey);
   if (problem) throw new Error(problem);
-  const legacy = usesLegacyVoiceInput(current?.ui) || current?.ui.legacyUpgrade === "pending";
   const connectionId = `deepseek-${crypto.randomUUID()}`;
   await upsertConnection(
     { id: connectionId, displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: DEEPSEEK_BASE_URL, model: DEEPSEEK_DEFAULT_MODEL },
@@ -78,11 +78,27 @@ export async function connectDeepSeek(rawKey: string, current: Settings | null):
     await deleteConnection(connectionId).catch(() => {});
     throw new Error(check.message || m.shell_deepseek_key_unusable());
   }
+  return switchToDeepSeek(connectionId, current);
+}
 
+/**
+ * 她换成这条（已存好 Key 的）DeepSeek 连接，语音识别、文字识别、语音合成、联网搜索跟着换。
+ *
+ * - 新用户：五项都换。只有一个例外：玩家已经自己下好并选了本地识别模型（走过“只想用语音输入？”），
+ *   语音识别保持本地——不在玩家没选择的情况下换掉他选的识别方式。
+ * - 0.1.x 升级用户：语音识别一律不动（ADR 028 / 027），她的连接写进 `assistant.companionBindings`，
+ *   旧提醒助手的键和连接原样保留。还没启用她的（`pending` / `dismissed`）这就启用，落地页改成聊天（D5）；
+ *   已经启用的只换她的连接、呼叫键不动。
+ */
+export async function switchToDeepSeek(connectionId: string, current: Settings | null): Promise<DeepSeekSetupResult> {
+  const upgrade = current?.ui.legacyUpgrade;
   const items: SwitchedItem[] = [{ id: "chat", label: m.shell_deepseek_item_chat(), ok: true }];
-  if (legacy) {
+  if (upgrade === "optedIn") {
+    await updateSettings({ assistant: { companionBindings: { connectionId } } });
+    items.push({ id: "asr", label: m.shell_deepseek_item_asr(), ok: true, note: m.shell_deepseek_asr_keep_settings() });
+  } else if (usesLegacyVoiceInput(current?.ui)) {
     await updateSettings({
-      assistant: { companionBindings: { connectionId, hotkey: "" } },
+      assistant: { companionBindings: { connectionId, hotkey: current?.assistant.companionBindings?.hotkey ?? "" } },
       ui: { legacyUpgrade: "optedIn", firstRunCompleted: true, startPage: "chat" },
     });
     items.push({ id: "asr", label: m.shell_deepseek_item_asr(), ok: true, note: m.shell_deepseek_asr_keep_settings() });

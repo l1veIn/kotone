@@ -397,6 +397,13 @@ function applyMockDefaultBlocklist(text: string): string {
   return result;
 }
 
+/** 0.1.x 用户的旧提醒助手连接（`?mockLegacyReminder=`）。 */
+const LEGACY_REMINDER_CONNECTIONS: Record<string, Connection> = {
+  configured: { id: "original-reminder", displayName: "原来的提醒连接", kind: "remote", provider: "custom", baseUrl: "https://example.invalid/v1", model: "original-model" },
+  qwen: { id: "original-qwen", displayName: "通义千问", kind: "remote", provider: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-turbo" },
+  deepseek: { id: "original-deepseek", displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+};
+
 function mockQuery(name: string): string | null {
   if (typeof window === "undefined") return null;
   const searchValue = new URLSearchParams(window.location.search).get(name);
@@ -440,23 +447,23 @@ export async function getSettings(): Promise<Settings> {
     if (sidebar) mock.settings.ui.sidebar = sidebar;
   }
   const legacyMode = mockQuery("mockLegacyUpgrade");
-  if ((legacyMode === "pending" || legacyMode === "dismissed") && mock.settings.ui.legacyUpgrade === undefined) {
-    // 0.1.x 升级用户；dismissed = 上次选了“继续使用语音输入法”之后再打开（ADR 028 流程 B2）。
+  if ((legacyMode === "pending" || legacyMode === "dismissed" || legacyMode === "optedIn") && mock.settings.ui.legacyUpgrade === undefined) {
+    // 0.1.x 升级用户；dismissed = 上次选了“继续使用语音输入法”之后再打开（ADR 028 流程 B2）；
+    // optedIn = 已经启用了她，而她用的是旧提醒助手那条连接（ADR 051 的起点：她默认用了以前配的千问）。
     mock.settings.ui.legacyUpgrade = legacyMode;
     if (legacyMode === "dismissed") mock.settings.ui.startPage = "voiceInput";
     mock.settings.assistant.hotkey = "";
-    if (mockQuery("mockLegacyReminder") === "configured") {
+    // 旧提醒助手用的连接：configured = 随便一家，qwen = 通义千问，deepseek = 0.1.x 就配过 DeepSeek
+    const reminder = LEGACY_REMINDER_CONNECTIONS[mockQuery("mockLegacyReminder") ?? ""];
+    if (reminder) {
       mock.settings.assistant.hotkey = "Alt+F9";
-      mock.settings.assistant.connectionId = "original-reminder";
-      mock.settings.connections.push({
-        id: "original-reminder",
-        displayName: "原来的提醒连接",
-        kind: "remote",
-        provider: "custom",
-        baseUrl: "https://example.invalid/v1",
-        model: "original-model",
-      });
-      mockConnectionSecrets.set("original-reminder", "test-legacy-key");
+      mock.settings.assistant.connectionId = reminder.id;
+      mock.settings.connections.push(clone(reminder));
+      mockConnectionSecrets.set(reminder.id, "test-legacy-key");
+    }
+    if (legacyMode === "optedIn") {
+      mock.settings.assistant.companionBindings = { connectionId: reminder?.id ?? "", hotkey: "Ctrl+Backquote" };
+      mock.settings.ui.startPage = "chat";
     }
   }
   return clone(mock.settings);

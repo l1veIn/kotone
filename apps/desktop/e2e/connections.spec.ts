@@ -89,7 +89,7 @@ test("any saved connection can be tested without becoming 琴音's", async ({ pa
   for (const id of ["deepseek", "zhipu"]) {
     await page.getByTestId(`connection-preset-${id}`).click();
     await page.getByTestId("connection-api-key").fill("sk-local-fixture");
-    if (id === "deepseek") await page.getByTestId("connection-use-after-save").check();
+    // DeepSeek 存了 Key 她就换成它（ADR 051），不用勾“存好后设为她用的”
     await page.getByTestId("connection-save").click();
   }
   const other = page.locator('[data-testid^="connection-card-zhipu-"]');

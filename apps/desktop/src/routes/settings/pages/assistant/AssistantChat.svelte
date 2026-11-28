@@ -9,6 +9,7 @@
   // Harness 的 EmptyHero，MIT），配上角色形象、呼叫按钮与起手提示。三种状态（ADR 028 W5–W7）：
   // 没有 AI 连接 → Key 卡片（和引导里填 Key 的是同一个组件，照 DSH“回到空白会话就检查有没有 Key”）；
   // 已配置 → 呼叫按钮下面写当前的触发方式；用本地识别且没启动 → 呼叫按钮上方一行状态。
+  // 她能回答以后，最上面是“准备好了吗”（ADR 051：英雄联盟玩家要的几样，全 ✓ 就不显示）。
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
   import { CircleAlert, Eye } from "@lucide/svelte";
@@ -39,6 +40,7 @@
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
   import { avatarLetter, customAvatar, roleFaces } from "../../../../lib/stores/avatar";
   import RightSidebar from "../../../../lib/agentChat/RightSidebar.svelte";
+  import ReadyChecklist from "../../../../lib/agentChat/ReadyChecklist.svelte";
   import { chatNarrow, RIGHT_SIDEBAR_MIN_CHAT } from "../../../../lib/stores/rightSidebar";
 
   let { ready, active, legacy = false, connections, modelRequest = 0, onOpenTalk, onOpenConnections, onKeyConnected, onBackToVoice }: {
@@ -231,6 +233,8 @@
       {#if chat.loadError}<p role="alert" class="m-0 text-xs text-destructive">{chat.loadError}</p>{/if}
     </div>
   {/if}
+  <!-- 还没有能用的连接时下面是 Key 卡片（第一步），这一块等她能回答再出现 -->
+  {#if ready}<ReadyChecklist {connections} {onOpenTalk} />{/if}
 
   {#if !ready && empty}
     <!-- 没有 AI 连接（W5）：和引导里的“填 Key”是同一个组件 -->
