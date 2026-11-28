@@ -16,7 +16,7 @@
 //! 另外，往游戏聊天里发字的窗口内玩家的按下也吞掉（`input_gate`，ADR 032）；
 //! 其余按键一律 CallNextHookEx 放行。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -106,8 +106,10 @@ struct ProbeRequest {
 
 static SHARED: OnceLock<HookShared> = OnceLock::new();
 
-/// 钩子正在运行（`game.act` 据此知道 Esc 停止能不能用）。
-static HOOKS_RUNNING: AtomicBool = AtomicBool::new(false);
+/// 在跑的钩子线程有几个（`game.act` 据此知道 Esc 停止能不能用，发到游戏据此决定挡不挡玩家的键）。
+/// 是计数不是开关：重建钩子（[`LlHookSource::restart_hook_thread`]）时新线程先装好、旧线程后退出，
+/// 用开关的话旧线程退出时会把它清成“没在跑”，新钩子明明在跑，挡键却再也打不开（每次启动都会重建一次）。
+static HOOK_THREADS: AtomicU32 = AtomicU32::new(0);
 
 /// 琴音操作游戏时的 Esc 停止（ADR 019，2026-11-17 用户改为“按 Esc 退出”）：开着时，玩家按的
 /// Esc 被拦下、不传给游戏，并记一次“按了 Esc”；琴音自己发的 Esc（带 Kotone 标记）照常传给游戏。
@@ -118,7 +120,7 @@ static ESC_SWALLOWING: AtomicBool = AtomicBool::new(false);
 
 /// 低级键鼠钩子在运行。
 pub fn hooks_running() -> bool {
-    HOOKS_RUNNING.load(Ordering::Relaxed)
+    HOOK_THREADS.load(Ordering::SeqCst) > 0
 }
 
 /// 开 / 关 Esc 停止；每次打开都清掉上一次的“按了 Esc”。
@@ -596,11 +598,11 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
         // hook 安装后不能做日志/IO：物理输入此时已可能等待本线程回调。
         // ready 后立即进入消息泵，安装成功日志由调用方记录。
         let _ = boot.send(Ok(tid));
-        HOOKS_RUNNING.store(true, Ordering::Relaxed);
+        HOOK_THREADS.fetch_add(1, Ordering::SeqCst);
 
         // GetMessageW 返回 false = 收到 WM_QUIT
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
-        HOOKS_RUNNING.store(false, Ordering::Relaxed);
+        HOOK_THREADS.fetch_sub(1, Ordering::SeqCst);
 
         let _ = UnhookWindowsHookEx(mouse_hook);
         let _ = UnhookWindowsHookEx(keyboard_hook);
@@ -860,6 +862,38 @@ mod tests {
         arm_esc_stop(true);
         assert!(!esc_stop_pressed(), "arming clears the last press");
         arm_esc_stop(false);
+    }
+
+    /// 重建钩子时旧线程后退出：不能把“钩子在跑”清掉（以前每次启动都会这样，发到游戏的挡键从没打开过）。
+    /// 只装钩子、不发任何键。
+    #[test]
+    fn rebuilding_the_hook_keeps_it_counted_as_running() {
+        fn wait_for(threads: u32) {
+            let until = std::time::Instant::now() + Duration::from_secs(2);
+            while HOOK_THREADS.load(Ordering::SeqCst) != threads {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "hook threads never became {threads}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let before = HOOK_THREADS.load(Ordering::SeqCst);
+        let Ok(old) = spawn_hook_thread() else {
+            eprintln!("no desktop to install a low-level hook on; skipped");
+            return;
+        };
+        let new = spawn_hook_thread().expect("second hook thread");
+        wait_for(before + 2);
+        unsafe {
+            let _ = PostThreadMessageW(old, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
+        wait_for(before + 1);
+        assert!(hooks_running(), "the new hook is still running");
+        unsafe {
+            let _ = PostThreadMessageW(new, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
+        wait_for(before);
     }
 
     #[test]
