@@ -41,7 +41,7 @@
 
 0.1.x 的更新清单用过 ghfast.top、gh-proxy.com、ghproxy.net 这几个公共 GitHub 代理（`scripts/make-updater-jsons.mjs` 里还给旧客户端留着这几个变体），后来改成**腾讯云 COS 优先、GitHub 兜底**（ADR 027）。公共代理随时会挂、可能改内容，新东西不再用。
 
-## 决定（提议）
+## 决定
 
 ### D1 玩家看到的流程
 
@@ -88,7 +88,36 @@
 - 启动时和之后每 6 小时看一次目录（和 Kotone 自己的更新一样）；有新版本卡片上写「更新」。**0.x 不自动更新**，点了才换。
 - 更新 = 下新版本 → 试起 → 停旧的 → 换 `mcp.json` 那一项 → 起新的。风险项、事件、要问的工具变了，先弹窗。
 
-### D7 不做
+### D7 插件信息和头像
+
+玩家（2026-11-28）：“插件包里应该自带头像……插件的头像很重要……插件卡片页需要用户能‘查看插件信息’，看一下作者啊，代码仓库之类的”。
+
+**现在有的**（2026-11-28 核对代码）：
+
+| 哪种插件 | 有的元信息 | 头像 | 界面上显示 |
+| --- | --- | --- | --- |
+| 内置（`plugin.toml`） | `id`、`name`、`description`、`games`，以及页面、事件、推送、数据开关这些功能项 | `plugins/<id>/logo.svg` | 头像、名字、说明；没有作者、版本、仓库（都是 Kotone 自己） |
+| 第三方（握手时的 `serverInfo`） | `name`、`title`、`version`、`description`、`icons`、`websiteUrl`（MCP 2025-11-25） | `icons` 里 `data:image/…` 的才显示；`https://` 的过滤掉了 | 头像、名字、说明；`version`、`websiteUrl` 传到了前端但没显示 |
+| 第三方（Kotone 清单） | `standard`、`games`、`events`、`watches`、`risk` | — | 设置页的“Kotone 清单”“事件”两节 |
+
+没有的：作者、代码仓库、许可证、问题反馈地址、长说明、截图。MCPB 的 manifest 这些都有：`display_name`、`version`、`description`、`long_description`、`author {name, email, url}`、`repository {type, url}`、`homepage`、`documentation`、`support`、`license`、`keywords`、`privacy_policies`、`icon`（包里的 PNG 路径或 `https://` 地址）、`icons`（`src`、`size`、`theme` 亮 / 暗）、`screenshots`。
+
+**决定：**
+
+1. **头像跟着包走**：MCPB 包里必须有 `icon`（包内的 PNG，至少 256×256，建议 512×512，正方形）；可以用 `icons` 另给暗色主题的一张。装的时候和程序一起解压到本机，显示时只读本机文件，**不联网取头像**（国内也快，离线也有）。目录收录时 Action 把头像抽出来，和包一起传到 COS（`plugins/<id>/<版本>/icon.png`），「找插件」的列表装之前就有头像。检查命令（`plugin check`）没有头像算 ✗。
+2. **哪种插件的头像从哪来**：内置的照旧 `logo.svg`；装的包用包里的 `icon`；粘贴 `mcp.json` 加的用 `serverInfo.icons`：`data:` 的照旧，`https://` 的**加的时候下载一次存到本机**（只收 PNG / JPEG / WebP、不超过 200 KB、不跟随跳转到别的主机），以后不再联网取；都没有用首字块。头像一律放进 Kotone 自己画的圆角方块里（`PluginLogo`），亮暗主题下都看得清。
+3. **「插件信息」**：插件卡片上的“⋯”菜单和插件设置页的标题旁各一个入口，打开一个弹窗，只读：
+   - 头像、名字、版本、一句话说明；有长说明就在下面（只认纯文字和链接，不渲染 HTML）；有截图就一排小图。
+   - **作者**（名字，有链接就点开）、**代码仓库**、主页、文档、**问题反馈**、**许可证**。只显示有的，没有的那一行不出现；链接只认 `https://`，用系统浏览器打开。
+   - **来源**：Kotone 内置 / 插件目录（收录的版本、什么时候收录的）/ 你拖进来的包（不在目录里，没人看过）/ 你粘贴的配置。
+   - **它能做什么**：属于哪些游戏，几个工具、几个页面、几个事件、几种推送（数字，点开看名字）。
+   - **它会运行什么**：程序的位置或服务器地址（现在信任弹窗里那一块 `McpTrustFacts` 搬过来用）；“风险和许可”一个链接，打开现有的弹窗。
+   - 给作者看的小字：插件 id、标准版本、包的 SHA-256、装在哪个文件夹。
+   - 内置插件的作者写“Kotone”，仓库指向 `l1veIn/kotone` 里 `plugins/<id>`，许可证 MIT；照着别人的开源项目写的部分，在这里写“参考”并链接 `THIRD_PARTY_NOTICES.md`。
+4. **信息从哪来、谁说了算**：装的包以包里的 MCPB manifest 为准；目录里那一项只补“来源”和收录信息，不改作者自己写的；粘贴配置加的只有 `serverInfo` 那几项。两边都有的（名字、说明、版本），以包为准，运行时 `serverInfo` 报的版本不一样时，小字里写出来（多半是作者忘了改版本号）。
+5. **目录收录要求**：`author.name`、`repository.url`、`license`、`icon` 必填，`support` 建议填；`repository.url` 必须就是 Release 所在的仓库（D2 的 attestation 也对它）。
+
+### D8 不做
 
 评分和评论（Cortico 有，以后再说）、付费、装插件时替它装依赖（Node、Python、VC 运行库）、公共 GitHub 代理、自动装“推荐插件”。
 
@@ -102,8 +131,9 @@
 
 ## 分期
 
-1. 目录仓库 + 校验和同步 COS 的 Action；Steam 插件发第一个 `.mcpb` Release（GitHub Actions 编、带 attestation）；`plugin check` 认 `.mcpb`；`docs/plugin-standard.md` 写“发布”。
-2. Kotone：「找插件」、安装弹窗、安装器、卸载。
+0. 不等目录就能做的：「插件信息」弹窗（先显示现在就有的：内置插件的、`serverInfo` 的 `version` / `websiteUrl`、Kotone 清单、它会运行什么）；`serverInfo.icons` 的 `https://` 头像加的时候下载存本机。
+1. 目录仓库 + 校验和同步 COS 的 Action；Steam 插件发第一个 `.mcpb` Release（GitHub Actions 编、带 attestation，自带头像，作者、仓库、许可证写全）；`plugin check` 认 `.mcpb`、检查 D7 的必填项；`docs/plugin-standard.md` 写“发布”。
+2. Kotone：「找插件」（带头像）、安装弹窗、安装器、卸载；「插件信息」补上包里的作者、仓库、许可证、截图和来源。
 3. 更新、拉黑。
 4. 拖入 `.mcpb`。
 
