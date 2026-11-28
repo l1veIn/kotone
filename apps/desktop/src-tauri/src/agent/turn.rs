@@ -408,9 +408,8 @@ async fn drive(
             } else {
                 None
             };
-            // 后台的结果交回时不接“我看看”（玩家没在等）。
-            let filler =
-                (entry == Entry::Call && !report).then(|| progress_filler(&app, &cancel, owner));
+            // 后台的结果交回时不接“我看看”（玩家没在等）；自动化交给她的也不接（她可以不说，ADR 050）。
+            let filler = wants_filler(entry, &user).then(|| progress_filler(&app, &cancel, owner));
             let stop = turn(
                 &app,
                 &mut conversation,
@@ -730,14 +729,7 @@ pub(super) async fn turn(
     }
     let limits = match child {
         Some(_) => subagent_limits(settings.agent.compact_at_tokens),
-        // 语音入口：只说话（或只交给后台、慢的工具转到了后台）的一步之后就结束，不再调用模型
-        // （ADR 029 第八节、§一）。
-        None if entry == Entry::Call => AgentLimits {
-            compact_at_tokens: settings.agent.compact_at_tokens,
-            stop_after: VOICE_STOP_TOOLS.iter().map(|t| t.to_string()).collect(),
-            stop_after_background: true,
-            ..game_limits()
-        },
+        None if entry == Entry::Call => call_limits(settings.agent.compact_at_tokens, &user),
         None => AgentLimits {
             compact_at_tokens: settings.agent.compact_at_tokens,
             ..chat_limits()

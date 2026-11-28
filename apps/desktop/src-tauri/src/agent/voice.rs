@@ -11,6 +11,8 @@ pub(super) const VOICE_STOP_TOOLS: &[&str] = &[
 
 /// 语音入口这一轮结束后补一句固定的话（纯函数，ADR 029 第八节）：模型的正文不念，
 /// 所以出错、没做完、或者忘了用 speak 时，玩家至少知道去聊天里看。玩家自己停下的不说。
+/// 自动化 `ask()` 交给她的一轮（`appended` 第一条是来源 `automation` 的消息）只写了字也不念“我写在聊天里了”：
+/// 她可以不说（ADR 050 第 6 条），玩家也没在等她回答。
 fn closing_line(appended: &[Message], stop: &StopReason) -> Option<&'static str> {
     let said = appended.iter().any(|m| match m {
         Message::Assistant { tool_calls, .. } => tool_calls.iter().any(|c| {
@@ -31,7 +33,11 @@ fn closing_line(appended: &[Message], stop: &StopReason) -> Option<&'static str>
         StopReason::StepLimit | StopReason::TimeLimit | StopReason::Truncated => {
             Some(crate::fillers::UNFINISHED_IN_CHAT)
         }
-        StopReason::Completed if !said && wrote => Some(crate::fillers::WROTE_IN_CHAT),
+        StopReason::Completed
+            if !said && wrote && !appended.first().is_some_and(is_automation_ask) =>
+        {
+            Some(crate::fillers::WROTE_IN_CHAT)
+        }
         StopReason::Completed => None,
     }
 }
@@ -359,6 +365,14 @@ mod tests {
         ];
         assert_eq!(closing_line(&lookalike, &done), Some("我写在聊天里了"));
         assert!(!handed_off(&lookalike));
+        // 自动化 ask() 交给她的一轮（ADR 050 第 6 条）：只写了字不念“我写在聊天里了”，什么都没写也不说；出错照旧说
+        let asked_by_automation = [user("automation"), assistant("这把打得真好", &[])];
+        assert_eq!(closing_line(&asked_by_automation, &done), None);
+        assert_eq!(closing_line(&[user("automation")], &done), None);
+        assert_eq!(
+            closing_line(&[user("automation")], &failed),
+            Some("出错了，我写在聊天里了")
+        );
         // 替她说了“交给我”的：计时等那句记（派活、慢的工具转走）；她自己说了的、什么都没说的不算
         assert!(handed_off(&moved) && handed_off(&handed));
         assert!(!handed_off(&said) && !handed_off(&missing));

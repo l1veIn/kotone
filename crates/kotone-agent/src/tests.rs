@@ -449,6 +449,8 @@ fn the_prompt_says_which_automations_need_the_game_and_how_programs_notify() {
             "数组表示“或”",
             "return 的那一次也算触发",
             "triggerNotes",
+            // ADR 050 第 6 条：ask 交给她的那一轮，话里说了可以不说就可以不说
+            "话里说了可以不说就可以不说",
         ] {
             assert!(text.contains(rule), "{rule}");
         }

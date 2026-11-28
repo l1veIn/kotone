@@ -2134,6 +2134,34 @@ async fn an_empty_final_reply_is_asked_again_once() {
     assert_eq!(run2.stop, StopReason::Completed);
 }
 
+/// ADR 050 第 6 条：自动化 `ask()` 交给她的那一轮可以故意不说（`retry_empty_reply = false`）：空回复直接收下，不重发。
+#[tokio::test]
+async fn an_empty_reply_is_kept_without_a_retry_when_silence_is_allowed() {
+    let model = FakeModel::new(vec![text(""), text("不该被请求到")]);
+    let limits = AgentLimits {
+        retry_empty_reply: false,
+        ..AgentLimits::default()
+    };
+    let r = run_with(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        "（系统消息）这局刚结束",
+        limits,
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(model.requests().len(), 1, "不重发");
+    assert!(!r
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Discarded { .. })));
+    assert!(
+        matches!(r.history.last(), Some(Message::Assistant { text, tool_calls, .. }) if text.is_empty() && tool_calls.is_empty())
+    );
+}
+
 #[tokio::test]
 async fn an_empty_reply_after_tools_is_accepted() {
     let model = FakeModel::new(vec![

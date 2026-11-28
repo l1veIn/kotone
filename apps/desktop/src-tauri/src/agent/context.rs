@@ -48,6 +48,30 @@ pub(super) fn is_spoken_source(source: &str) -> bool {
     matches!(source, "wake-voice" | "voice" | "assistant-text")
 }
 
+/// 自动化 `ask()` 交给她的一轮（来源 `automation`，ADR 045 D2）：她可以不说（ADR 050 第 6 条）——空回复不重发、
+/// 不替她说“我看看”、只写了字也不念“我写在聊天里了”。走的还是语音入口，别的规矩照旧。
+pub(super) fn is_automation_ask(message: &Message) -> bool {
+    matches!(message, Message::User { source, .. } if source == "automation")
+}
+
+/// 语音入口主会话的上限：只说话（或只交给后台、慢的工具转到了后台）的一步之后就结束，不再调用模型
+/// （ADR 029 第八节、§一）；自动化交给她的一轮空回复不重发（[`is_automation_ask`]）。
+pub(super) fn call_limits(compact_at_tokens: u64, user: &Message) -> AgentLimits {
+    AgentLimits {
+        compact_at_tokens,
+        stop_after: VOICE_STOP_TOOLS.iter().map(|t| t.to_string()).collect(),
+        stop_after_background: true,
+        retry_empty_reply: !is_automation_ask(user),
+        ..game_limits()
+    }
+}
+
+/// 这一轮 1.2 秒没出声时替她说“我看看”吗：语音入口才说；后台交回的结果（玩家没在等）、自动化交给她的（她可以不说，
+/// 说了“我看看”又不说话就没头没尾）不说。
+pub(super) fn wants_filler(entry: Entry, user: &Message) -> bool {
+    entry == Entry::Call && !is_report(user) && !is_automation_ask(user)
+}
+
 /// 语音入口的一轮：回答念完后接着听（ADR 029 §五）。快捷指令也算（玩家在游戏里、按键叫她）。
 pub(super) fn follows_up(message: &Message) -> bool {
     matches!(message, Message::User { source, .. }
@@ -306,6 +330,32 @@ mod tests {
         for source in ["voice", "quick-command", "tool", "automation", ""] {
             assert_eq!(entry_of(&user(source)), Entry::Call, "{source}");
         }
+    }
+
+    /// ADR 050 第 6 条：自动化 `ask()` 交给她的一轮可以不说——空回复不重发、不替她说“我看看”；玩家自己开口的一轮照旧。
+    #[test]
+    fn an_automation_ask_may_stay_silent_and_player_turns_are_unchanged() {
+        let automation = user("automation");
+        assert!(is_automation_ask(&automation));
+        assert_eq!(entry_of(&automation), Entry::Call, "走的还是语音入口");
+        let asked = call_limits(1000, &automation);
+        assert!(!asked.retry_empty_reply);
+        assert!(!wants_filler(Entry::Call, &automation));
+        for source in ["voice", "wake-voice", "quick-command", "tool"] {
+            let player = user(source);
+            assert!(!is_automation_ask(&player), "{source}");
+            let limits = call_limits(1000, &player);
+            assert!(limits.retry_empty_reply, "{source}");
+            assert_eq!(limits.stop_after, asked.stop_after);
+            assert!(limits.stop_after_background && limits.compact_at_tokens == 1000);
+            assert!(wants_filler(Entry::Call, &player), "{source}");
+        }
+        // 聊天窗口、后台交回的结果照旧不接“我看看”
+        assert!(!wants_filler(Entry::Chat, &user("chat")));
+        assert!(!wants_filler(
+            Entry::Call,
+            &user(kotone_agent::subagents::REPORT_SOURCE)
+        ));
     }
 
     #[test]

@@ -503,6 +503,9 @@ pub struct AgentLimits {
     /// 转到后台的调用（[`ToolOutcome::background`]）也按 `stop_after` 里的工具算：语音回合里慢的工具转走了，
     /// 这一轮就结束、接着听（ADR 029 §一）。打字时不算，模型接着写一句“好了告诉你”。
     pub stop_after_background: bool,
+    /// 没用过工具、正文和工具调用都是空的回复，同样的请求再发一次（默认）。false = 直接收下：自动化 `ask()` 交给她的
+    /// 那一轮，她可以故意不说（ADR 050 第 6 条），重发只是多花钱。
+    pub retry_empty_reply: bool,
 }
 
 impl Default for AgentLimits {
@@ -522,6 +525,7 @@ impl Default for AgentLimits {
             final_step_prompt: None,
             stop_after: Vec::new(),
             stop_after_background: false,
+            retry_empty_reply: true,
         }
     }
 }
@@ -1090,6 +1094,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
             && !used_tools
             && reply.text.trim().is_empty()
             && !empty_retried
+            && limits.retry_empty_reply
         {
             empty_retried = true;
             keep_partial_discard(&partial);
