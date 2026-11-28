@@ -113,6 +113,8 @@
   const status = $derived(herShown && STATUS.has(herShown.phase) ? herShown : null);
   const lines = $derived<FloatingLine[]>(bubbleLines(view?.lines ?? []));
   const maxList = $derived(Math.max(MIN_LIST, (displayView?.maxHeight ?? 400) - CHROME));
+  /** 小窗多宽（设置里的“小窗宽度”，后端夹到这块屏放得下；旧后端不给时 360）。 */
+  const miniWidth = $derived(displayView?.miniWidth ?? 360);
 
   function accept(next: FloatingView) {
     if (view && next.revision < view.revision) return;
@@ -292,7 +294,7 @@
     {#key mounted}
       {#if mounted === "mini"}
         <div bind:this={surface} class="surface" class:unfolded inert={!unfolded}>
-          <MiniChat {turns} {from} {anchor} {target} pop={focus} {maxList} title={$companionName} {chat} {status}
+          <MiniChat {turns} {from} {anchor} {target} pop={focus} {maxList} width={miniWidth} title={$companionName} {chat} {status}
             active={shown && unfolded} conversationId={displayView?.mini?.conversationId ?? chat.conversation?.id ?? null}
             onOpen={openHere} onOpenPush={openPush} onClose={close} onDrag={drag} onLayout={() => void relayout()}
             onInputFocus={floatingInputFocus} onComposerActive={(active) => { composerActive = active; }} />
@@ -335,11 +337,17 @@
     --floating-bubble: #1d201d;
     --floating-bubble-border: #ffffff22;
     --floating-bubble-ink: #eeefe6;
+    /* 头像、气泡、小窗共用的阴影（2026-11-28 玩家：“阴影不太自然”）：窗口只留挡鼠标的那几块、每块四周多 8（HIT_PAD，
+       SetWindowRgn），再外面整个裁掉——原来的 0 8px 24px / 0 6px 18px 往下要 30 多 px 才淡完，在 8 px 处被切出一条直边，
+       整块像垫了一张灰色方片。照 shadcn 的 shadow-md、Windows 11 浮层：两层、小偏移、低不透明度，最远只到下边 8 px、
+       上边 2 px、左右 5 px，整个收进那一圈里；亮色淡一些，暗色背景上黑影看不出来，加深一些。 */
+    --floating-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 3px 6px -1px rgb(0 0 0 / .16);
     position: fixed; display: flex; flex-direction: row; box-sizing: border-box;
-    width: max-content; max-width: 480px; padding: 8px; user-select: none;
+    width: max-content; padding: 8px; user-select: none;
     left: 0; top: 0; align-items: flex-start;
     font-family: var(--appearance-ui-font, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif);
   }
+  :global(:root[data-theme="dark"]) .root { --floating-shadow: 0 1px 2px rgb(0 0 0 / .3), 0 3px 6px -1px rgb(0 0 0 / .45); }
   .root.right { left: auto; right: 0; flex-direction: row-reverse; --hinge-x: calc(100% + var(--hinge-gap)); --fold-y: -78deg; }
   .root.bottom { top: auto; bottom: 0; align-items: flex-end; --fold-x: 14deg; --floating-orb-overlap: 18px; }
   .root.bottom.right { --floating-compose-end: 17px; }
@@ -374,7 +382,7 @@
   .line {
     display: flex; max-width: 360px; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 12px;
     background: var(--floating-bubble); color: var(--floating-bubble-ink); border: 1px solid var(--floating-bubble-border);
-    box-shadow: 0 6px 18px #0007; cursor: pointer;
+    box-shadow: var(--floating-shadow); cursor: pointer;
   }
   .line:focus { outline: none; }
   /* 下边的角：最下面那一行贴着头像、底色伸到头像下面，那一头多让开头像盖住的那一截，字不被挡住 */

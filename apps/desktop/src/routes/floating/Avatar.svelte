@@ -58,7 +58,7 @@
 
 <style>
   .avatar { position: relative; flex: none; cursor: grab; animation: pop .2s cubic-bezier(.2, .9, .3, 1.2) both; }
-  .face { position: absolute; inset: 6px; border-radius: 50%; box-shadow: 0 4px 14px #0007; }
+  .face { position: absolute; inset: 6px; border-radius: 50%; box-shadow: var(--floating-shadow, 0 1px 2px rgb(0 0 0 / .3), 0 3px 6px -1px rgb(0 0 0 / .45)); }
   /* 不叫 .ring：那是 Tailwind 的 ring 工具类（一圈 1 px 的白色 box-shadow），打包后的样式里有它，真机上头像外面多一个白框 */
   .meter { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; transform-origin: 50% 50%; }
   .track { fill: none; stroke: rgba(255, 255, 255, .16); stroke-width: 3; }

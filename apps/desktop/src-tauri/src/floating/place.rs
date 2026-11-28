@@ -10,7 +10,7 @@
 //! （`expandDirection` / `ballOriginFromWindow`）；松手时整个拉回工作区里（`clampedBallOrigin`）。它“松手贴边收成细条”
 //! 和“悬停展开”不照搬：后者在游戏里会抢焦点（2026-11-22 调研第四节）。
 
-use kotone_core::assistant::{BubbleCorner, FloatingPosition};
+use kotone_core::assistant::{BubbleConfig, BubbleCorner, FloatingPosition};
 
 use crate::screen_corner::{Corner, Rect};
 
@@ -93,6 +93,31 @@ pub fn hit_rects(boxes: &[[f64; 4]], scale: f64, size: (i32, i32)) -> Option<Vec
         .filter(|r| r.right > r.left && r.bottom > r.top)
         .collect();
     (!rects.is_empty()).then_some(rects)
+}
+
+/// 页面四周留给阴影的一圈（逻辑像素，`Floating.svelte` 的 `.root` padding；挡鼠标的几块也各往外多留这么多，`HIT_PAD`）。
+const PAGE_PAD: f64 = 8.0;
+/// 头像那一列（逻辑像素）：头像 56，加上上边两个角里小窗和头像之间的 8（下边两个角小窗压着头像，更窄）。
+const AVATAR_SPAN: f64 = 64.0;
+/// 小窗最窄、最矮也给这么多（逻辑像素）：屏幕小得离谱时也画得出标题、一截列表和输入框。
+const MINI_FLOOR: (f64, f64) = (240.0, 160.0);
+
+/// 聊天小窗的大小（逻辑像素）：（宽，最高）。照设置（`assistant.bubble.miniWidth`、`miniMaxHeightPercent`，2026-11-28 玩家：
+/// “大小交给用户调整”），再夹到这块屏的工作区 `area`（逻辑宽、高）放得下：小窗连同头像、页面四周的阴影那一圈、离边的
+/// `margin`（没拖过时还有 `offsetY`）不超出工作区。最高给的是小窗自己（标题、列表、输入框）的高，页面再加上下各 8。
+pub fn mini_size(area: (f64, f64), config: &BubbleConfig, margin: f64) -> (u32, u32) {
+    let offset = if config.position.is_some() {
+        0.0
+    } else {
+        config.offset_y as f64
+    };
+    let room_width = area.0 - 2.0 * (margin + PAGE_PAD) - AVATAR_SPAN;
+    let room_height = area.1 - 2.0 * (margin + PAGE_PAD) - offset;
+    let width = (config.mini_width as f64).min(room_width).max(MINI_FLOOR.0);
+    let height = (area.1 * config.mini_max_height_percent as f64 / 100.0)
+        .min(room_height)
+        .max(MINI_FLOOR.1);
+    (width.floor() as u32, height.floor() as u32)
 }
 
 #[cfg(test)]
@@ -238,5 +263,40 @@ mod tests {
         assert_eq!(rects, [Rect::at(0, 0, (448, 32))]);
         assert_eq!(hit_rects(&[], 1.0, size), None);
         assert_eq!(hit_rects(&[[0.0, 0.0, 0.0, 0.0]], 1.0, size), None);
+    }
+
+    /// 小窗大小：缺省就是原来的样子（宽 360、最高工作区的 75%）；设得再大，连同头像、阴影、离边的距离也不超出工作区。
+    #[test]
+    fn mini_size_follows_settings_but_stays_inside_the_work_area() {
+        let config = BubbleConfig::default();
+        // 1080p、任务栏 48：最高 1032 × 75% = 774，加上下 8 和离边 16 也放得下
+        assert_eq!(mini_size((1920.0, 1032.0), &config, 16.0), (360, 774));
+        // 4K 150%：逻辑 2560 × 1392
+        assert_eq!(mini_size((2560.0, 1392.0), &config, 16.0), (360, 1044));
+        // 设到 95%、离边挪开 360（让开小地图）的小笔记本（1366 × 728）：夹到 728 - 2 × 24 - 360 = 320
+        let tall = BubbleConfig {
+            mini_max_height_percent: 95,
+            offset_y: 360,
+            ..BubbleConfig::default()
+        };
+        assert_eq!(mini_size((1366.0, 728.0), &tall, 16.0), (360, 320));
+        // 拖过了：不再算 offsetY，728 × 95% = 691 比 728 - 48 = 680 高，夹到 680
+        let dragged = BubbleConfig {
+            position: Some(FloatingPosition {
+                corner: BubbleCorner::BottomRight,
+                x: 5_000,
+                y: 5_000,
+            }),
+            ..tall
+        };
+        assert_eq!(mini_size((1366.0, 728.0), &dragged, 16.0), (360, 680));
+        // 很宽的小窗放不下：600 - 48 - 64 = 488
+        let wide = BubbleConfig {
+            mini_width: 640,
+            ..BubbleConfig::default()
+        };
+        assert_eq!(mini_size((600.0, 800.0), &wide, 16.0), (488, 600));
+        // 屏幕小得离谱也给一个能画的大小
+        assert_eq!(mini_size((200.0, 150.0), &tall, 16.0), (240, 160));
     }
 }

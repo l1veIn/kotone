@@ -17,6 +17,8 @@ export const FLOATING_CARD_MAX = Symbol("kotone.floatingCardMax");
 export interface FloatingCardMax {
   /** 逻辑像素，跟着小窗的大小变（读的地方是响应式的）。 */
   readonly max: number;
+  /** 卡片截出来的高度变了（McpAppFrame 调）：小窗在同一轮里重新量列表，列表不会有一下比卡片矮。 */
+  resized?(): void;
 }
 
 /** 气泡里的一行推送。 */
@@ -65,8 +67,10 @@ export interface FloatingView {
   ring: FloatingRing | null;
   /** 窗口贴着哪个角：头像在哪个角、内容往哪边长。 */
   corner: BubbleCorner;
-  /** 聊天小窗最高多少（逻辑像素，游戏所在那块屏工作区高度的 40%）。 */
+  /** 聊天小窗最高多少（逻辑像素，小窗自己的高）：设置里占工作区高度的百分比（缺省 75%），后端夹到那块屏放得下。 */
   maxHeight: number;
+  /** 聊天小窗多宽（逻辑像素，不算头像；设置里的宽度，缺省 360，后端夹到那块屏放得下）。旧后端不给时按 360。 */
+  miniWidth?: number;
 }
 
 export async function floatingCurrent(): Promise<FloatingView | null> {

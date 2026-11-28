@@ -11,7 +11,9 @@
 //! - **在哪**：游戏（前台窗口）在哪块屏，就在哪块屏。没拖过贴着设置里的角，让开同一个角上的输入条（屏幕角落分配，
 //!   `screen_corner.rs`）；拖过就照记下的位置（相对工作区，`assistant.bubble.position`，[`place`]）。窗口变大变小时贴着
 //!   的那个角不动。窗口跟着内容的大小走：界面量好内容报上来（[`floating_layout`]），这里按那块屏的缩放摆；从收着到显示，
-//!   等界面报了这一版的大小才显示，免得先用旧的大小闪一下（界面 1.5 秒还没报就照旧显示）。小窗最高是工作区高度的 40%。
+//!   等界面报了这一版的大小才显示，免得先用旧的大小闪一下（界面 1.5 秒还没报就照旧显示）。聊天小窗的宽度和最高（工作区
+//!   高度的百分比）照设置（`assistant.bubble.miniWidth` / `miniMaxHeightPercent`，缺省 360、75%），再夹到那块屏放得下
+//!   （[`place::mini_size`]：连同头像、阴影那一圈、离边的距离不超出工作区）；设置改了马上按新的大小重画（[`settings_changed`]）。
 //! - **显示时不抢焦点**：窗口平时不可聚焦（`focusable: false`，Windows 上是 `WS_EX_NOACTIVATE`），用 `SW_SHOWNA` 显示。
 //!   点 ×、卡片按钮、拖动仍不激活它。玩家点小窗的文字输入框时才临时把键盘焦点交给它（[`floating_input_focus`]）；输完、
 //!   失焦或收起时，前台如果还是小窗就交还。点“打开 Kotone”才把主窗口拿到前面（`agent::auto_card_open`）。
@@ -45,8 +47,6 @@ pub const LABEL: &str = "floating";
 pub const EVENT: &str = "kotone://floating";
 /// 窗口离工作区边缘多远（逻辑像素）。页面四周还留 8 给阴影，内容离边 24，和原来的气泡一样。
 const MARGIN: f64 = 16.0;
-/// 卡片多留一些展示空间，小窗最多占当前屏幕工作区的四分之三。
-const MAX_HEIGHT_SHARE: f64 = 0.75;
 /// 界面一直没报大小时，过多久照旧显示。
 const LAYOUT_FALLBACK: Duration = Duration::from_millis(1_500);
 /// 收起先让界面把气泡 / 小窗折回头像；此期间保留原来的窗口大小和区域。
@@ -98,15 +98,17 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-/// 给界面的样子：显示什么、进度条（[`View`]），加上窗口贴着哪个角（头像在哪个角、内容往哪边长）、聊天小窗最高多少。
+/// 给界面的样子：显示什么、进度条（[`View`]），加上窗口贴着哪个角（头像在哪个角、内容往哪边长）、聊天小窗多宽、最高多少。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shown {
     #[serde(flatten)]
     pub view: View,
     pub corner: BubbleCorner,
-    /// 聊天小窗最高多少（逻辑像素），按前台显示器的工作区和缩放计算。
+    /// 聊天小窗最高多少（逻辑像素；小窗自己的高，不算页面四周的 8）：设置里的百分比，夹到游戏所在那块屏放得下（[`place::mini_size`]）。
     pub max_height: u32,
+    /// 聊天小窗多宽（逻辑像素，不算头像）：设置里的宽度，同上夹过。
+    pub mini_width: u32,
 }
 
 fn config(app: &AppHandle) -> BubbleConfig {
@@ -123,13 +125,24 @@ fn timing(app: &AppHandle) -> Timing {
 
 fn compose(app: &AppHandle, view: View) -> Shown {
     let config = config(app);
-    let max_height = crate::screen_corner::foreground_monitor()
-        .map(|(area, scale)| ((area.bottom - area.top) as f64 / scale * MAX_HEIGHT_SHARE) as u32)
-        .unwrap_or(400);
+    let (mini_width, max_height) = crate::screen_corner::foreground_monitor()
+        .map(|(area, scale)| {
+            let logical = |px: i32| px as f64 / scale;
+            place::mini_size(
+                (
+                    logical(area.right - area.left),
+                    logical(area.bottom - area.top),
+                ),
+                &config,
+                MARGIN,
+            )
+        })
+        .unwrap_or((config.mini_width, 400));
     Shown {
         view,
         corner: config.position.map_or(config.corner, |p| p.corner),
         max_height,
+        mini_width,
     }
 }
 
@@ -835,6 +848,15 @@ fn remember_position(app: &AppHandle, window: &tauri::WebviewWindow) {
             let _ = app.emit("kotone://settings-changed", &updated);
         }
         Err(e) => log::log(&format!("悬浮窗：位置没记下：{e}")),
+    }
+}
+
+/// 设置改了（`settings_cmd::update_settings`，设置页和她的 settings.update 都走这里）：小窗的宽度、最高、离边距离变了时
+/// 把新的样子发给界面，界面按新的大小重画、量好报上来，窗口跟着变（显示着的话马上就变）。
+pub fn settings_changed(app: &AppHandle, old: &BubbleConfig, new: &BubbleConfig) {
+    let size = |c: &BubbleConfig| (c.mini_width, c.mini_max_height_percent, c.offset_y);
+    if size(old) != size(new) {
+        let _ = app.emit(EVENT, &current(app));
     }
 }
 

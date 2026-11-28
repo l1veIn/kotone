@@ -5,6 +5,9 @@
   // 原样带上，不动旧值）。每条推送的开关在插件页的「设置 → 推送」。
   // rc.14 试玩：“右下角持续时间，这个一定要做成设置可以调整，甚至可以关闭”——停留时间和两个开关放在一起（“显示悬浮窗”
   // 关掉全部，“推送时弹出小窗”关掉卡片弹小窗）。
+  // 2026-11-28 玩家：“可以允许用户设置小窗口的尺寸”——“小窗宽度”“小窗最高”两档选（照 Discord 覆盖层的“头像大小 大 / 小”、
+  // Coopanion 的气泡大小：点不到、会自己收起的浮层用设置调，不用拖边框；宽度给几档像素，最高给占屏幕高度的百分比），
+  // 改了马上生效（后端发新的大小，小窗显示着就跟着变），“恢复默认”两项一起改回 360、75%。设得再大也不超出屏幕（后端夹）。
   import { Eye, RotateCcw } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
@@ -47,6 +50,32 @@
   }
   const bubbleStayOptions = $derived(stayOptions([2, 3, 5, 8, 10, 15], BUBBLE_SECONDS, bubbleSeconds));
   const miniStayOptions = $derived(stayOptions([3, 5, 8, 10, 15, 30], MINI_SECONDS, miniSeconds));
+
+  /** 小窗多宽、最高占屏幕高度的百分之几（后端 `DEFAULT_MINI_WIDTH` / `DEFAULT_MINI_MAX_HEIGHT_PERCENT`；她照玩家的话改成别的值时也列出来）。 */
+  const MINI_WIDTH = 360;
+  const MINI_HEIGHT = 75;
+  const miniWidth = $derived(bubble.miniWidth ?? MINI_WIDTH);
+  const miniHeight = $derived(bubble.miniMaxHeightPercent ?? MINI_HEIGHT);
+  const widths: Record<number, () => string> = {
+    320: m.companion_floating_mini_width_320,
+    360: m.companion_floating_mini_width_360,
+    420: m.companion_floating_mini_width_420,
+    480: m.companion_floating_mini_width_480,
+    540: m.companion_floating_mini_width_540,
+  };
+  const miniWidthOptions = $derived(
+    [...new Set([...Object.keys(widths).map(Number), miniWidth])].sort((a, b) => a - b).map((width) => ({
+      value: String(width),
+      label: widths[width]?.() ?? m.companion_floating_mini_width_custom({ width }),
+    })),
+  );
+  const miniHeightOptions = $derived(
+    [...new Set([40, 55, MINI_HEIGHT, 90, miniHeight])].sort((a, b) => a - b).map((percent) => ({
+      value: String(percent),
+      label: percent === MINI_HEIGHT ? m.companion_floating_mini_height_default({ percent }) : m.companion_floating_mini_height_percent({ percent }),
+    })),
+  );
+  const miniSizeDefault = $derived(miniWidth === MINI_WIDTH && miniHeight === MINI_HEIGHT);
 
   /** 只写改了的那几项（拖到的位置这类后端写的不带上，免得盖掉）。 */
   async function save(patch: Partial<BubbleConfig>, message: string) {
@@ -97,6 +126,28 @@
         <div class="w-32 max-w-full">
           <SelectField testid="mini-stay" ariaLabel={m.companion_floating_mini_stay_aria()} value={String(miniSeconds)} options={miniStayOptions}
             disabled={!bubble.enabled} onchange={(v) => void save({ miniSeconds: Number(v) }, m.companion_floating_stay_saved())} />
+        </div>
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label={m.companion_floating_mini_width_label()} description={m.companion_floating_mini_width_desc()}>
+      {#snippet control()}
+        <div class="w-32 max-w-full">
+          <SelectField testid="mini-width" ariaLabel={m.companion_floating_mini_width_aria()} value={String(miniWidth)} options={miniWidthOptions}
+            disabled={!bubble.enabled} onchange={(v) => void save({ miniWidth: Number(v) }, m.companion_floating_mini_size_saved())} />
+        </div>
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label={m.companion_floating_mini_height_label()} description={m.companion_floating_mini_height_desc()}>
+      {#snippet control()}
+        <div class="flex items-center gap-2">
+          <div class="w-40 max-w-full">
+            <SelectField testid="mini-height" ariaLabel={m.companion_floating_mini_height_aria()} value={String(miniHeight)} options={miniHeightOptions}
+              disabled={!bubble.enabled} onchange={(v) => void save({ miniMaxHeightPercent: Number(v) }, m.companion_floating_mini_size_saved())} />
+          </div>
+          <Button size="sm" variant="outline" data-testid="mini-size-reset" title={m.companion_floating_mini_size_reset_title()}
+            disabled={!bubble.enabled || miniSizeDefault}
+            onclick={() => void save({ miniWidth: MINI_WIDTH, miniMaxHeightPercent: MINI_HEIGHT }, m.companion_floating_mini_size_reset_done())}>
+            <RotateCcw class="size-3.5" />{m.companion_floating_mini_size_reset()}</Button>
         </div>
       {/snippet}
     </SettingsRow>

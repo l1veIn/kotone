@@ -25,7 +25,7 @@
   import QuickComposer from "./QuickComposer.svelte";
   import { turnPushId } from "./shape";
 
-  let { turns, from = 0, anchor, target, pop, maxList, title, chat, status, onOpen, onOpenPush, onClose, onDrag, onLayout,
+  let { turns, from = 0, anchor, target, pop, maxList, width = 360, title, chat, status, onOpen, onOpenPush, onClose, onDrag, onLayout,
     active = true, conversationId = null, onInputFocus = () => {}, onComposerActive = () => {} }: {
     /** 整段对话的时间线。 */
     turns: Turn[];
@@ -38,6 +38,8 @@
     /** 弹出的那条推送（换了就再跟上）。 */
     pop: string | null;
     maxList: number;
+    /** 小窗多宽（px，设置里的“小窗宽度”，后端夹过）。 */
+    width?: number;
     title: string;
     chat: AgentChat;
     /** 她这时候的状态行（在听、等你回答……），对话里还没有的。 */
@@ -83,8 +85,12 @@
 
   const start = $derived(Math.max(0, Math.min(from, turns.length) - more));
   const visible = $derived(turns.slice(start));
-  // 卡片里的 App 最高多高（McpAppFrame 读；跟着列表最高能多高走）
-  const cardMax: FloatingCardMax = { get max() { return Math.max(CARD_MIN, maxList - composerHeight - PADDING - CARD_CHROME); } };
+  // 卡片里的 App 最高多高（McpAppFrame 读；跟着列表最高能多高走）。卡片截出来的高度一变就重新量列表（resized）：列表的
+  // 高度跟着内容，卡片长高的那一轮里列表也跟着长，不会有一下卡片比列表高（列表到顶时卡片最高正好是列表放得下的）
+  const cardMax: FloatingCardMax = {
+    get max() { return Math.max(CARD_MIN, maxList - composerHeight - PADDING - CARD_CHROME); },
+    resized: () => void relayout(),
+  };
   setContext(FLOATING_CARD_MAX, cardMax);
 
   $effect.pre(() => {
@@ -168,7 +174,7 @@
   });
 </script>
 
-<section class="mini ui-scope" data-testid="floating-mini" data-focus={pop ?? ""} aria-label={m.chat_floating_mini_label()}>
+<section class="mini ui-scope" style:width="{width}px" data-testid="floating-mini" data-focus={pop ?? ""} aria-label={m.chat_floating_mini_label()}>
   <div class="head" role="presentation" onpointerdown={onDrag} data-testid="floating-mini-head">
     <span class="title">{title}</span>
     <button type="button" class="tool" aria-label={m.chat_floating_open()} title={m.chat_floating_open()} data-testid="floating-open"
@@ -202,9 +208,9 @@
     --floating-line: var(--hairline, var(--border));
     --floating-ink: var(--foreground);
     --floating-muted: var(--muted-foreground);
-    display: flex; flex-direction: column; width: 360px; overflow: hidden; box-sizing: border-box;
+    display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box;
     background: var(--floating-surface); color: var(--floating-ink); border: 1px solid var(--floating-line);
-    border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+    border-radius: 12px; box-shadow: var(--floating-shadow);
   }
   :global(:root[data-theme="dark"]) .mini {
     --floating-surface: #171916;
@@ -217,7 +223,6 @@
     --muted: var(--floating-raised);
     --muted-foreground: var(--floating-muted);
     --hairline: var(--floating-line);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.55);
   }
   .head {
     display: flex; height: 32px; flex: none; align-items: center; gap: 2px; padding: 0 6px 0 12px;

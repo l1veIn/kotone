@@ -399,6 +399,10 @@ export interface BubbleConfig {
   bubbleSeconds?: number;
   /** 聊天小窗停留几秒（1–60，缺省 5）。 */
   miniSeconds?: number;
+  /** 聊天小窗多宽（逻辑像素，280–640，缺省 360；不算头像）。 */
+  miniWidth?: number;
+  /** 聊天小窗最高占游戏所在屏幕工作区高度的百分之几（30–95，缺省 75）。 */
+  miniMaxHeightPercent?: number;
 }
 
 /** 悬浮窗拖到的位置：窗口的 `corner` 那个角贴在工作区里的 (x, y)，单位是工作区宽 / 高的万分之一。 */

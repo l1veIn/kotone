@@ -723,6 +723,35 @@ test("mini chat: a card fits when there is enough room and fades with an open li
   await expect.poll(() => calls(page, "auto_card_open")).toEqual([{ conversationId: "c1", key: OPENING, openMatch: true }]);
 });
 
+test("mini chat: its width and max height come from the backend (the settings, clamped to the screen); the card is never taller than the list", async ({ page }) => {
+  await open(page, { width: 700, height: 820 });
+  const mini = page.getByTestId("floating-mini");
+  const list = page.getByTestId("floating-list");
+  const card = page.locator('[data-testid="floating-turn"][data-push="lol:opening:9100000"] [data-testid="mcp-app-frame"]');
+  // 旧后端不给宽度：360
+  await page.evaluate(() => window.floatingTest.view({ revision: 1, maxHeight: 420,
+    mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } }));
+  await expect(card).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  await expect.poll(async () => (await mini.boundingBox())?.width).toBe(360);
+  await expect.poll(async () => (await mini.boundingBox())?.height ?? 0).toBeLessThanOrEqual(420);
+  // 设置里改成更宽、更高：后端发新的样子，小窗跟着变，报上去的大小也跟着变
+  await page.evaluate(() => window.floatingTest.view({ revision: 2, maxHeight: 600, miniWidth: 480,
+    mini: { conversationId: "c1", focus: "lol:opening:9100000", key: "opening:9100000" } }));
+  await expect.poll(async () => (await mini.boundingBox())?.width).toBe(480);
+  await expect.poll(async () => (await lastLayout(page))?.width ?? 0).toBeGreaterThan(480);
+  const layout = (await lastLayout(page))!;
+  // 小窗连同头像、四周的 8 就是报上去的大小；挡鼠标的那一块是小窗四周多 8
+  expect(layout.height).toBeLessThanOrEqual(600 + 16);
+  const box = await mini.boundingBox();
+  expect(layout.boxes.some(([, , w]) => w === Math.round(box!.width) + 16)).toBe(true);
+  // 卡片任何时候都不比列表高（同一轮里量：不等下一帧）
+  const [boxHeight, listHeight] = await Promise.all([
+    card.evaluate((el) => (el.firstElementChild as HTMLElement).getBoundingClientRect().height), list.evaluate((el) => el.clientHeight)]);
+  expect(boxHeight).toBeLessThanOrEqual(listHeight);
+  expect((await mini.boundingBox())!.height).toBeLessThanOrEqual(600);
+  await screenshot(page.getByTestId("floating"), { path: shot("floating-mini-wide"), omitBackground: true });
+});
+
 test("mini chat: draws at most the latest 20 turns (this time's + up to 10 before) and loads 20 more when scrolled to the top", async ({ page }) => {
   await open(page, undefined, { turns: 60, cards: 0 });
   const list = page.getByTestId("floating-list");
@@ -807,7 +836,7 @@ test("long conversation (500 turns, 50 cards): timings for the mini chat appeari
   for (const ms of timings.pushes) expect(ms).toBeLessThan(1_000);
 });
 
-test("settings 交互 → 悬浮窗: show, pop up the mini chat for pushes, how long the bubble and the mini chat stay, where it sits, reset after a drag, danmaku", async ({ page }) => {
+test("settings 交互 → 悬浮窗: show, pop up the mini chat for pushes, how long the bubble and the mini chat stay, the mini chat size, where it sits, reset after a drag, danmaku", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.route("**/__floating-settings-test", (route) => route.fulfill({
     contentType: "text/html", body: '<!doctype html><html><body><div id="app"></div></body></html>',
@@ -893,6 +922,34 @@ test("settings 交互 → 悬浮窗: show, pop up the mini chat for pushes, how 
   await expect.poll(async () => (await stored()).assistant.bubble.miniSeconds).toBe(3);
   await expect(page.getByTestId("mini-stay")).toHaveText("3 秒");
   expect((await stored()).assistant.bubble).toMatchObject({ enabled: true, bubbleSeconds: 8, miniSeconds: 3 });
+
+  // 小窗大小（2026-11-28 玩家：“可以允许用户设置小窗口的尺寸”）：宽度几档、最高占屏幕的百分比几档，旧设置没有时是默认
+  // （360、75%），“恢复默认”默认时是灰的；改了以后能点，两项一起改回去
+  await expect(page.getByTestId("mini-width")).toHaveAttribute("data-value", "360");
+  await expect(page.getByTestId("mini-width")).toHaveText("默认（360）");
+  await expect(page.getByTestId("mini-height")).toHaveText("屏幕的 75%（默认）");
+  await expect(page.getByTestId("mini-size-reset")).toBeDisabled();
+  await page.getByTestId("mini-width").click();
+  await expect(page.getByRole("option")).toHaveText(["窄（320）", "默认（360）", "宽（420）", "更宽（480）", "最宽（540）"]);
+  await page.getByRole("option", { name: "更宽（480）" }).click();
+  await expect.poll(async () => (await stored()).assistant.bubble.miniWidth).toBe(480);
+  await page.getByTestId("mini-height").click();
+  await expect(page.getByRole("option")).toHaveText(["屏幕的 40%", "屏幕的 55%", "屏幕的 75%（默认）", "屏幕的 90%"]);
+  await page.getByRole("option", { name: "屏幕的 90%" }).click();
+  await expect.poll(async () => (await stored()).assistant.bubble.miniMaxHeightPercent).toBe(90);
+  await expect(page.getByTestId("mini-size-reset")).toBeEnabled();
+  await page.getByTestId("mini-size-reset").click();
+  await expect.poll(async () => (await stored()).assistant.bubble).toMatchObject({ miniWidth: 360, miniMaxHeightPercent: 75 });
+  await expect(page.getByTestId("mini-size-reset")).toBeDisabled();
+  // 她照玩家的话设成了别的值：也列出来
+  await page.evaluate(() => (window as unknown as { floatingSettings: { dragged(p: unknown): Promise<void>; settings: { assistant: { bubble: Record<string, unknown> } } } })
+    .floatingSettings.settings.assistant.bubble.miniWidth = 400);
+  await page.evaluate(() => (window as unknown as { floatingSettings: { dragged(p: unknown): Promise<void> } }).floatingSettings.dragged(null));
+  await expect(page.getByTestId("mini-width")).toHaveText("自定义（400）");
+  await page.getByTestId("bubble-enabled").click();
+  await expect(page.getByTestId("mini-width")).toBeDisabled();
+  await expect(page.getByTestId("mini-height")).toBeDisabled();
+  await page.getByTestId("bubble-enabled").click();
 
   // 拖过（后端写的位置，发 settings-changed）：位置还原能点，点了清掉、再请后端照角摆一次
   await page.evaluate(() => (window as unknown as { floatingSettings: { dragged(p: unknown): Promise<void> } }).floatingSettings

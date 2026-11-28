@@ -95,6 +95,11 @@
   $effect(() => {
     if (frameElement) frameElement.style.height = `${natural}px`;
   });
+  // 小窗里：截出来的高度变了，告诉小窗马上重新量列表（不等下一帧的 ResizeObserver，列表和卡片同一轮变）
+  $effect(() => {
+    void shownHeight;
+    if (inFloating) floatingCap?.resized?.();
+  });
 
   /** 截了一截的卡片：小窗里交给外面（打开 Kotone、定位到这一条），聊天页里原地展开。 */
   function more() {

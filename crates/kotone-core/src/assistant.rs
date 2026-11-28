@@ -164,6 +164,11 @@ pub struct BubbleConfig {
     pub bubble_seconds: u32,
     /// 聊天小窗停留多久（秒，同上）。新字段，缺省 5（“默认小窗显示 5 秒”）。
     pub mini_seconds: u32,
+    /// 聊天小窗多宽（逻辑像素，不算头像）。新字段，缺省 360（原来固定的宽度）。2026-11-28 玩家：“可以允许用户设置小窗口的尺寸”。
+    pub mini_width: u32,
+    /// 聊天小窗最高占游戏所在那块屏工作区（去掉任务栏）高度的百分之几。新字段，缺省 75（rc.16 的上限）。不管设多少，
+    /// 连同头像、边距都不超出工作区（`floating/mod.rs` 再夹一次）。
+    pub mini_max_height_percent: u32,
 }
 
 /// 悬浮窗拖到的地方，按屏幕工作区（去掉任务栏）记，换一块屏幕、换分辨率照样用：窗口的哪个角（`corner`，拖完时窗口在
@@ -189,6 +194,14 @@ pub const DEFAULT_BUBBLE_SECONDS: u32 = 3;
 pub const DEFAULT_MINI_SECONDS: u32 = 5;
 /// 气泡、聊天小窗停留的秒数范围（设置页给 2–15 / 3–30 几档，她照玩家的话改也在这个范围里）。
 pub const FLOATING_STAY_RANGE_SECONDS: std::ops::RangeInclusive<u32> = 1..=60;
+/// 聊天小窗缺省多宽（逻辑像素）。
+pub const DEFAULT_MINI_WIDTH: u32 = 360;
+/// 聊天小窗宽度的范围（设置页给 320–540 几档，她照玩家的话改也在这个范围里）。
+pub const MINI_WIDTH_RANGE: std::ops::RangeInclusive<u32> = 280..=640;
+/// 聊天小窗缺省最高占工作区高度的百分之几。
+pub const DEFAULT_MINI_MAX_HEIGHT_PERCENT: u32 = 75;
+/// 聊天小窗最高的百分比范围（设置页给 40 / 55 / 75 / 90 几档）。
+pub const MINI_MAX_HEIGHT_PERCENT_RANGE: std::ops::RangeInclusive<u32> = 30..=95;
 
 impl Default for BubbleConfig {
     fn default() -> Self {
@@ -200,6 +213,8 @@ impl Default for BubbleConfig {
             position: None,
             bubble_seconds: DEFAULT_BUBBLE_SECONDS,
             mini_seconds: DEFAULT_MINI_SECONDS,
+            mini_width: DEFAULT_MINI_WIDTH,
+            mini_max_height_percent: DEFAULT_MINI_MAX_HEIGHT_PERCENT,
         }
     }
 }
@@ -589,6 +604,12 @@ impl AssistantConfig {
         }
         if !FLOATING_STAY_RANGE_SECONDS.contains(&self.bubble.mini_seconds) {
             return Err("悬浮窗聊天小窗停留的时间必须在 1 到 60 秒之间".into());
+        }
+        if !MINI_WIDTH_RANGE.contains(&self.bubble.mini_width) {
+            return Err("悬浮窗聊天小窗的宽度必须在 280 到 640 之间（逻辑像素）".into());
+        }
+        if !MINI_MAX_HEIGHT_PERCENT_RANGE.contains(&self.bubble.mini_max_height_percent) {
+            return Err("悬浮窗聊天小窗最高占屏幕高度的百分比必须在 30 到 95 之间".into());
         }
         if !WAKE_NO_SPEECH_RANGE_MS.contains(&self.wake.no_speech_timeout_ms) {
             return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());
@@ -1008,6 +1029,36 @@ mod tests {
             config.bubble.bubble_seconds = bubble;
             config.bubble.mini_seconds = mini;
             assert_eq!(config.validate().is_ok(), ok, "{bubble} / {mini}");
+        }
+    }
+
+    /// 聊天小窗的大小（2026-11-28 玩家）：新字段，旧配置没有时是原来的样子（宽 360、最高 75%）；范围以外不收。
+    #[test]
+    fn mini_size_is_new_fields_defaulting_to_the_old_look() {
+        let old: AssistantConfig = serde_json::from_value(serde_json::json!({
+            "bubble": {"enabled": true, "corner": "bottom-right", "offsetY": 0, "alsoDanmaku": false, "miniSeconds": 8}
+        }))
+        .unwrap();
+        assert_eq!(old.bubble.mini_width, 360);
+        assert_eq!(old.bubble.mini_max_height_percent, 75);
+        assert_eq!(old.bubble.mini_seconds, 8);
+        old.validate().unwrap();
+        let json = serde_json::to_value(&old).unwrap();
+        assert_eq!(json["bubble"]["miniWidth"], 360);
+        assert_eq!(json["bubble"]["miniMaxHeightPercent"], 75);
+        for (width, percent, ok) in [
+            (280, 30, true),
+            (640, 95, true),
+            (540, 90, true),
+            (279, 75, false),
+            (641, 75, false),
+            (360, 29, false),
+            (360, 96, false),
+        ] {
+            let mut config = AssistantConfig::default();
+            config.bubble.mini_width = width;
+            config.bubble.mini_max_height_percent = percent;
+            assert_eq!(config.validate().is_ok(), ok, "{width} / {percent}");
         }
     }
 }

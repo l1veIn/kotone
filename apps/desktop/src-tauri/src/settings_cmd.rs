@@ -233,6 +233,8 @@ fn apply_update(
         );
     }
     process_log::set_recording_enabled(updated.diagnostics.recording);
+    // 悬浮窗的小窗改了宽度 / 最高：马上按新的大小重画（显示着的话窗口跟着变）
+    crate::floating::settings_changed(&app, &old.assistant.bubble, &updated.assistant.bubble);
     // 设置里关了内置浏览器（ADR 038）：开着的网页都关掉（界面上右侧栏的“网页”跟着设置收起来）
     if old.browser.enabled && !updated.browser.enabled {
         crate::browser::switched_off(&app);

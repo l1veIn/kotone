@@ -45,7 +45,8 @@
   .bubble {
     position: relative; max-width: 300px; min-width: 96px; padding: 8px 12px 9px; border-radius: 14px;
     background: var(--floating-bubble, #1d201d); color: var(--floating-bubble-ink, #eeefe6);
-    border: 1px solid var(--floating-bubble-border, #ffffff22); box-shadow: 0 6px 18px #0007;
+    border: 1px solid var(--floating-bubble-border, #ffffff22);
+    box-shadow: var(--floating-shadow, 0 1px 2px rgb(0 0 0 / .3), 0 3px 6px -1px rgb(0 0 0 / .45));
   }
   /* 聊天小窗最下面的一行：跟着小窗的配色 */
   .bubble.compact {

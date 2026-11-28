@@ -45,7 +45,7 @@ description: 帮玩家把 Kotone 配置好：语音识别、文字识别、她�
 ## 她的声音、她用的模型
 
 - 声音只在「琴音 → 交互 → 声音与弹幕」一处配：选服务商（DeepSeek、MiniMax、阿里云百炼、硅基流动、火山、自定义）、填 Key、选声音、试听。换服务商用 models.activate（tts）；声音、模型写 settings.update `modelConfigs.<ID>.voice / model`，可选的声音看 speech.status；speech.status 带 check 能先试一次 Key 和设置。回到“自动”：`assistant.ttsModelId` 改成空、`assistant.speechEngine` 改成 `system`。
-- 回答用语音还是弹幕（`assistant.defaultDelivery`）也在那一页；悬浮窗的开关、停留时间在「琴音 → 交互 → 悬浮窗」。
+- 回答用语音还是弹幕（`assistant.defaultDelivery`）也在那一页；悬浮窗的开关、停留时间、小窗的宽度和最高在「琴音 → 交互 → 悬浮窗」。
 - 她用哪条 API 连接、哪个模型：玩家在聊天页输入框旁的“她用的模型”里选。要你改就 settings.describe “API 连接” 看该写哪个字段（0.1.x 升级用户是另一个）。
 
 ## Key
