@@ -69,6 +69,7 @@
   - 每局第一份数据只记样子、之前的不补；中间没读到接口那段死了又复活的不补；看不出自己在哪边（观战）时不报；最多晚约 2 秒。
   - `lol.my_death` / `lol.my_respawn` 字段不变，由同一处报：`lol.my_death` 紧跟在自己那件 `lol.death`（`me = true`）后面。
   - 还没在真机上核对：守护天使、基兰大招、赛恩被动、艾尼维亚的蛋、扎克被动时 `isDead` 会不会闪一下（录的那把海斗是每 20 秒一份）。
+- **这局结算了**（`watcher/auto_cards.rs`，ADR 050 第 6 条）：`lol.game_end` 和“这局总结”同一时刻、同一份数据（单局详情）报，这条推送关着也报；自定义、训练、观战、重开局、60 秒还拿不到结果的不报。字段 `win`、`queue`、`durationSeconds`、`champion`（短名字）、`kills`、`deaths`、`assists`、`damageRank`（1 = 全队第一）、`pentaKill`（详情里有这一项才给）、`todayWinStreak` / `todayLossStreak`（算上这局，今天现在几连胜 / 几连败，另一个是 0；结算时读一次自己的战绩，读不到两个都不给）。内置自动化“英雄联盟这局打得特别好或特别差时她说几句”（`builtin-lol-game-end-cheer`，默认开）按它触发：赢了而且伤害全队第一、五杀、今天三连败以上才 `ask()` 交给她。
 - **`lol.match` 的结构化数据**（`client/text.rs` 的 `match_data`，程序里 `tool("lol.match")` 拿到的就是它；字段名是约定，写在工具说明里）：`status`、`reason`（不是 `ok` 时：`loading` / `champ_select` / `not_in_game` / `client_closed`，或读不到的原因）、`mode`、`gameTime`（整数秒）、`score {ally, enemy}`、`alive {ally, enemy}`、`players[]`（我方在前）：`champion`、`alias`、`team`、`me`、`bot`、`level`、`kills`、`deaths`、`assists`、`cs`、`dead`、`respawnSeconds`、`position`、`spells[{key, name, readyAt?}]`、`items[{id, name}]`。接口给不出的不放：别人的金币、技能冷却、海克斯。没有页面，宿主不把它放进她的上下文、也不出卡片。
 
 ## 素材（图片）

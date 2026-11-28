@@ -8,11 +8,14 @@
 //! - **算哪些局**：和战绩页一样（[`crate::client::history::parse_match_list`]）：只算匹配到的对局，自定义、训练、
 //!   重开局不算。
 //! - **连胜连败**：只数今天的，从最近一局往前数到第一局不一样的；跨过 0 点的不接着数（这张卡片说的是今天）。
+//! - **那句预置的话**（ADR 050 第 5 条，[`super::cheer`]）：按今天的连胜连败和胜负分档，按日期和局数挑，放在页面数据的
+//!   `cheer`（`{tier, index}`，没有这句时是 null）。
 
 use serde_json::{json, Value};
 
+use super::cheer;
 use crate::client::assets;
-use crate::client::history::GameRecord;
+use crate::client::history::{self, GameRecord};
 use crate::client::GameData;
 use crate::pages;
 
@@ -70,6 +73,34 @@ pub(crate) fn streak(games: &[&GameRecord]) -> i64 {
         n
     } else {
         -n
+    }
+}
+
+/// 算上刚打完的这一局（`game_id`、开局时间 `created_ms`、赢没赢），今天现在几连胜（正数）/ 几连败（负数）
+/// （`lol.game_end` 用，ADR 050 第 6 条）。`list` 是我的战绩列表（客户端的原样）：结算时这一局多半还没进去，进去了也
+/// 不重复算。“今天”和今天的状态一样按开局时间、本地 0 点分界。
+pub(crate) fn streak_after(
+    list: &Value,
+    game_id: i64,
+    created_ms: i64,
+    win: bool,
+    date_of: impl Fn(i64) -> String,
+) -> i64 {
+    let games = history::parse_match_list(list);
+    let date = date_of(if created_ms > 0 {
+        created_ms
+    } else {
+        crate::pushes::now_ms()
+    });
+    let before = today_games(&games, &date, &date_of)
+        .into_iter()
+        .filter(|g| g.game_id != game_id)
+        .take_while(|g| g.win == win)
+        .count() as i64;
+    if win {
+        before + 1
+    } else {
+        -(before + 1)
     }
 }
 
@@ -141,12 +172,17 @@ pub(crate) fn today_page(
     data: Option<&GameData>,
 ) -> Value {
     let wins = games.iter().filter(|g| g.win).count();
+    let streak = streak(games);
+    let cheer = cheer::today_tier(games.len(), wins, streak)
+        .and_then(|tier| cheer::pick_today(tier, date, games.len()))
+        .map(|c| c.page());
     json!({
         "date": date,
         "games": games.len(),
         "wins": wins,
         "losses": games.len() - wins,
-        "streak": streak(games),
+        "streak": streak,
+        "cheer": cheer,
         "capped": capped.is_some(),
         "limit": capped.unwrap_or(0),
         "lostAtLeast": LOST_AT_LEAST,
@@ -339,6 +375,64 @@ mod tests {
         assert_ne!(v, v2);
         assert_eq!(v2["streak"], 1);
         assert_eq!(v2["games"], 7);
+    }
+
+    /// ADR 050 第 5 条：页面数据里的那句预置的话按今天的连胜连败、胜负分档，同样的战绩挑出同一句。
+    #[test]
+    fn the_page_carries_a_preset_line_for_streaks_and_clear_leans() {
+        let all = history();
+        let today = today_games(&all, "2026-11-26", beijing);
+        // 6 局 2 胜 4 负、现在 2 连败：负多胜少那一档
+        let v = today_page("2026-11-26", &today, None, None);
+        assert_eq!(v["cheer"]["tier"], "today_down");
+        let index = v["cheer"]["index"].as_u64().unwrap() as usize;
+        assert_eq!(
+            Some(index),
+            cheer::pick_today(cheer::Tier::TodayDown, "2026-11-26", 6).map(|c| c.index)
+        );
+        // 再输一局：三连败那一档
+        let mut more = all.clone();
+        more.insert(0, game(10, MIDNIGHT + 23 * HOUR, 22, false));
+        let after = today_games(&more, "2026-11-26", beijing);
+        assert_eq!(
+            today_page("2026-11-26", &after, None, None)["cheer"]["tier"],
+            "today_cold"
+        );
+        // 只打了一两局：没有这句
+        let few = today_page("2026-11-26", &today[..2], None, None);
+        assert!(few["cheer"].is_null(), "{few}");
+    }
+
+    /// `lol.game_end` 的今天几连胜 / 连败：算上刚打完的这一局；它已经进了战绩也不重复算；昨天的不接着数。
+    #[test]
+    fn the_streak_after_a_game_counts_that_game_once() {
+        let list = |games: &[(i64, i64, bool)]| {
+            json!({"games": {"games": games.iter().map(|(id, at, win)| json!({
+                "gameId": id, "queueId": 2400, "gameMode": "KIWI", "gameType": "MATCHED_GAME",
+                "gameCreation": at, "gameDuration": 1200,
+                "participants": [{"championId": 22, "stats": {"win": win}}],
+            })).collect::<Vec<_>>()}})
+        };
+        let earlier = list(&[
+            (8, MIDNIGHT + 3 * HOUR, false),
+            (7, MIDNIGHT + 2 * HOUR, false),
+            (6, MIDNIGHT + HOUR, true),
+            (5, MIDNIGHT - HOUR, false),
+        ]);
+        let now = MIDNIGHT + 4 * HOUR;
+        assert_eq!(streak_after(&earlier, 9, now, false, beijing), -3);
+        assert_eq!(streak_after(&earlier, 9, now, true, beijing), 1);
+        // 这一局已经在战绩里了
+        let listed = list(&[
+            (9, now, false),
+            (8, MIDNIGHT + 3 * HOUR, false),
+            (7, MIDNIGHT + 2 * HOUR, false),
+        ]);
+        assert_eq!(streak_after(&listed, 9, now, false, beijing), -3);
+        // 今天第一局：昨天的连败不接着数
+        let yesterday = list(&[(5, MIDNIGHT - HOUR, false), (4, MIDNIGHT - 2 * HOUR, false)]);
+        assert_eq!(streak_after(&yesterday, 9, now, false, beijing), -1);
+        assert_eq!(streak_after(&json!({}), 9, now, true, beijing), 1);
     }
 
     #[test]

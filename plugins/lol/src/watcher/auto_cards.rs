@@ -7,11 +7,15 @@
 //! - **这局总结**：从对局里进了结算（`WaitingForStats` / `PreEndOfGame` / `EndOfGame`）就去读这局的详情，拿到就发；
 //!   读不到每 5 秒再试，60 秒还没有就不发（调研 G29）。页面是“单局详情”（`ui://kotone/lol/game`，带 `justEnded`）；
 //!   海斗、斗魂竞技场的详情里有每个人的海克斯（`playerAugment1`–`6`），卡片上一人一行列出对面的（也能看我方的），
-//!   没有海克斯的模式不显示（ADR 043 B 轮第 3 条）。
+//!   没有海克斯的模式不显示（ADR 043 B 轮第 3 条）。卡片头部下面一行是一句预置的话（[`cheer`]，ADR 050 第 5 条：
+//!   “C麻了”“没事，下把再来”），给琴音的那句里也带上（“卡片上写了：……”），免得她接着说重复的。
+//!   同一时刻报一件 `lol.game_end`（ADR 050 第 6 条，[`game_end_data`]）：这条推送关着也报（事件和推送是两回事），
+//!   自定义、训练、观战、重开局、60 秒还拿不到结果的不报。
 //! - **今天的状态**（[`today`]）：进房间或排队（`Lobby` / `Matchmaking` / `ReadyCheck`）时，用我自己的战绩（和战绩页同一段）
 //!   发一张：今天几胜几负、现在几连胜 / 连败、今天输了 2 局以上的英雄。一天一个 key（`today:<本地日期>`），打完一局
 //!   回到房间时同一张原地更新、让悬浮窗再弹一次；今天还没打过不发。不给琴音留话：这张卡片一天里一直在变，
-//!   留一句很快就过时了，她要今天的战绩时自己查（`lol.player`）。
+//!   留一句很快就过时了，她要今天的战绩时自己查（`lol.player`）。卡片上那句预置的话按今天的连胜连败、胜负挑
+//!   （[`cheer::today_tier`]），同样不写进给她的话。
 //! - 不发：选人、对局中；训练模式、自定义对局（队列 ≤ 0）、观战（这局里没有自己）；Kotone 开的时候已经在对局里了
 //!   （没看到加载）不发开局战绩；重开局（提前投降）不发这局总结；重连、刷新不重发（这里记着，宿主也按 key 去重）。
 //! - 开关在插件页「设置 → 推送」，每条一个（宿主管，关了 `Host::push` 回 `Off`）；同一个 key 再推一次宿主当成更新，
@@ -23,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use kotone_core::log;
 use kotone_plugin_api::{Host, Push, PushCard, PushOutcome};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::MatchView;
 use crate::client::history;
@@ -33,6 +37,8 @@ use crate::client::text::{Identity, ScoutPlayer};
 use crate::pages;
 use crate::LolPlugin;
 
+/// 卡片上那句预置的话（ADR 050 第 5 条）：分档、挑句子，句子在 messages 里。
+pub(crate) mod cheer;
 /// 今天的状态（进房间或排队时推）：只用我自己的战绩算，纯函数和页面数据在这里。
 pub(crate) mod today;
 
@@ -61,6 +67,8 @@ pub(crate) struct CardState {
     summarized: HashSet<i64>,
     /// 最近一局打完的（不算自定义、训练、观战）：回到房间推今天的状态时，等它出现在战绩里再算。
     ended: Option<i64>,
+    /// 上一局这局总结挑的那句预置的话（档，第几句）：同一档连着两局时不挑同一句（ADR 050 第 5 条）。不落盘。
+    last_cheer: Option<(cheer::Tier, usize)>,
 }
 
 impl CardState {
@@ -220,38 +228,60 @@ fn rank_word(rank: usize) -> String {
         .unwrap_or_else(|| format!("第 {}", rank + 1))
 }
 
-/// 这局总结给琴音的那句：输赢、模式、时长；我用什么英雄、K/D/A、伤害在全队排第几。`page` 是单局详情的页面数据。
-pub(crate) fn summary_note(page: &Value, me: &str) -> String {
+/// 这局总结给琴音的那句：输赢、模式、时长；我用什么英雄、K/D/A、伤害在全队排第几；卡片上那句预置的话（ADR 050
+/// 第 5 条：她知道卡片上说了什么，免得接着说重复的）。`page` 是单局详情的页面数据。
+pub(crate) fn summary_note(page: &Value, me: &str, cheer: Option<&cheer::Cheer>) -> String {
     let seconds = page["durationS"].as_i64().unwrap_or(0);
     let length = format!("{} 分 {} 秒", seconds / 60, seconds % 60);
     let queue = page["queue"].as_str().unwrap_or("");
-    let teams = page["teams"].as_array().cloned().unwrap_or_default();
-    let mine = teams.iter().find_map(|team| {
-        let players = team["players"].as_array()?;
-        let index = players
-            .iter()
-            .position(|p| !me.is_empty() && p["puuid"].as_str() == Some(me))?;
-        Some((team, players, index))
-    });
-    let Some((team, players, index)) = mine else {
+    let Some(g) = cheer::MyGame::of(page, me) else {
         return format!("{TITLE_SUMMARY}：这局结束了（{queue}，{length}）。");
     };
-    let win = team["win"].as_bool().unwrap_or(false);
-    let p = &players[index];
-    let damage = p["damage"].as_i64().unwrap_or(0);
-    let rank = players
-        .iter()
-        .filter(|x| x["damage"].as_i64().unwrap_or(0) > damage)
-        .count();
+    let line = cheer
+        .map(|c| format!("卡片上写了：“{}”。", c.text))
+        .unwrap_or_default();
     format!(
-        "{TITLE_SUMMARY}：这局{}了（{queue}，{length}）。你用{} {}/{}/{}，伤害全队{}。",
-        if win { "赢" } else { "输" },
-        p["champion"]["short"].as_str().unwrap_or("英雄"),
-        p["kills"].as_i64().unwrap_or(0),
-        p["deaths"].as_i64().unwrap_or(0),
-        p["assists"].as_i64().unwrap_or(0),
-        rank_word(rank),
+        "{TITLE_SUMMARY}：这局{}了（{queue}，{length}）。你用{} {}/{}/{}，伤害全队{}。{line}",
+        if g.win { "赢" } else { "输" },
+        if g.champion.is_empty() {
+            "英雄"
+        } else {
+            &g.champion
+        },
+        g.kills,
+        g.deaths,
+        g.assists,
+        rank_word(g.damage_rank - 1),
     )
+}
+
+/// `lol.game_end` 的数据（ADR 050 第 6 条；清单 `[[events]]` 里登记的字段，camelCase）：只放事实。`streak` 是算上这局
+/// 今天现在几连胜（正）/ 几连败（负），读不到今天的战绩时 None（两个字段都不给）；结算详情里没有五杀这一项时不给 `pentaKill`。
+pub(crate) fn game_end_data(
+    page: &Value,
+    g: &cheer::MyGame,
+    streak: Option<i64>,
+) -> Map<String, Value> {
+    let mut data = Map::new();
+    data.insert("win".into(), json!(g.win));
+    data.insert("queue".into(), json!(page["queue"].as_str().unwrap_or("")));
+    data.insert(
+        "durationSeconds".into(),
+        json!(page["durationS"].as_i64().unwrap_or(0)),
+    );
+    data.insert("champion".into(), json!(g.champion));
+    data.insert("kills".into(), json!(g.kills));
+    data.insert("deaths".into(), json!(g.deaths));
+    data.insert("assists".into(), json!(g.assists));
+    data.insert("damageRank".into(), json!(g.damage_rank));
+    if let Some(penta) = g.penta {
+        data.insert("pentaKill".into(), json!(penta));
+    }
+    if let Some(streak) = streak {
+        data.insert("todayWinStreak".into(), json!(streak.max(0)));
+        data.insert("todayLossStreak".into(), json!((-streak).max(0)));
+    }
+    data
 }
 
 fn report(title: &str, result: Result<PushOutcome, String>) {
@@ -422,7 +452,38 @@ impl LolPlugin {
             }
             // 单局详情带“刚结束”的头部（设计文档第三节 3）
             page["justEnded"] = json!(true);
-            let note = summary_note(&page, &me);
+            // 卡片上那句预置的话（ADR 050 第 5 条）：按这局的事实分档，上一局挑的那句记在插件状态里
+            let mine = cheer::MyGame::of(&page, &me);
+            let line = mine.as_ref().and_then(|g| {
+                let mut s = state.lock().unwrap();
+                let picked = cheer::pick_game(cheer::game_tier(g), game_id, s.cards.last_cheer)?;
+                s.cards.last_cheer = Some((picked.tier, picked.index));
+                Some(picked)
+            });
+            if let Some(line) = &line {
+                page["cheer"] = line.page();
+            }
+            let note = summary_note(&page, &me, line.as_ref());
+            // lol.game_end 的“今天几连胜 / 连败”：读一次我的战绩（这一局多半还没进去，按这局的结果接上）
+            let streak = match &mine {
+                Some(g) => match lcu.get(&paths::matches(&me)).await {
+                    Ok(list) => Some(today::streak_after(
+                        &list,
+                        game_id,
+                        page["createdMs"].as_i64().unwrap_or(0),
+                        g.win,
+                        today::local_date,
+                    )),
+                    Err(error) => {
+                        log::log(&format!(
+                            "lol: 读不到自己的战绩，这局结算的事里没有今天的连胜连败：{error}"
+                        ));
+                        None
+                    }
+                },
+                None => None,
+            };
+            let event = mine.as_ref().map(|g| game_end_data(&page, g, streak));
             let result = task_host.push(Push {
                 trigger: PUSH_SUMMARY.into(),
                 key: format!("summary:{game_id}"),
@@ -436,6 +497,15 @@ impl LolPlugin {
                 ..Push::default()
             });
             report(TITLE_SUMMARY, result);
+            // 推送关着也报（事件和推送是两回事）；先推后报：她被自动化叫起来时，卡片和给她的那句已经在对话里了
+            match event {
+                Some(data) => {
+                    task_host.game_event(super::LOL, "lol.game_end", "lol/client", data, None)
+                }
+                None => log::log(&format!(
+                    "lol: 这局（{game_id}）的结算详情里找不到自己，不报 lol.game_end"
+                )),
+            }
         }));
     }
 
@@ -849,18 +919,81 @@ mod tests {
     #[test]
     fn the_summary_note_has_the_result_my_line_and_damage_rank() {
         assert_eq!(
-            summary_note(&page(50_000, true), "me"),
+            summary_note(&page(50_000, true), "me", None),
             "这局总结：这局赢了（海克斯大乱斗，18 分 32 秒）。你用寒冰 12/3/20，伤害全队第一。"
         );
-        let lost = summary_note(&page(10_000, false), "me");
+        let lost = summary_note(&page(10_000, false), "me", None);
         assert!(
             lost.contains("这局输了") && lost.contains("伤害全队第二"),
             "{lost}"
         );
         // 找不到自己（录的详情不是这一局）：只说结束了
         assert_eq!(
-            summary_note(&page(1, true), "someone"),
+            summary_note(&page(1, true), "someone", None),
             "这局总结：这局结束了（海克斯大乱斗，18 分 32 秒）。"
+        );
+    }
+
+    /// ADR 050 第 5 条：这局总结的那句预置的话放进页面数据（页面按语言取）、给她的那句里也写上；
+    /// 赢了、伤害第一、KDA 5 以上是“C麻了”那一档。说明照样不超过 160 字。
+    #[test]
+    fn the_summary_carries_the_preset_line_on_the_card_and_in_her_note() {
+        let won = page(50_000, true);
+        let g = cheer::MyGame::of(&won, "me").unwrap();
+        assert_eq!(cheer::game_tier(&g), cheer::Tier::Carry);
+        let line = cheer::pick_game(cheer::game_tier(&g), 42, None).unwrap();
+        let note = summary_note(&won, "me", Some(&line));
+        assert!(
+            note.ends_with(&format!("伤害全队第一。卡片上写了：“{}”。", line.text)),
+            "{note}"
+        );
+        assert!(note.chars().count() <= Push::NOTE_MAX, "{note}");
+        assert_eq!(line.page()["tier"], "carry");
+        // 输了、伤害第二：“输了”那一档
+        let lost = page(10_000, false);
+        let g = cheer::MyGame::of(&lost, "me").unwrap();
+        assert_eq!(cheer::game_tier(&g), cheer::Tier::Loss);
+    }
+
+    /// ADR 050 第 6 条：`lol.game_end` 只放事实，字段都在清单里登记过；读不到今天的战绩时不给连胜连败，
+    /// 详情里没有五杀这一项时不给 `pentaKill`。
+    #[test]
+    fn the_game_end_event_states_the_facts_registered_in_the_manifest() {
+        let mut won = page(50_000, true);
+        won["teams"][0]["players"][0]["pentaKills"] = json!(1);
+        let g = cheer::MyGame::of(&won, "me").unwrap();
+        let data = game_end_data(&won, &g, Some(-3));
+        assert_eq!(
+            Value::Object(data.clone()),
+            json!({"win": true, "queue": "海克斯大乱斗", "durationSeconds": 1112, "champion": "寒冰",
+                   "kills": 12, "deaths": 3, "assists": 20, "damageRank": 1, "pentaKill": true,
+                   "todayWinStreak": 0, "todayLossStreak": 3})
+        );
+        let spec = crate::manifest()
+            .events
+            .iter()
+            .find(|e| e.kind == "lol.game_end")
+            .expect("lol.game_end 登记了");
+        assert_eq!(spec.needs, ["client"]);
+        for field in data.keys() {
+            assert!(spec.data.contains_key(field), "data.{field} 没登记");
+        }
+        for field in spec.data.keys() {
+            assert!(data.contains_key(field), "登记了 data.{field} 却不报");
+        }
+        // 读不到今天的战绩、详情里没有五杀
+        let plain = page(10_000, false);
+        let g = cheer::MyGame::of(&plain, "me").unwrap();
+        let data = game_end_data(&plain, &g, None);
+        assert_eq!(data["win"], false);
+        assert_eq!(data["damageRank"], 2);
+        for missing in ["pentaKill", "todayWinStreak", "todayLossStreak"] {
+            assert!(!data.contains_key(missing), "{missing}");
+        }
+        assert_eq!(
+            game_end_data(&plain, &g, Some(2))["todayWinStreak"],
+            2,
+            "连胜时连败是 0"
         );
     }
 

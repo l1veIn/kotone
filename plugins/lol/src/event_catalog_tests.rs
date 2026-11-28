@@ -573,3 +573,50 @@ fn a_condition_left_in_the_program_spends_the_once_per_match() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// ADR 050 第 6 条：内置的“这局打得特别好或特别差时她说几句”对得上插件登记的 `lol.game_end`：插件开着时触发是
+/// 有效的、不会被标成“不会发生”，保存时没有提醒；程序里的参数都由事件的同名字段填上；这局结算的一件事触发它。
+#[test]
+fn the_builtin_game_end_automation_fits_the_registered_event() {
+    use kotone_core::automation::library::{event_args, BUILTIN_LOL_GAME_END_ID};
+    let dir = std::env::temp_dir().join(format!(
+        "kotone-lol-game-end-builtin-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let library = AutomationLibrary::open(dir.join("automations.json")).unwrap();
+    library.ensure_builtin().unwrap();
+    let a = library.get(BUILTIN_LOL_GAME_END_ID).unwrap();
+    let on = a.on.clone().unwrap();
+    let events = event_catalog([manifest()], &Settings::default());
+    assert_eq!(validate_trigger(&on, &events).unwrap(), on);
+    assert!(events.notes(&on).is_empty(), "{:?}", events.notes(&on));
+    assert!(trigger_hints(&a, &events).is_empty());
+    let event = GameEvent {
+        id: "lol-9".into(),
+        kind: "lol.game_end".into(),
+        game: "lol".into(),
+        match_id: String::new(),
+        time: 1,
+        game_time: None,
+        source: "lol/client".into(),
+        data: serde_json::from_value(
+            json!({"win": true, "queue": "海克斯大乱斗", "durationSeconds": 1112,
+            "champion": "寒冰", "kills": 12, "deaths": 3, "assists": 20, "damageRank": 1,
+            "pentaKill": false, "todayWinStreak": 3, "todayLossStreak": 0}),
+        )
+        .unwrap(),
+    };
+    // 每个参数都由这件事的同名字段填上（字段都是清单里登记过的，见 auto_cards 的测试）
+    let args = event_args(&a.params, &event);
+    assert_eq!(args.len(), a.params.len(), "{args:?}");
+    let armed = [Armed {
+        id: &a.id,
+        trigger: &on,
+    }];
+    let fired = Triggers::default().on_event(&armed, &event, 1);
+    assert_eq!(fired.len(), 1);
+    assert!(trigger_matches(&on, &event));
+    let _ = std::fs::remove_dir_all(&dir);
+}

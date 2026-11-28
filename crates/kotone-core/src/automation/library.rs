@@ -1343,6 +1343,66 @@ fn builtin_lol_scout(now: u64) -> Automation {
     }
 }
 
+/// 内置自动化“英雄联盟这局打得特别好或特别差时她说几句”（ADR 050 第 6 条）：插件报 `lol.game_end`（只有事实），程序里
+/// 判断够不够“特别”，够了才 `ask()` 交给她（判断和措辞归她，照“突破口”的做法）。只在特别的局才叫她、每次一次 AI 调用，
+/// 所以**默认开**（和突破口不一样）；在「自动化」页可以关。不开“一局一次”：一局只有一件 `lol.game_end`，开了反而让
+/// 保存时多一条“判断不满足也占掉一局一次”的提醒（[`trigger_hints`]）。
+pub const BUILTIN_LOL_GAME_END_ID: &str = "builtin-lol-game-end-cheer";
+
+/// 交给她的那句话。不能拼事件里的值（`ask()` 的护栏）：这局的结果她看附上的游戏事件，卡片上那句在这局总结的说明里。
+const LOL_GAME_END_ASK: &str = "这局刚结束，这局总结的卡片上已经有一句预置的话了（给你的说明里写着）。这局的结果看附上的游戏事件。用你的口气说一两句给玩家情绪价值的话，可以接着卡片上那句说，别重复它。没什么特别想说的就不说：不调用 speak、也不写字，直接结束。";
+
+/// 程序：`args.*` 由 `lol.game_end` 的同名字段自动填上（[`event_args`]）；阈值写在程序里，玩家可以改。
+const LOL_GAME_END_SOURCE: &str = r#"
+-- 这局打得特别好或特别差才叫她（args.* 由“这局结算了”自动填上）。下面的数字可以改
+local LOSS_STREAK = 3 -- 今天连败到几局算“特别差”
+local great = (args.win and args.damage_rank == 1) or args.penta_kill
+local rough = args.today_loss_streak >= LOSS_STREAK
+if not (great or rough) then
+  return
+end
+"#;
+
+fn builtin_lol_game_end(now: u64) -> Automation {
+    let filled = |name: &str, label: &str, kind: ParamKind, default: Value| {
+        param(name, label, "由“这局结算了”自动填上", kind, default)
+    };
+    let mut a = program(
+        BUILTIN_LOL_GAME_END_ID,
+        "英雄联盟这局打得特别好或特别差时她说几句",
+        "一局结束时，赢了而且伤害全队第一、拿了五杀，或者今天已经三连败，她接着这局总结卡片上那句再说一两句。         只在这样的局才叫她，每次花一次 AI 调用；不想要就关掉。",
+        vec![
+            filled("win", "赢了没有", ParamKind::Boolean, Value::Bool(false)),
+            filled(
+                "damage_rank",
+                "伤害在我们队排第几",
+                number(0.0, 100.0),
+                Value::from(0),
+            ),
+            filled("penta_kill", "有没有五杀", ParamKind::Boolean, Value::Bool(false)),
+            filled(
+                "today_loss_streak",
+                "今天现在几连败",
+                number(0.0, 1000.0),
+                Value::from(0),
+            ),
+        ],
+        &format!("{}ask({})", LOL_GAME_END_SOURCE.trim_start(), lua_string(LOL_GAME_END_ASK)),
+        now,
+    );
+    a.on = Some(EventTrigger {
+        event: vec!["lol.game_end".into()],
+        game: Some("lol".into()),
+        matches: Map::new(),
+        for_seconds: 0,
+        mode: Default::default(),
+        once_per_match: false,
+        cooldown_seconds: 0,
+        enabled: true,
+    });
+    a
+}
+
 /// 内置的常用按键程序（照 AutoHotkey / 按键精灵的常见宏：连发、连点、按住、连招、定时喊话、
 /// 看到文字就按、看到颜色就按）。都是普通的已保存自动化：玩家可以改、删（删了不再装回），
 /// 琴音可以直接调用（`saved.<id>`）。按键间隔不能低于脚本引擎的 50 ms，单次最长 30 分钟。
@@ -1751,7 +1811,7 @@ impl AutomationLibrary {
         Ok(true)
     }
 
-    /// 全部内置自动化的定义（“X 秒之后提醒我”、突破口、按键程序；测试与文档用）。
+    /// 全部内置自动化的定义（“X 秒之后提醒我”、突破口、这局打得特别好或特别差时她说几句、按键程序；测试与文档用）。
     pub fn builtin_programs_preview() -> Vec<Automation> {
         all_builtin(0)
     }
@@ -1833,7 +1893,11 @@ impl AutomationLibrary {
 }
 
 fn all_builtin(now: u64) -> Vec<Automation> {
-    let mut all = vec![builtin_remind(now), builtin_lol_scout(now)];
+    let mut all = vec![
+        builtin_remind(now),
+        builtin_lol_scout(now),
+        builtin_lol_game_end(now),
+    ];
     all.extend(builtin_programs(now));
     all
 }
@@ -2171,11 +2235,15 @@ mod tests {
             a.params[0].default = Some(json!("来个辅助")); // 玩家改过缺省的话
             a
         };
-        let all_ids: Vec<String> = [BUILTIN_REMIND_ID, BUILTIN_LOL_SCOUT_ID]
-            .iter()
-            .chain(BUILTIN_PROGRAM_IDS)
-            .map(|s| s.to_string())
-            .collect();
+        let all_ids: Vec<String> = [
+            BUILTIN_REMIND_ID,
+            BUILTIN_LOL_SCOUT_ID,
+            BUILTIN_LOL_GAME_END_ID,
+        ]
+        .iter()
+        .chain(BUILTIN_PROGRAM_IDS)
+        .map(|s| s.to_string())
+        .collect();
         let write = |path: &std::path::Path, a: Automation| {
             let stored = StoredAutomations {
                 version: 1,
@@ -2238,6 +2306,7 @@ mod tests {
             library.get(BUILTIN_LOL_SCOUT_ID).is_some(),
             "新加的内置项老用户也装上"
         );
+        assert!(library.get(BUILTIN_LOL_GAME_END_ID).is_some());
         for id in BUILTIN_PROGRAM_IDS {
             let a = library.get(id).unwrap_or_else(|| panic!("{id}"));
             let draft = as_draft(&a)
@@ -2381,6 +2450,79 @@ mod tests {
                 .id,
             "auto-2"
         );
+    }
+
+    /// ADR 050 第 6 条：“这局打得特别好或特别差时她说几句”按 `lol.game_end` 触发、默认开（只在特别的局才叫她）、
+    /// 不开一局一次（一局只有一件，开了保存时会多一条误导的提醒）；参数都由事件的同名字段填上，缺省值能跑；
+    /// 交给她的话是写死的（不拼事件里的值）、说了可以不说。
+    #[test]
+    fn the_lol_game_end_cheer_is_installed_switched_on_and_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
+        library.ensure_builtin().unwrap();
+        let a = library.get(BUILTIN_LOL_GAME_END_ID).unwrap();
+        let on = a.on.clone().unwrap();
+        assert!(on.enabled, "只在特别的局才叫她：默认开（ADR 050）");
+        assert_eq!(on.event, ["lol.game_end"]);
+        assert_eq!(on.game.as_deref(), Some("lol"));
+        assert!(on.matches.is_empty() && !on.once_per_match && on.cooldown_seconds == 0);
+        assert_eq!(
+            a.action.uses(),
+            ProgramUses {
+                window: false,
+                asks: true,
+                speaks: false
+            }
+        );
+        let source = a.action.source();
+        assert!(source.contains("local LOSS_STREAK = 3"), "{source}");
+        assert!(source.contains("ask(\"这局刚结束"), "{source}");
+        assert!(LOL_GAME_END_ASK.contains("没什么特别想说的就不说"));
+        assert!(LOL_GAME_END_ASK.chars().count() <= 500);
+        // 事件目录里有 lol.game_end 时能保存（和玩家在「自动化」页改了再存一样），保存时没有提醒
+        let mut catalog = EventCatalog::generic();
+        catalog
+            .add(crate::games::CatalogEntry {
+                spec: crate::games::EventSpec {
+                    kind: "lol.game_end".into(),
+                    label: "这局结算了".into(),
+                    data: ["win", "damageRank", "pentaKill", "todayLossStreak"]
+                        .iter()
+                        .map(|f| (f.to_string(), String::new()))
+                        .collect(),
+                    needs: Vec::new(),
+                    private: Vec::new(),
+                },
+                adapter: "lol".into(),
+                plugin: Some(("lol".into(), "英雄联盟".into())),
+                games: vec!["lol".into()],
+                off: None,
+            })
+            .unwrap();
+        let draft = as_draft(&a).normalized(&catalog).unwrap();
+        assert_eq!(draft.on, a.on);
+        validate_args(&draft.params, &Map::new()).unwrap();
+        assert!(trigger_hints(&a, &catalog).is_empty());
+        // 参数都由事件的同名字段填上
+        let event = crate::games::GameEvent {
+            id: "lol-1".into(),
+            kind: "lol.game_end".into(),
+            game: "lol".into(),
+            match_id: String::new(),
+            time: 1,
+            game_time: None,
+            source: "lol/client".into(),
+            data: args(
+                json!({"win": true, "queue": "海克斯大乱斗", "damageRank": 1,
+                              "pentaKill": false, "todayWinStreak": 2, "todayLossStreak": 0}),
+            ),
+        };
+        let filled = event_args(&a.params, &event);
+        assert_eq!(
+            Value::Object(filled.clone()),
+            json!({"win": true, "damage_rank": 1, "penta_kill": false, "today_loss_streak": 0})
+        );
+        validate_args(&a.params, &filled).unwrap();
     }
 
     #[test]

@@ -6,7 +6,8 @@
   // 一块“海克斯”：一人一行，图标 + 名字（AugmentRows，ADR 043 B 轮第 3 条）。
   // 卡片（inline）“这局总结”（推送、`justEnded`）：我这一局的数 + 两队每人一格（头像、K/D/A、伤害短条）；有海克斯的模式
   // 再加一块“海克斯”，先显示对面每个人的，点“我方”换成我方的（讨论记录第二节：“再加一行对面每个人的海克斯”）。
-  // 只写算出来的事实（“全队第 1”），不评价人。
+  // 只写算出来的事实（“全队第 1”），不评价人。卡片头部下面一行是插件挑的一句预置的话（`cheer`，ADR 050 第 5 条），
+  // 全屏时在标题行下面。
   import { onMount } from "svelte";
   import Augment from "../components/Augment.svelte";
   import AugmentRows from "./game/AugmentRows.svelte";
@@ -18,7 +19,7 @@
   import Spells from "../components/Spells.svelte";
   import StateBlock from "../components/StateBlock.svelte";
   import TopBar, { tabLabel, type PageId } from "../components/TopBar.svelte";
-  import { duration, kdaOf, kdaTone, num, one, ratio, splitRiotId, when } from "../format";
+  import { cheerLine, duration, kdaOf, kdaTone, num, one, ratio, splitRiotId, when } from "../format";
   import { resultStatus, TOOL_GAME, type DisplayMode, type Session, type ToolResult } from "../host";
   import { m } from "../i18n.svelte";
   import type { ToolState } from "../status";
@@ -99,6 +100,8 @@
   );
   /** 刚结束：数据里写着（自动卡片），或者从“这局”结算的“看这局详情”点进来。 */
   const justEnded = $derived(!!game?.justEnded || args.justEnded === true);
+  /** 那句预置的话（只在“这局总结”推送的数据里有）。 */
+  const cheer = $derived(cheerLine(game?.cheer));
   const minutes = $derived(Math.max(1, (game?.durationS ?? 60) / 60));
   const hasAugments = (t: GameTeam) => t.players.some((p) => p.augments.length > 0);
   /** 有海克斯的队（对面在前）；没有海克斯的模式是空的，整块不显示。 */
@@ -141,6 +144,7 @@
           {#if mine}{@render outcome(mine.win)}<span class="sep">·</span>{/if}
           <span class="num">{game.queue} · {duration(game.durationS)} · {when(game.createdMs)}</span>
         </header>
+        {#if cheer}<p class="cheer-full" data-testid="lol-card-cheer">{cheer}</p>{/if}
         {#each teams as t (t.teamId)}
           <section class="team {side(t)}" data-testid="lol-game-team" data-side={side(t)} data-win={t.win ? "true" : "false"}>
             <div class="team-head">
@@ -207,6 +211,7 @@
             onclick={() => void session.requestDisplayMode("fullscreen")}><Icon name="open" /></button>
         {/if}
       </div>
+      {#if cheer}<p class="card-cheer" data-testid="lol-card-cheer">{cheer}</p>{/if}
       {#if me}
         {@const k = kdaOf(me.kills, me.deaths, me.assists)}
         <div class="mine" data-testid="lol-card-me">
@@ -305,6 +310,11 @@
   }
   .sep {
     color: var(--lol-text-3);
+  }
+  .cheer-full {
+    margin: calc(-1 * var(--lol-sp-3)) 0 var(--lol-sp-5);
+    font-size: var(--lol-fs-sm);
+    color: var(--lol-text-2);
   }
   .outcome {
     font-weight: 700;

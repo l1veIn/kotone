@@ -533,6 +533,8 @@ pub fn game_page_for(detail: &Value, data: Option<&GameData>, me: Option<&str>) 
             "dpm": (damage as f64 / minutes).round(),
             "gold": i(&st, "goldEarned"),
             "cs": i(&st, "totalMinionsKilled") + i(&st, "neutralMinionsKilled"),
+            // 五杀几次（这局总结那句预置的话、lol.game_end 用；详情里没有这一项时是 null）
+            "pentaKills": st.get("pentaKills").and_then(Value::as_i64),
             "items": items(data, &slots),
             "augments": augments(data, &augment_ids),
             "profileIconId": icon_id,

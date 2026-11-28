@@ -598,6 +598,16 @@
 .card-head .btn {
   margin-left: auto;
 }
+/* 卡片头部下面那句预置的话（ADR 050 第 5 条）：一行小字，不抢数据的眼 */
+.card-cheer {
+  margin: -2px 0 6px;
+  padding: 0 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--lol-fs-sm);
+  color: var(--lol-text-2);
+}
 
 /* ---------- 没数据、客户端没开、出错（全屏页面中间） ---------- */
 .empty-state {

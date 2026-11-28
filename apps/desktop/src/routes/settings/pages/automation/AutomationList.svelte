@@ -11,7 +11,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
   import {
-    ASKS_PER_MATCH, BUILTIN_LOL_SCOUT_ID, BUILTIN_REMIND_ID, confirmAutomation, deleteAutomation, describeSchedule, getAutomation, reminderOf,
+    ASKS_PER_MATCH, BUILTIN_LOL_GAME_END_ID, BUILTIN_LOL_SCOUT_ID, BUILTIN_REMIND_ID, confirmAutomation, deleteAutomation, describeSchedule, getAutomation, reminderOf,
     runAutomation, runTitle, unusableTools, type Automation, type AutomationRun, type AutomationTemplate,
   } from "../../../../lib/automation";
   import { agentSetAutomationHidden } from "../../../../lib/agent";
@@ -240,7 +240,7 @@
             <button type="button" class="min-w-0 flex-1 text-left" id={`program-toggle-${item.id}`} aria-expanded={isOpen} onclick={() => { expanded = isOpen ? "" : item.id; }} data-testid="automation-item-toggle">
               <p class="m-0 flex items-center gap-1.5 truncate text-[13px] font-medium text-foreground">
                 {item.name}
-                {#if item.id === BUILTIN_REMIND_ID || item.id === BUILTIN_LOL_SCOUT_ID}<span class="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">{m.auto_list_builtin()}</span>{/if}
+                {#if item.id === BUILTIN_REMIND_ID || item.id === BUILTIN_LOL_SCOUT_ID || item.id === BUILTIN_LOL_GAME_END_ID}<span class="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">{m.auto_list_builtin()}</span>{/if}
                 {#if item.asks}<span class="rounded bg-brand-pink/12 px-1 text-[10px] font-normal text-brand-pink" title={m.auto_list_asks_cost()}
                   data-testid="automation-item-asks">{m.auto_list_asks_badge({ name: $companionName })}</span>{/if}
                 {#if item.needsConfirm}<span class="rounded bg-warning/12 px-1 text-[10px] font-normal text-warning"

@@ -1,6 +1,25 @@
 // 数字、时间、段位的小格式（文字在 messages/，这里只拼）。阈值照 docs/design/lol-app.md 第一节 9。
 import { lang, m } from "./i18n.svelte";
-import type { Ranked } from "./types";
+import type { CheerPick, Ranked } from "./types";
+
+/** 推送卡片上那句预置的话（ADR 050 第 5 条）：插件挑好了档和第几句（`cheer: {tier, index}`），这里按界面的语言取那一句。
+ * 句子在 messages 的 `plugin_lol_cheer_<档>` 里，`|` 隔开，中英文每档句数一样（插件的测试查）。没有这句时空。 */
+const cheerTiers: Record<string, () => string> = {
+  penta: () => m.plugin_lol_cheer_penta(),
+  carry: () => m.plugin_lol_cheer_carry(),
+  win: () => m.plugin_lol_cheer_win(),
+  lost_top: () => m.plugin_lol_cheer_lost_top(),
+  loss: () => m.plugin_lol_cheer_loss(),
+  today_hot: () => m.plugin_lol_cheer_today_hot(),
+  today_cold: () => m.plugin_lol_cheer_today_cold(),
+  today_up: () => m.plugin_lol_cheer_today_up(),
+  today_down: () => m.plugin_lol_cheer_today_down(),
+};
+export function cheerLine(pick: CheerPick | null | undefined): string {
+  if (!pick || typeof pick.index !== "number") return "";
+  const lines = (cheerTiers[pick.tier]?.() ?? "").split("|").map((s) => s.trim()).filter(Boolean);
+  return lines[pick.index] ?? "";
+}
 
 /** 胜率（整数百分比，没局数时 0）。 */
 export function pctOf(wins: number, games: number): number {

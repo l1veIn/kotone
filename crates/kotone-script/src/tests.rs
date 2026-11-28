@@ -1126,6 +1126,36 @@ fn builtin_reminder_and_scout_run_without_a_window() {
     assert!(host.asked.lock().unwrap()[0].contains("lol.scout"));
 }
 
+/// ADR 050 第 6 条：这局打得特别好（赢了而且伤害第一、五杀）或特别差（今天三连败）才交给她，别的局什么都不做。
+#[test]
+fn builtin_game_end_cheer_asks_only_for_special_games() {
+    let run = |args: serde_json::Value| {
+        let host = Fake::with(|f| f.window = false);
+        let report = go_builtin("builtin-lol-game-end-cheer", &host, args);
+        assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+        let asked = host.asked.lock().unwrap().clone();
+        asked
+    };
+    for special in [
+        serde_json::json!({"win": true, "damage_rank": 1}),
+        serde_json::json!({"win": false, "damage_rank": 3, "penta_kill": true}),
+        serde_json::json!({"win": false, "damage_rank": 1, "today_loss_streak": 3}),
+        serde_json::json!({"today_loss_streak": 5}),
+    ] {
+        let asked = run(special.clone());
+        assert_eq!(asked.len(), 1, "{special}");
+        assert!(asked[0].contains("没什么特别想说的就不说"), "{}", asked[0]);
+    }
+    for plain in [
+        serde_json::json!({}),
+        serde_json::json!({"win": true, "damage_rank": 2}),
+        serde_json::json!({"win": false, "damage_rank": 1}),
+        serde_json::json!({"today_loss_streak": 2}),
+    ] {
+        assert!(run(plain.clone()).is_empty(), "{plain}");
+    }
+}
+
 /// 旧写法转出来的程序（kotone-core）真的说出和以前一样的话；“让她做”的引号、反斜杠、换行原样交给她。
 #[test]
 fn converted_old_actions_say_the_same_words() {

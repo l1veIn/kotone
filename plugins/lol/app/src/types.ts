@@ -242,6 +242,14 @@ export interface GameData {
   teams: GameTeam[];
   /** 这一局刚结束（结算、“这局总结”自动卡片打开时）。 */
   justEnded?: boolean;
+  /** 卡片上那句预置的话（只在“这局总结”推送里，ADR 050 第 5 条）。 */
+  cheer?: CheerPick | null;
+}
+
+/** 推送卡片上那句预置的话：哪一档、第几句（句子在 messages 里，`format.ts` 的 `cheerLine` 取）。 */
+export interface CheerPick {
+  tier: string;
+  index: number;
 }
 
 export function isGameData(value: unknown): value is GameData {
@@ -415,6 +423,8 @@ export interface TodayData {
   wins: number;
   losses: number;
   streak: number;
+  /** 那句预置的话（连胜连败、胜负差得开时才有，ADR 050 第 5 条）。 */
+  cheer?: CheerPick | null;
   capped: boolean;
   limit: number;
   lostAtLeast: number;

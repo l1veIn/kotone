@@ -130,6 +130,8 @@ test("the match summary card lists each enemy's augments (icon + name), and 我�
   await expect(card.locator(`[data-testid="mcp-app-frame"][data-uri="${GAME}"]`)).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   const app = await appFrame(page, "game");
   await expect(app.getByTestId("lol-app-game")).toHaveAttribute("data-just-ended", "true");
+  // 头部下面那句预置的话（ADR 050 第 5 条）
+  await expect(app.getByTestId("lol-card-cheer")).toHaveText("舒服，下一把");
   const block = app.getByTestId("lol-card-augments");
   await expect(block).toHaveAttribute("data-side", "enemy");
   await expect(block).toContainText("海克斯");
@@ -196,6 +198,8 @@ test("the today card states today's games, the streak and the champions that los
   await expect(streak).toHaveText("现在 2 连败");
   await expect(streak).toHaveAttribute("data-streak", "-2");
   await expect(app.getByTestId("lol-today-recent").locator(".rg")).toHaveCount(5);
+  // 那句预置的话（ADR 050 第 5 条）：5 局 2 胜 3 负，负多胜少那一档
+  await expect(app.getByTestId("lol-today-cheer")).toHaveText("慢慢来，会赢回来的");
   // 今天输了 2 局以上：亚索 3 局 1 胜 2 负（只写事实，不评价人）
   await expect(root).toContainText("今天输了 2 局以上");
   const lost = app.getByTestId("lol-today-lost");
@@ -219,6 +223,8 @@ test("the today card states today's games, the streak and the champions that los
   await expect(moved.getByTestId("lol-today-head")).toContainText("今天 6 局 · 3 胜 3 负", { timeout: 10_000 });
   await expect(moved.getByTestId("lol-today-streak")).toHaveText("上一局赢了");
   await expect(moved.getByTestId("lol-today-recent").locator(".rg")).toHaveCount(6);
+  // 3 胜 3 负打平：没有那句话
+  await expect(moved.getByTestId("lol-today-cheer")).toHaveCount(0);
   await expect(page.getByTestId("push-item")).toHaveCount(1);
 });
 
@@ -229,7 +235,7 @@ test("the today card fits a narrow window (the floating window's mini window is 
   const app = await appFrame(page, "today");
   await expect(app.getByTestId("lol-today-head")).toBeVisible();
   await narrow(app, "lol-app-today");
-  for (const id of ["lol-today-head", "lol-today-lost", "lol-today-modes"]) {
+  for (const id of ["lol-today-cheer", "lol-today-head", "lol-today-lost", "lol-today-modes"]) {
     const el = app.getByTestId(id);
     expect(await el.evaluate((e) => e.scrollWidth <= e.clientWidth + 1), id).toBe(true);
   }

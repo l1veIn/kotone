@@ -180,8 +180,14 @@ export function sampleToday(games = 5, date = "2026-11-26") {
   const n = run < 0 ? list.length : run;
   const yasuo = list.filter(([id]) => id === 157);
   const yasuoWins = yasuo.filter(([, w]) => w).length;
+  const streak = list.length ? (first ? n : -n) : 0;
+  // 那句预置的话（ADR 050 第 5 条）：和插件的 today_page 同一个规矩（三连胜 / 三连败以上、3 局以上胜多负少 / 负多胜少；
+  // 按日期里的数字 + 局数挑，今天的每档 6 句）
+  const tier = streak >= 3 ? "today_hot" : streak <= -3 ? "today_cold"
+    : list.length < 3 || wins * 2 === list.length ? null : wins * 2 > list.length ? "today_up" : "today_down";
+  const cheer = tier ? { tier, index: (Number(date.replace(/\D/g, "")) + list.length) % 6 } : null;
   return {
-    date, games: list.length, wins, losses: list.length - wins, streak: list.length ? (first ? n : -n) : 0, capped: false, limit: 20,
+    date, games: list.length, wins, losses: list.length - wins, streak, cheer, capped: false, limit: 20,
     lostAtLeast: 2,
     lostOften: yasuo.length - yasuoWins >= 2 ? [{ champion: champion(157), games: yasuo.length, wins: yasuoWins, losses: yasuo.length - yasuoWins }] : [],
     modes: [{ queueId: 2400, queue: QUEUE, games: list.length - 1, wins: Math.max(0, wins - 1) }, { queueId: 420, queue: "单双排", games: 1, wins: 1 }],
@@ -201,6 +207,8 @@ export function sampleSummary(gameId = 9_100_000) {
   ];
   return {
     ...game, justEnded: true,
+    // 卡片上那句预置的话（ADR 050 第 5 条）：赢了、伤害不是全队第一，“赢了”那一档的第一句
+    cheer: { tier: "win", index: 0 },
     teams: game.teams.map((t, ti) => ({
       ...t, ally: ti === 0,
       players: t.players.map((p, i) => ({ ...p, me: ti === 0 && i === 0, augments: [0, 1, 2, 3].map((k) => pool[(i + ti * 3 + k * 2) % pool.length]) })),

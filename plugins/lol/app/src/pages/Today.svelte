@@ -4,6 +4,7 @@
   // （宿主再推一次结果，这里跟着重画）。只写事实，都从我自己的战绩算：今天几局几胜几负、胜率、现在几连胜 / 连败、
   // 今天每一局的英雄小头像（新的在前，和“这局”的近况一样）、今天输了 2 局以上的英雄、各个模式几局。
   // 要窄的时候也看得清（悬浮窗的小窗约 360 px）：一行一件事，小头像放不下就换行。
+  // 头部下面一行是插件挑的一句预置的话（`cheer`，ADR 050 第 5 条：连胜连败、胜负差得开时才有）。
   import { onMount } from "svelte";
   import ChampIcon from "../components/ChampIcon.svelte";
   import Footer from "../components/Footer.svelte";
@@ -11,6 +12,7 @@
   import Recent from "../components/Recent.svelte";
   import type { PageId } from "../components/TopBar.svelte";
   import type { DisplayMode, Session, ToolResult } from "../host";
+  import { cheerLine } from "../format";
   import { m } from "../i18n.svelte";
   import { isTodayData, type TodayData } from "../types";
 
@@ -54,6 +56,7 @@
     : today.streak <= -2 ? m.plugin_lol_today_loss_streak({ count: -today.streak })
     : today.streak > 0 ? m.plugin_lol_today_last_win() : m.plugin_lol_today_last_loss(),
   );
+  const cheer = $derived(cheerLine(today?.cheer));
   const streakTone = $derived(!today || Math.abs(today.streak) < 2 ? "" : today.streak > 0 ? "good" : "bad");
 </script>
 
@@ -68,6 +71,7 @@
             onclick={() => void session.requestDisplayMode("fullscreen")}><Icon name="open" /></button>
         {/if}
       </div>
+      {#if cheer}<p class="card-cheer" data-testid="lol-today-cheer">{cheer}</p>{/if}
       <div class="line head" data-testid="lol-today-head">
         <b class="num">{m.plugin_lol_today_head({ games: today.games, wins: today.wins, losses: today.losses })}</b>
         <span class="muted num">{m.plugin_lol_today_rate({ rate })}</span>

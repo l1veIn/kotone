@@ -161,6 +161,8 @@ export type RunSavedResult =
 export const BUILTIN_REMIND_ID = "builtin-remind-later";
 /** 内置模板“英雄联盟进加载界面播报突破口”（默认关）。 */
 export const BUILTIN_LOL_SCOUT_ID = "builtin-lol-scout-on-loading";
+/** 内置的“英雄联盟这局打得特别好或特别差时她说几句”（按“这局结算了”触发，默认开，ADR 050）。 */
+export const BUILTIN_LOL_GAME_END_ID = "builtin-lol-game-end-cheer";
 
 /** 定时的常用写法（界面里选）；其余写 cron。 */
 export type SchedulePreset =
