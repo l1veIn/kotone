@@ -114,7 +114,7 @@ fn run(games: &[LiveGame], data: Option<&GameData>, spells: &[SpellUse]) -> Vec<
     let mut alerts = Alerts::default();
     games
         .iter()
-        .map(|g| (g.time, alerts.step(9100001, g, data, spells)))
+        .map(|g| (g.time, alerts.step(9100001, None, g, data, spells)))
         .collect()
 }
 
@@ -137,10 +137,27 @@ fn assert_well_formed(push: &Push) {
         assert!(v.chars().count() <= Push::VOICE_MAX, "{v}");
     }
     if let Some(line) = &push.line {
+        let max = if line.cells.len() == 1 {
+            PushCell::ONE_CELL_MAX_CHARS
+        } else {
+            PushCell::MAX_CHARS
+        };
         for c in &line.cells {
-            assert!(c.text.chars().count() <= PushCell::MAX_CHARS, "{}", c.text);
+            assert!(c.text.chars().count() <= max, "{}", c.text);
         }
     }
+}
+
+/// 一行的几格连起来（“对面洛克 帽子 / 我方卡牌 兰德里”）。
+fn line_text(push: &Push) -> String {
+    push.line
+        .as_ref()
+        .unwrap()
+        .cells
+        .iter()
+        .map(|c| c.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 /// 等级、装备事件（`lol.level`、`lol.item`）：照录的一整把海斗。只报对面和自己；自己每升一级都报（佛耶戈附身换了英雄也
@@ -232,8 +249,9 @@ fn level_and_item_events_over_a_whole_mayhem_game() {
         .all(|id| crate::client::events::KEY_ITEM_IDS.contains(&base_item(*id))));
 }
 
-/// 那一把海斗里的提醒：双方到 6 级的关键英雄和你自己各提醒一次；维克托出了中娅、岩雀（湮灭宝珠）和蕾欧娜
-/// （棘刺背心）第一次有了重伤各说一次；没有峡谷资源；对面同时死 3 个的时候很多，但还要 30 秒以上才复活的到 3 个只有
+/// 那一把海斗里的提醒：双方到 6 级的关键英雄和你自己各提醒一次；出成装了（2026-11-28 改）：对面每件成装说一句
+/// （用玩家的叫法：帽子、大米、血手……，没有叫法的用客户端里的名字），维克托的中娅、岩雀（湮灭宝珠）和蕾欧娜（棘刺背心）
+/// 第一次有了重伤也说；队友和你自己的成装只显示一行；佛耶戈（我）附身时身上的是别人的装备，不算你出的；没有峡谷资源；对面同时死 3 个的时候很多，但还要 30 秒以上才复活的到 3 个只有
 /// 17 分钟那一次（以前的规矩“同时死了 3 个、45 秒一次”在这把里说了 9 次）；我每次阵亡同一张卡片原地更新，第二次起再弹一次。
 #[test]
 fn alerts_over_a_whole_mayhem_game() {
@@ -256,20 +274,83 @@ fn alerts_over_a_whole_mayhem_game() {
     assert_eq!(ults[0].1.line.as_ref().unwrap().cells[0].text, "对面岩雀");
     assert_eq!(ults[1].1.voice[0], "我方寒冰 6 级了");
     let items = pushes_of(&outs, PUSH_ENEMY_ITEM);
-    let said: Vec<&str> = items.iter().map(|(_, p)| p.voice[0].as_str()).collect();
+    let said: Vec<&str> = items
+        .iter()
+        .filter(|(_, p)| !p.voice.is_empty())
+        .map(|(_, p)| p.voice[0].as_str())
+        .collect();
     assert_eq!(
         said,
         [
+            "对面洛克出了风暴狂涌",
+            "对面蕾欧娜出了心之钢",
+            "对面安蓓萨出了无穷饥渴，还有 1 件",
+            "对面维克托出了黯炎火炬",
+            "对面洛克出了影焰，还有 1 件",
+            "对面安蓓萨出了死亡之舞",
+            "对面岩雀出了炽天使之拥",
             "对面维克托出了中娅",
             "对面岩雀出了重伤",
-            "对面蕾欧娜出了重伤"
-        ]
+            "对面蕾欧娜出了贾修",
+            "对面安蓓萨出了狂妄",
+            "对面洛克出了虚空",
+            "对面蕾欧娜出了重伤",
+            "对面安蓓萨出了大米",
+            "对面蕾欧娜出了兰顿，还有 1 件",
+            "对面岩雀出了影焰",
+            "对面洛克出了帽子",
+            "对面维克托出了帽子",
+            "对面安蓓萨出了血手，还有 2 件",
+        ],
+        "只说对面的（这把我方没出关键装备）"
     );
+    let vik = items
+        .iter()
+        .find(|(_, p)| p.voice.first().map(String::as_str) == Some("对面维克托出了中娅"))
+        .unwrap();
     assert_eq!(
-        items[0].1.voice,
+        vik.1.voice,
         ["对面维克托出了中娅", "维克托出了中娅", "对面维克托有中娅了"],
         "几个说法各不一样"
     );
+    // 队友和你自己的成装：只有一行，不出声
+    let quiet: Vec<String> = items
+        .iter()
+        .filter(|(_, p)| p.voice.is_empty())
+        .map(|(_, p)| line_text(p))
+        .collect();
+    for line in [
+        "我方易出了破败",
+        "你出了收集者",
+        "你出了大米",
+        "我方卡牌出了帽子",
+    ] {
+        assert!(quiet.iter().any(|l| l == line), "{line}：{quiet:?}");
+    }
+    assert!(
+        quiet.iter().all(|l| !l.contains("对面")),
+        "对面的都出声：{quiet:?}"
+    );
+    // 一行里两边都有：对面的打头；这一轮只有队友是安静的，语音只说对面那个
+    let mixed = items
+        .iter()
+        .find(|(_, p)| line_text(p) == "对面洛克 帽子 / 我方卡牌 兰德里")
+        .unwrap();
+    assert_eq!(mixed.1.voice[0], "对面洛克出了帽子");
+    // 佛耶戈（我）附身成蕾欧娜、安蓓萨时身上是她们的装备：不算你出的（蕾欧娜的心之钢、安蓓萨的死亡之舞）
+    let all = items
+        .iter()
+        .map(|(_, p)| line_text(p))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    assert!(
+        !all.contains("你 心之钢") && !all.contains("你出了心之钢"),
+        "{all}"
+    );
+    assert!(!all.contains("你 死亡之舞 / 你 无穷饥渴"), "{all}");
     assert!(
         pushes_of(&outs, PUSH_OBJECTIVE).is_empty(),
         "海斗没有峡谷资源"
@@ -427,8 +508,8 @@ fn death_events_over_a_whole_mayhem_game() {
     // 换一局（对局 id 变了）：第一份只记下样子
     let mut alerts = Alerts::default();
     let dead_at = games.iter().position(|g| g.me().unwrap().dead).unwrap();
-    alerts.step(1, &games[dead_at - 1], Some(&data), &[]);
-    let out = alerts.step(2, &games[dead_at], Some(&data), &[]);
+    alerts.step(1, None, &games[dead_at - 1], Some(&data), &[]);
+    let out = alerts.step(2, None, &games[dead_at], Some(&data), &[]);
     assert!(out.events.is_empty() && out.pushes.is_empty());
 }
 
@@ -440,19 +521,23 @@ fn grievous_wounds_whatever_you_play() {
     for me in [None, Some("Soraka")] {
         let outs = run(&frames(me), Some(&data), &[]);
         let items = pushes_of(&outs, PUSH_ENEMY_ITEM);
-        let said: Vec<&str> = items.iter().map(|(_, p)| p.voice[0].as_str()).collect();
+        let grievous: Vec<&Push> = items
+            .iter()
+            .map(|(_, p)| *p)
+            .filter(|p| line_text(p).contains("重伤"))
+            .collect();
+        let said: Vec<&str> = grievous.iter().map(|p| p.voice[0].as_str()).collect();
+        assert_eq!(said, ["对面岩雀出了重伤", "对面蕾欧娜出了重伤"], "{me:?}");
         assert_eq!(
-            said,
-            [
-                "对面维克托出了中娅",
-                "对面岩雀出了重伤",
-                "对面蕾欧娜出了重伤"
-            ],
-            "{me:?}"
-        );
-        assert_eq!(
-            items[2].1.voice,
+            grievous[1].voice,
             ["对面蕾欧娜出了重伤", "蕾欧娜出了重伤", "对面蕾欧娜有重伤了"]
+        );
+        // 蕾欧娜之后把棘刺背心合成荆棘之甲：不是第一次有重伤，是成装，照成装说（“反甲”）
+        assert!(
+            items
+                .iter()
+                .any(|(_, p)| line_text(p).contains("对面蕾欧娜 反甲")),
+            "{me:?}"
         );
     }
 }
@@ -473,8 +558,8 @@ fn serpents_fang_is_a_key_item_and_an_upgrade_is_not_new_grievous() {
     g1.players[2].items = vec![item(226695, "巨蛇之牙")];
     g1.players[3].items = vec![item(3075, "荆棘之甲")];
     let mut alerts = Alerts::default();
-    alerts.step(7, &g0, None, &[]);
-    let out = alerts.step(7, &g1, None, &[]);
+    alerts.step(7, None, &g0, None, &[]);
+    let out = alerts.step(7, None, &g1, None, &[]);
     let items: Vec<&Push> = out
         .pushes
         .iter()
@@ -487,7 +572,7 @@ fn serpents_fang_is_a_key_item_and_an_upgrade_is_not_new_grievous() {
     let mut g2 = g1.clone();
     g2.time = 904.0;
     g2.players[3].items.push(item(3123, "死刑宣告"));
-    let out = alerts.step(7, &g2, None, &[]);
+    let out = alerts.step(7, None, &g2, None, &[]);
     assert!(out.pushes.is_empty(), "{:?}", out.pushes);
 }
 
@@ -524,13 +609,15 @@ fn rift(time: f64, level: i64, events: Value) -> LiveGame {
     .unwrap()
 }
 
-/// 峡谷资源刷新前 30 秒：小龙 5:00（之后被拿 + 5 分钟）、巢虫 8:00、先锋 16:00、大龙 20:00（被拿 + 6 分钟）、
-/// 有一边拿到龙魂以后只刷远古龙（+ 6 分钟）。每 2 秒看一份（和主循环一样），每次刷新只说一次。
+/// 峡谷资源刷新前 30 秒：小龙 5:00（之后被拿 + 5 分钟）、巢虫 8:00、先锋 15:00、大龙 20:00（被拿 + 6 分钟）、
+/// 有一边拿到龙魂以后只刷远古龙（+ 6 分钟）。每 2 秒看一份（和主循环一样），每次刷新只说一次；说的是几点刷（宿主晚一点说
+/// 也不会错，2026-11-28 玩家说“不太准”以后改）。
 #[test]
 fn rift_objectives_thirty_seconds_ahead() {
     let kill = |id: i64, t: f64, kind: &str, dragon: &str, killer: &str| json!({"EventID": id, "EventName": kind, "EventTime": t, "DragonType": dragon, "Stolen": "False", "KillerName": killer});
     // 我方拿了 4 条小龙（5:30、11:00、16:30、22:00），22:00 有了龙魂 → 远古龙 28:00；大龙 21:00 被对面拿了 → 27:00
     let all = [
+        json!({"EventID": 0, "EventName": "GameStart", "EventTime": 0.0}),
         kill(1, 330.0, "DragonKill", "Fire", "玩家"),
         kill(2, 660.0, "DragonKill", "Water", "队友"),
         kill(3, 990.0, "DragonKill", "Earth", "玩家"),
@@ -546,31 +633,226 @@ fn rift_objectives_thirty_seconds_ahead() {
             .filter(|e| e["EventTime"].as_f64().unwrap() <= t)
             .cloned()
             .collect();
-        let out = alerts.step(7, &rift(t, 1, Value::Array(events)), None, &[]);
+        let out = alerts.step(7, Some(420), &rift(t, 1, Value::Array(events)), None, &[]);
         for p in out.pushes.iter().filter(|p| p.trigger == PUSH_OBJECTIVE) {
             assert_well_formed(p);
             said.push((t, p.voice[0].clone()));
         }
         t += 2.0;
     }
+    let said: Vec<(f64, &str)> = said.iter().map(|(t, v)| (*t, v.as_str())).collect();
     assert_eq!(
         said,
         [
-            (270.0, "30 秒后小龙刷新".to_string()),
-            (450.0, "30 秒后虚空巢虫刷新".to_string()),
-            (600.0, "30 秒后小龙刷新".to_string()),
-            (930.0, "30 秒后小龙刷新".to_string()),
-            (930.0, "30 秒后峡谷先锋刷新".to_string()),
-            (1170.0, "30 秒后大龙刷新".to_string()),
-            (1260.0, "30 秒后小龙刷新".to_string()),
-            (1590.0, "30 秒后大龙刷新".to_string()),
-            (1650.0, "30 秒后远古龙刷新".to_string()),
+            (270.0, "小龙 5 分刷新"),
+            (450.0, "虚空巢虫 8 分刷新"),
+            (600.0, "小龙 10 分 30 秒刷新"),
+            (870.0, "峡谷先锋 15 分刷新"),
+            (930.0, "小龙 16 分刷新"),
+            (1170.0, "大龙 20 分刷新"),
+            (1260.0, "小龙 21 分 30 秒刷新"),
+            (1590.0, "大龙 27 分刷新"),
+            (1650.0, "远古龙 28 分刷新"),
         ]
     );
-    // 规则表就是 2026 赛季的：大龙 20:00（26.1）、先锋 16:00、巢虫 8:00
+    // 一行：资源和几点刷；几个说法轮着用
+    let push = objectives(
+        &rift(600.0, 1, Value::Array(all[..2].to_vec())),
+        &RIFT_RULES,
+        7,
+    )
+    .into_iter()
+    .find(|p| p.key == "objective:7:dragon:630")
+    .unwrap();
+    assert_eq!(
+        push.line.as_ref().unwrap().cells,
+        [cell("小龙", Some(PushTone::Ok)), cell("10:30 刷新", None)]
+    );
+    assert_eq!(
+        push.voice,
+        [
+            "小龙 10 分 30 秒刷新",
+            "10 分 30 秒刷小龙",
+            "小龙快刷了，10 分 30 秒"
+        ]
+    );
+    // 规则表就是 2026 赛季的：大龙 20:00（26.1）、先锋 15:00（25.09）、巢虫 8:00
     assert_eq!(RIFT_RULES.baron_first, 1200.0);
-    assert_eq!(RIFT_RULES.herald, Some(960.0));
+    assert_eq!(RIFT_RULES.herald, Some(900.0));
     assert_eq!(RIFT_RULES.grubs, Some(480.0));
+}
+
+/// 刚连上（或者一轮慢了）的时候已经在“刷新前 30 秒”里：照说（说的是几点刷，晚说也对），只说一次；刷了以后不说。
+#[test]
+fn an_objective_already_inside_the_lead_is_still_said_once() {
+    let mut alerts = Alerts::default();
+    assert!(alerts
+        .step(7, None, &rift(281.0, 1, json!([])), None, &[])
+        .pushes
+        .is_empty());
+    let out = alerts.step(7, None, &rift(283.0, 1, json!([])), None, &[]);
+    let said: Vec<&str> = out
+        .pushes
+        .iter()
+        .filter(|p| p.trigger == PUSH_OBJECTIVE)
+        .map(|p| p.voice[0].as_str())
+        .collect();
+    assert_eq!(said, ["小龙 5 分刷新"]);
+    let again = alerts.step(7, None, &rift(285.0, 1, json!([])), None, &[]);
+    assert!(again.pushes.iter().all(|p| p.trigger != PUSH_OBJECTIVE));
+    // 5:02 才连上：已经刷了，不说
+    let mut late = Alerts::default();
+    late.step(8, None, &rift(302.0, 1, json!([])), None, &[]);
+    let out = late.step(8, None, &rift(304.0, 1, json!([])), None, &[]);
+    assert!(out.pushes.iter().all(|p| p.trigger != PUSH_OBJECTIVE));
+}
+
+/// 快速模式也在峡谷打，资源刷得早：不照峡谷的时间报。局内接口写 `SWIFTPLAY` 的、写 `CLASSIC` 但这局的队列是 480 的都不报；
+/// 技能转好照旧按分路叫。
+#[test]
+fn swiftplay_gets_no_rift_timers() {
+    let said = |queue: Option<i64>, mode: &str| -> usize {
+        let mut alerts = Alerts::default();
+        let mut n = 0;
+        for t in [268.0, 270.0, 272.0] {
+            let mut g = rift(t, 1, json!([]));
+            g.mode = mode.into();
+            n += alerts
+                .step(7, queue, &g, None, &[])
+                .pushes
+                .iter()
+                .filter(|p| p.trigger == PUSH_OBJECTIVE)
+                .count();
+        }
+        n
+    };
+    assert_eq!(said(Some(420), "CLASSIC"), 1, "排位照报");
+    assert_eq!(said(None, "CLASSIC"), 1, "不知道队列：照 gameMode");
+    assert_eq!(said(Some(SWIFTPLAY_QUEUE), "CLASSIC"), 0);
+    assert_eq!(said(None, "SWIFTPLAY"), 0);
+    assert!(!rift_timers(&rift(1.0, 1, json!([])), Some(480)));
+}
+
+/// 一条拿龙事件（`KillerName` 照局内接口：名字不带编号；隐藏了身份的写英雄的称号）。
+fn dragon(id: i64, t: f64, kind: &str, killer: &str) -> Value {
+    json!({"EventID": id, "EventName": "DragonKill", "EventTime": t, "DragonType": kind, "Stolen": "False", "KillerName": killer})
+}
+
+/// 从 `GameStart`（0）起编好号的事件列表。
+fn numbered(events: Vec<Value>) -> Value {
+    let mut all = vec![json!({"EventID": 0, "EventName": "GameStart", "EventTime": 0.0})];
+    all.extend(events);
+    for (i, e) in all.iter_mut().enumerate() {
+        e["EventID"] = json!(i);
+    }
+    Value::Array(all)
+}
+
+fn spawn_of(game: &LiveGame, objective: Objective) -> Option<f64> {
+    next_spawns(game, &RIFT_RULES)
+        .into_iter()
+        .find(|(o, _)| *o == objective)
+        .map(|(_, t)| t)
+}
+
+/// 龙魂（2026-11-28 改）：认不出拿龙的是谁的那几条不再都算给对面——两边都可能，说不准就不报龙（不把远古龙说成小龙）；
+/// 拿过远古龙就一定有龙魂；两边加起来 7 条一定有一边到了；龙魂那条是最后一条小龙。
+#[test]
+fn dragon_soul_is_not_made_up_from_unknown_killers() {
+    let game = |events: Vec<Value>| rift(1500.0, 11, numbered(events));
+    // 对面 2 条 + 认不出的 2 条：以前算成对面龙魂、报远古龙；现在说不准，不报
+    let g = game(vec![
+        dragon(1, 330.0, "Fire", "敌人一"),
+        dragon(2, 660.0, "Water", "某个路人"),
+        dragon(3, 990.0, "Earth", "敌人二"),
+        dragon(4, 1290.0, "Air", "某个路人"),
+    ]);
+    assert_eq!(spawn_of(&g, Objective::Dragon), None);
+    assert_eq!(spawn_of(&g, Objective::Elder), None);
+    assert_eq!(spawn_of(&g, Objective::Baron), Some(1200.0), "大龙不受影响");
+    // 我方 1 条 + 认不出的 2 条：哪边都到不了 4 条，照旧刷小龙
+    let g = game(vec![
+        dragon(1, 330.0, "Fire", "玩家"),
+        dragon(2, 660.0, "Water", "某个路人"),
+        dragon(3, 990.0, "Earth", "某个路人"),
+    ]);
+    assert_eq!(spawn_of(&g, Objective::Dragon), Some(1290.0));
+    // 3 + 3 + 认不出的 1 条 = 7 条：一定有一边到了，龙魂是最后那条（35:30）→ 远古龙 41:30
+    let mut events: Vec<Value> = (1..=6)
+        .map(|i| {
+            dragon(
+                i,
+                300.0 * i as f64 + 30.0,
+                "Fire",
+                if i % 2 == 0 { "敌人一" } else { "队友" },
+            )
+        })
+        .collect();
+    events.push(dragon(7, 2130.0, "Chemtech", "某个路人"));
+    let g = game(events);
+    assert_eq!(spawn_of(&g, Objective::Dragon), None);
+    assert_eq!(spawn_of(&g, Objective::Elder), Some(2130.0 + 360.0));
+    // 看到了远古龙被拿（之前的小龙认不出是谁的）：一定有龙魂，远古龙被拿 + 6 分钟
+    let g = game(vec![
+        dragon(1, 330.0, "Fire", "某个路人"),
+        dragon(2, 660.0, "Water", "某个路人"),
+        dragon(3, 990.0, "Earth", "敌人一"),
+        dragon(4, 1290.0, "Air", "敌人一"),
+        dragon(5, 1700.0, "Elder", "玩家"),
+    ]);
+    assert_eq!(spawn_of(&g, Objective::Dragon), None);
+    assert_eq!(spawn_of(&g, Objective::Elder), Some(2060.0));
+}
+
+/// `KillerName` 的几种写法都认得：名字不带编号（实录的样子）、带编号的 Riot ID、隐藏了身份的人写英雄的称号；抢的龙算抢的那边。
+#[test]
+fn dragon_killers_are_matched_the_way_the_live_api_names_them() {
+    let events = numbered(vec![
+        dragon(1, 330.0, "Fire", "敌人一"),
+        dragon(2, 660.0, "Water", "敌人一#1"),
+        dragon(3, 990.0, "Earth", "疾风剑豪"),
+        json!({"EventName": "DragonKill", "EventTime": 1290.0, "DragonType": "Air", "Stolen": "True", "KillerName": "敌人三"}),
+    ]);
+    let mut g = rift(1500.0, 11, events);
+    // 对面亚索隐藏了身份：riotId 是 `#`、名字空、summonerName 是称号
+    let yasuo = g.players.iter_mut().find(|p| p.alias == "Yasuo").unwrap();
+    yasuo.riot_id = "#".into();
+    yasuo.name = String::new();
+    yasuo.summoner = "疾风剑豪".into();
+    assert_eq!(g.is_ally_name("疾风剑豪"), Some(false));
+    assert_eq!(g.is_ally_name("敌人一#1"), Some(false));
+    assert_eq!(spawn_of(&g, Objective::Dragon), None, "对面 4 条：龙魂");
+    assert_eq!(spawn_of(&g, Objective::Elder), Some(1290.0 + 360.0));
+}
+
+/// 事件列表缺了几条（编号断了：断线重连、接口漏了）：不知道缺的是不是拿龙、拿大龙，龙和大龙都不报；巢虫、先锋照报。
+#[test]
+fn a_gap_in_the_event_list_drops_dragon_and_baron_timers() {
+    let events = json!([
+        {"EventID": 0, "EventName": "GameStart", "EventTime": 0.0},
+        dragon(5, 330.0, "Fire", "玩家"),
+    ]);
+    let g = rift(800.0, 9, events);
+    let kinds: Vec<Objective> = next_spawns(&g, &RIFT_RULES)
+        .into_iter()
+        .map(|(o, _)| o)
+        .collect();
+    assert_eq!(kinds, [Objective::Grubs, Objective::Herald]);
+    // 编号连着：都在
+    let g = rift(800.0, 9, numbered(vec![dragon(1, 330.0, "Fire", "玩家")]));
+    let kinds: Vec<Objective> = next_spawns(&g, &RIFT_RULES)
+        .into_iter()
+        .map(|(o, _)| o)
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            Objective::Dragon,
+            Objective::Grubs,
+            Objective::Herald,
+            Objective::Baron
+        ]
+    );
 }
 
 /// 峡谷里到 6 级：慎（全图大招）按外号叫，对线的亚索按分路叫（“对面中单”），下路卢锡安两样都不是、不说。
@@ -578,8 +860,8 @@ fn rift_objectives_thirty_seconds_ahead() {
 #[test]
 fn level_six_names_long_ults_and_the_lane_opponent() {
     let mut alerts = Alerts::default();
-    alerts.step(7, &rift(400.0, 5, json!([])), None, &[]);
-    let out = alerts.step(7, &rift(402.0, 6, json!([])), None, &[]);
+    alerts.step(7, None, &rift(400.0, 5, json!([])), None, &[]);
+    let out = alerts.step(7, None, &rift(402.0, 6, json!([])), None, &[]);
     let ult: Vec<&Push> = out
         .pushes
         .iter()
@@ -589,7 +871,7 @@ fn level_six_names_long_ults_and_the_lane_opponent() {
     assert_well_formed(ult[0]);
     assert_eq!(ult[0].voice[0], "对面慎、中单 6 级了");
     assert_eq!(ult[0].key, "enemy-ult:7:402");
-    let again = alerts.step(7, &rift(404.0, 7, json!([])), None, &[]);
+    let again = alerts.step(7, None, &rift(404.0, 7, json!([])), None, &[]);
     assert!(again.pushes.iter().all(|p| p.trigger != PUSH_ENEMY_ULT));
     // 大乱斗：同样的人，没有分路 → 只有慎
     let aram = |t: f64, level: i64| {
@@ -601,8 +883,8 @@ fn level_six_names_long_ults_and_the_lane_opponent() {
         g
     };
     let mut alerts = Alerts::default();
-    alerts.step(8, &aram(400.0, 5), None, &[]);
-    let out = alerts.step(8, &aram(402.0, 6), None, &[]);
+    alerts.step(8, None, &aram(400.0, 5), None, &[]);
+    let out = alerts.step(8, None, &aram(402.0, 6), None, &[]);
     let ult: Vec<&Push> = out
         .pushes
         .iter()
@@ -626,8 +908,8 @@ fn simultaneous_milestones_show_both_teams_and_the_player() {
     after.players[1].items = vec![item(3102)];
     after.players[2].items = vec![item(3157)];
     let mut alerts = Alerts::default();
-    assert!(alerts.step(7, &before, None, &[]).pushes.is_empty());
-    let out = alerts.step(7, &after, None, &[]);
+    assert!(alerts.step(7, None, &before, None, &[]).pushes.is_empty());
+    let out = alerts.step(7, None, &after, None, &[]);
     assert_eq!(out.pushes.len(), 2);
     let levels = &out.pushes[0];
     assert_eq!(levels.trigger, PUSH_ENEMY_ULT);
@@ -654,7 +936,148 @@ fn simultaneous_milestones_show_both_teams_and_the_player() {
     );
     assert_eq!(items.voice[0], "对面慎出中娅，你出水银");
     after.time = 404.0;
-    assert!(alerts.step(7, &after, None, &[]).pushes.is_empty());
+    assert!(alerts.step(7, None, &after, None, &[]).pushes.is_empty());
+}
+
+/// 峡谷用的一小份装备资料（照 2026-11-23 录的 `items.json`）：无尽之刃、灭世者的死亡之帽、心之钢、海克斯注力刚壁是成装，
+/// 暴风之剑（1300，能合成无尽）不是。
+fn rift_items() -> GameData {
+    let item = |id: i64, name: &str, price: i64, to: Value| json!({"id": id, "name": name, "priceTotal": price, "to": to});
+    GameData::from_json(
+        &Value::Null,
+        &Value::Null,
+        &json!([
+            item(3031, "无尽之刃", 3500, json!([])),
+            item(3089, "灭世者的死亡之帽", 3500, json!([])),
+            item(3084, "心之钢", 3000, json!([])),
+            item(3073, "海克斯注力刚壁", 3000, json!([])),
+            item(1038, "暴风之剑", 1300, json!([3031])),
+        ]),
+        &Value::Null,
+        &Value::Null,
+    )
+}
+
+/// 出成装了（2026-11-28 玩家：“如果某个英雄合成了成装，比如无尽帽子之类的，也直接提醒”）：谁出了成装都提醒，用玩家的
+/// 叫法（无尽、帽子），没有叫法的用局内接口里的名字、再没有用客户端资料里的名字；对面的说一句，队友和你自己的只显示一行；
+/// 小件不算；同一个人同一件只一次。
+#[test]
+fn any_completed_item_is_shown_and_enemy_ones_are_said() {
+    let data = rift_items();
+    let item = |id: i64, name: &str| crate::client::live::LiveItem {
+        id,
+        name: name.into(),
+    };
+    let g0 = rift(900.0, 11, json!([]));
+    let mut alerts = Alerts::default();
+    alerts.step(7, None, &g0, Some(&data), &[]);
+    let items_of = |out: &Out| -> Vec<Push> {
+        out.pushes
+            .iter()
+            .filter(|p| p.trigger == PUSH_ENEMY_ITEM)
+            .cloned()
+            .collect()
+    };
+    // 同一轮：对面慎出了无尽、我方金克丝出了帽子 → 一行两格，只说对面那件
+    let mut g1 = g0.clone();
+    g1.time = 902.0;
+    g1.players[2].items = vec![item(3031, "无尽之刃")];
+    g1.players[1].items = vec![item(3089, "灭世者的死亡之帽")];
+    let out = items_of(&alerts.step(7, None, &g1, Some(&data), &[]));
+    assert_eq!(out.len(), 1);
+    assert_well_formed(&out[0]);
+    assert_eq!(
+        out[0].line.as_ref().unwrap().cells,
+        [
+            cell("对面慎 无尽", Some(PushTone::Bad)),
+            cell("我方金克丝 帽子", Some(PushTone::Good)),
+        ]
+    );
+    assert_eq!(
+        out[0].voice,
+        ["对面慎出了无尽", "慎出了无尽", "对面慎有无尽了"]
+    );
+    // 你自己出了无尽：只有一行，不出声；暴风之剑（小件）不算
+    let mut g2 = g1.clone();
+    g2.time = 904.0;
+    g2.players[0].items = vec![item(3031, "无尽之刃"), item(1038, "暴风之剑")];
+    let out = items_of(&alerts.step(7, None, &g2, Some(&data), &[]));
+    assert_eq!(out.len(), 1);
+    assert_well_formed(&out[0]);
+    assert_eq!(line_text(&out[0]), "你出了无尽");
+    assert!(out[0].voice.is_empty(), "队友和你自己的成装不出声");
+    // 没有叫法的：局内接口里的名字；局内接口没写名字的：客户端资料里的名字（海斗的 id 前面多两位也认得）
+    let mut g3 = g2.clone();
+    g3.time = 906.0;
+    g3.players[2].items.push(item(3084, "心之钢"));
+    let out = items_of(&alerts.step(7, None, &g3, Some(&data), &[]));
+    assert_eq!(line_text(&out[0]), "对面慎出了心之钢");
+    let mut g3 = g3.clone();
+    g3.time = 907.0;
+    g3.players[4].champion = "卢锡安".into();
+    g3.players[4].items = vec![item(223073, "")];
+    let out = items_of(&alerts.step(7, None, &g3, Some(&data), &[]));
+    assert_well_formed(&out[0]);
+    assert_eq!(line_text(&out[0]), "对面卢锡安出了海克斯注力刚壁");
+    assert_eq!(out[0].voice[0], "对面卢锡安出了海克斯注力刚壁");
+    // 慎卖了无尽又买回来：不再说
+    let mut g4 = g3.clone();
+    g4.time = 908.0;
+    g4.players[2].items.retain(|i| i.id != 3031);
+    assert!(items_of(&alerts.step(7, None, &g4, Some(&data), &[])).is_empty());
+    let mut g5 = g4.clone();
+    g5.time = 910.0;
+    g5.players[2].items.push(item(3031, "无尽之刃"));
+    assert!(items_of(&alerts.step(7, None, &g5, Some(&data), &[])).is_empty());
+}
+
+/// 刚连上时身上已经有的成装不说；佛耶戈附身时（英雄和第一次看到时不一样）身上是被附身那个人的装备，附身完又变回来，
+/// 都不算他出了装备。
+#[test]
+fn items_seen_at_connect_and_while_possessing_are_not_new() {
+    let data = rift_items();
+    let item = |id: i64, name: &str| crate::client::live::LiveItem {
+        id,
+        name: name.into(),
+    };
+    let mut g0 = rift(900.0, 11, json!([]));
+    g0.players[2].alias = "Viego".into();
+    g0.players[2].champion = "佛耶戈".into();
+    g0.players[2].items = vec![item(3089, "灭世者的死亡之帽")];
+    let mut alerts = Alerts::default();
+    alerts.step(7, None, &g0, Some(&data), &[]);
+    // 附身成我方金克丝：身上是她的无尽
+    let mut g1 = g0.clone();
+    g1.time = 902.0;
+    g1.players[2].alias = "Jinx".into();
+    g1.players[2].items = vec![item(3031, "无尽之刃")];
+    let out = alerts.step(7, None, &g1, Some(&data), &[]);
+    assert!(
+        out.pushes.iter().all(|p| p.trigger != PUSH_ENEMY_ITEM),
+        "{:?}",
+        out.pushes
+    );
+    // 变回来：帽子是连上时就有的
+    let mut g2 = g0.clone();
+    g2.time = 904.0;
+    let out = alerts.step(7, None, &g2, Some(&data), &[]);
+    assert!(
+        out.pushes.iter().all(|p| p.trigger != PUSH_ENEMY_ITEM),
+        "{:?}",
+        out.pushes
+    );
+    // 自己出了无尽：说
+    let mut g3 = g2.clone();
+    g3.time = 906.0;
+    g3.players[2].items.push(item(3031, "无尽之刃"));
+    let out = alerts.step(7, None, &g3, Some(&data), &[]);
+    let said: Vec<&str> = out
+        .pushes
+        .iter()
+        .filter(|p| p.trigger == PUSH_ENEMY_ITEM)
+        .map(|p| p.voice[0].as_str())
+        .collect();
+    assert_eq!(said, ["对面佛耶戈出了无尽"]);
 }
 
 /// 记下的闪现转好了：峡谷里按分路说（“中单闪现好了”），大乱斗按英雄；只在跨过好的那一刻说一次。
@@ -673,6 +1096,7 @@ fn a_marked_spell_coming_back_is_said_once() {
     for t in [496.0, 498.0, 500.0, 502.0, 504.0] {
         let out = alerts.step(
             7,
+            None,
             &rift(t, 6, json!([])),
             None,
             std::slice::from_ref(&flash),
@@ -717,8 +1141,8 @@ fn a_teamfight_tick_brings_one_push_per_kind_ranked_by_priority() {
         }];
     }
     let mut alerts = Alerts::default();
-    alerts.step(7, &g0, None, &[]);
-    let out = alerts.step(7, &g1, None, &[]);
+    alerts.step(7, None, &g0, None, &[]);
+    let out = alerts.step(7, None, &g1, None, &[]);
     let kinds: Vec<&str> = out.pushes.iter().map(|p| p.trigger.as_str()).collect();
     assert_eq!(kinds, [PUSH_ENEMY_ULT, PUSH_ENEMY_ITEM, PUSH_ENEMIES_DOWN]);
     let priority = |id: &str| crate::manifest().push_spec(id).unwrap().priority;
@@ -740,10 +1164,10 @@ fn a_teamfight_tick_brings_one_push_per_kind_ranked_by_priority() {
     // 下一轮还都死着：不再说
     let mut g2 = g1.clone();
     g2.time = 604.0;
-    let out = alerts.step(7, &g2, None, &[]);
+    let out = alerts.step(7, None, &g2, None, &[]);
     assert!(out.pushes.is_empty(), "{:?}", out.pushes);
     // 换了一局（对局 id 变了）：从头来，第一份只记下样子
-    let out = alerts.step(8, &g1, None, &[]);
+    let out = alerts.step(8, None, &g1, None, &[]);
     assert!(out.pushes.is_empty() && out.events.is_empty());
 }
 
@@ -774,7 +1198,7 @@ fn rift_down(time: f64, respawns: [Option<f64>; 5]) -> LiveGame {
 fn enemies_down_counts_only_long_respawns() {
     let mut alerts = Alerts::default();
     let mut said = |time: f64, respawns: [Option<f64>; 5]| -> Option<String> {
-        let out = alerts.step(7, &rift_down(time, respawns), None, &[]);
+        let out = alerts.step(7, None, &rift_down(time, respawns), None, &[]);
         let push = out
             .pushes
             .into_iter()
@@ -865,6 +1289,16 @@ fn the_manifest_declares_the_in_game_alerts() {
         assert!(!spec.until_done, "{id}");
     }
     assert!(m.page(PAGE_ENEMY_BUILD).is_some());
+    assert_eq!(m.push_spec(PUSH_ENEMY_ITEM).unwrap().title, "出成装了");
+    // 玩家的叫法：不重复、不和关键装备重，都是短的（两三个字，说得顺）
+    let mut ids: Vec<i64> = SHORT_ITEMS.iter().map(|(id, _)| *id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), SHORT_ITEMS.len());
+    for (id, name) in SHORT_ITEMS {
+        assert!(KEY_ITEMS.iter().all(|(k, _)| k != id), "{id}");
+        assert!((2..=4).contains(&name.chars().count()), "{name}");
+    }
     // 关键装备两张表一样（推送和装备事件）
     let ids: Vec<i64> = KEY_ITEMS.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, crate::client::events::KEY_ITEM_IDS);
