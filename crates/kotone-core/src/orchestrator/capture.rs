@@ -19,16 +19,13 @@ impl SessionBeginError {
     }
 }
 
-/// 会话从哪里开始：决定会话 ID 前缀、语音按钮的操作权限与唤醒专用的收音策略。
+/// 会话从哪里开始：决定会话 ID 前缀与呼叫专用的收音策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SessionOrigin {
+    /// 语音输入的热键。
     Hotkey,
-    /// 设置窗口的语音按钮（只有它能操作自己的会话）。
-    WindowVoice,
     /// 语音唤醒（ADR 017），也是呼叫键 / 呼叫按钮的说一句就走：说完即提交。
-    Wake {
-        no_speech_timeout_ms: u32,
-    },
+    Wake { no_speech_timeout_ms: u32 },
     /// 呼叫键的录音笔（ADR 033 2026-11-26 修订）：按一下开始听，再按一下结束、直接交给她
     /// （不判停、没有预览）。会话 ID 和唤醒一样以 `assistant-wake-` 开头，宿主据此认作呼叫来的。
     CallDictation,
@@ -114,25 +111,10 @@ impl Orchestrator {
         if !self.input_ticket_is_current(input_ticket) {
             return Ok(());
         }
-        self.begin_admitted(resumed, purpose, expected_gen, false)
+        self.begin_admitted_with(resumed, purpose, expected_gen, SessionOrigin::Hotkey)
     }
 
-    /// 调用方持有 op；所有来源共享录音入场和失败收尾，owner 只限制操作权限。
-    pub(super) fn begin_admitted(
-        &self,
-        resumed: bool,
-        purpose: SessionPurpose,
-        expected_gen: Option<u64>,
-        assistant_voice_owner: bool,
-    ) -> Result<(), String> {
-        let origin = if assistant_voice_owner {
-            SessionOrigin::WindowVoice
-        } else {
-            SessionOrigin::Hotkey
-        };
-        self.begin_admitted_with(resumed, purpose, expected_gen, origin)
-    }
-
+    /// 调用方持有 op；所有来源共享录音入场和失败收尾。
     pub(super) fn begin_admitted_with(
         &self,
         resumed: bool,
@@ -140,7 +122,6 @@ impl Orchestrator {
         expected_gen: Option<u64>,
         origin: SessionOrigin,
     ) -> Result<(), String> {
-        let assistant_voice_owner = origin == SessionOrigin::WindowVoice;
         if !self.runtime_inputs_enabled.load(Ordering::SeqCst) {
             return Err("运行时已停止，不能开始新会话".into());
         }
@@ -162,7 +143,7 @@ impl Orchestrator {
                 };
                 None
             }
-            _ => None,
+            SessionOrigin::Hotkey => None,
         };
         // 要玩家再按一下才结束（录音笔）：告诉界面（气泡上写“再按呼叫键结束”）。
         let manual_stop = origin == SessionOrigin::CallDictation;
@@ -189,29 +170,15 @@ impl Orchestrator {
                 return Ok(());
             }
             inner.purpose = purpose;
-            // 在入场时确定请求去向，保留至预览、重试以及提醒到期。
-            let legacy_reminder = purpose == SessionPurpose::Assistant
-                && !matches!(
-                    origin,
-                    SessionOrigin::Wake { .. } | SessionOrigin::CallDictation
-                )
-                && settings.ui.legacy_upgrade.has_legacy_reminders();
             let source = match origin {
-                SessionOrigin::WindowVoice => "assistant-ui-voice-",
                 SessionOrigin::Wake { .. } | SessionOrigin::CallDictation => "assistant-wake-",
                 SessionOrigin::Hotkey => "session-",
             };
             inner.process_case_id = Some(format!(
-                "{}{source}{}-{}",
-                if legacy_reminder {
-                    LEGACY_REMINDER_SESSION_PREFIX
-                } else {
-                    ""
-                },
+                "{source}{}-{}",
                 crate::eval::new_session_id(),
                 NEXT_PROCESS_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             ));
-            inner.assistant_voice_owner = assistant_voice_owner;
         }
         match self.begin_locked(
             resumed,
@@ -514,7 +481,7 @@ impl Orchestrator {
         drop(inner);
         let listening_payload = match vad_warning_code {
             Some(_) => Some(json!({
-                "warning": self.vad_fallback_warning(),
+                "warning": VAD_FALLBACK_WARNING,
                 "manualStop": true
             })),
             None => manual_stop.then(|| json!({ "manualStop": true })),
@@ -559,7 +526,7 @@ impl Orchestrator {
             self.emit_state(
                 OrchestratorState::Listening,
                 Some(json!({
-                    "warning": self.vad_fallback_warning(),
+                    "warning": VAD_FALLBACK_WARNING,
                     "manualStop": true,
                     "preserveText": true
                 })),

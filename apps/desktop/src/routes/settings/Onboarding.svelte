@@ -20,9 +20,7 @@
     listProfiles,
     setHotkey,
     updateSettings,
-    companionBindings,
   } from "../../lib/ipc";
-  import { hasLegacyReminders } from "../../lib/ipc/contracts";
   import { captureHotkey } from "../../lib/hotkeyCapture";
   import { hotkeyLabel } from "../../lib/hotkeyCombo";
   import { firstConflictName } from "../../lib/hotkeyNames";
@@ -54,7 +52,7 @@
   const RECOMMENDED_CALL_KEY = "Ctrl+Backquote";
 
   // ---------- 升级欢迎：读他现在的语音输入设置 ----------
-  let summary = $state<{ hotkey: string; mode: string; asr: string; asrOnline: boolean; game: string; reminders: boolean } | null>(null);
+  let summary = $state<{ hotkey: string; mode: string; asr: string; asrOnline: boolean; game: string } | null>(null);
   const modeNames: Record<string, string> = { "push-to-talk": m.shell_onboarding_mode_push_to_talk(), dictation: m.shell_onboarding_mode_dictation(), "one-shot": m.shell_onboarding_mode_one_shot(), solo: m.shell_onboarding_mode_solo() };
   onMount(async () => {
     if (mode !== "upgrade") return;
@@ -70,7 +68,6 @@
         asr: model?.displayName.replace(/（.*$/, "") ?? m.shell_onboarding_asr_fallback_name(),
         asrOnline: model?.backend === "remote",
         game: profiles.find((item) => item.id === settings.activeProfileId)?.displayName ?? m.shell_onboarding_game_generic(),
-        reminders: hasLegacyReminders(settings.ui) && !!settings.assistant.hotkey.trim(),
       };
     } catch {
       summary = null;
@@ -108,7 +105,6 @@
   }
 
   // ---------- 已连接：设呼叫键 ----------
-  const legacyOptedIn = $derived($settingsStore?.ui.legacyUpgrade === "optedIn");
   let callKey = $state("");
   let callKeyTouched = false;
   let capturing = $state(false);
@@ -120,7 +116,7 @@
 
   function onConnected(next: DeepSeekSetupResult) {
     result = next;
-    const current = companionBindings(next.settings.assistant)?.hotkey?.trim() ?? "";
+    const current = next.settings.assistant.hotkey?.trim() ?? "";
     // 新用户本来就有 ~；升级用户默认空，推荐 ~（玩家点一下才用）。
     callKey = current;
     callKeyTouched = false;
@@ -131,7 +127,7 @@
   // 从聊天页的 Key 卡片直接进“已连接”：呼叫键取当前值。
   onMount(() => {
     if (initialStep !== "connected") return;
-    callKey = companionBindings($settingsStore?.assistant)?.hotkey?.trim() ?? "";
+    callKey = $settingsStore?.assistant.hotkey?.trim() ?? "";
     if (callKey) void refreshWarnings(callKey);
   });
 
@@ -176,7 +172,7 @@
       const late = callKey ? firstConflictName(await checkHotkey(callKey, "kotone.call")) : null;
       if (late) { conflict = late; toast(false, m.shell_onboarding_call_key_conflict_toast({ conflict: late })); return; }
       // 第一次设呼叫键（ADR 040 D3 的例外）：写进「设置 → 热键」那张表，和在那一页改一样
-      if (callKeyTouched || (companionBindings($settingsStore?.assistant)?.hotkey ?? "") !== callKey) {
+      if (callKeyTouched || ($settingsStore?.assistant.hotkey ?? "") !== callKey) {
         settingsStore.set(await setHotkey("kotone.call", callKey));
       }
       onDone("chat", m.shell_onboarding_first_prompt());
@@ -222,14 +218,14 @@
           <img src={stickerHello} alt="" class="h-11 w-11 shrink-0" />
           <div class="min-w-0">
             <h2 class="m-0 text-lg font-bold">{m.shell_onboarding_upgrade_title()}</h2>
-            <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{m.shell_onboarding_upgrade_no_changes()}</p>
+            <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{m.shell_onboarding_upgrade_no_changes({ name })}</p>
           </div>
         </div>
         <div class="mt-5 rounded-2xl border border-hairline bg-card/70 px-4 py-3" data-testid="onboarding-upgrade-summary">
           <p class="m-0 text-sm font-semibold">{m.shell_onboarding_upgrade_voice_unchanged()}</p>
           {#if summary}
             <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
-              {m.shell_onboarding_upgrade_summary({ hotkey: summary.hotkey, mode: summary.mode, recognition: summary.asrOnline ? m.shell_onboarding_asr_online() : m.shell_onboarding_asr_local(), model: summary.asr, game: summary.game })}{summary.reminders ? m.shell_onboarding_upgrade_summary_reminders() : ""}
+              {m.shell_onboarding_upgrade_summary({ hotkey: summary.hotkey, mode: summary.mode, recognition: summary.asrOnline ? m.shell_onboarding_asr_online() : m.shell_onboarding_asr_local(), model: summary.asr, game: summary.game })}
             </p>
             {#if summary.asrOnline}
               <p class="mt-1 mb-0 text-xs text-primary">{m.shell_onboarding_upgrade_online_hint()}</p>
@@ -293,7 +289,7 @@
           {#each staticWarnings as warning}
             <p class="mt-1 mb-0 text-xs text-warning">⚠ {warning}</p>
           {/each}
-          {#if legacyOptedIn && !callKey}
+          {#if mode === "upgrade" && !callKey}
             <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">{m.shell_onboarding_legacy_hotkeys_kept()}</p>
           {/if}
         </div>

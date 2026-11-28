@@ -455,10 +455,7 @@ impl Host for DesktopHost {
     }
 
     fn companion_enabled(&self) -> bool {
-        !settings(&self.app)
-            .ui
-            .legacy_upgrade
-            .uses_legacy_assistant()
+        !settings(&self.app).ui.legacy_upgrade.voice_input_only()
     }
 
     fn update_settings(&self, patch: Value) -> Result<(), String> {

@@ -23,7 +23,6 @@ use std::{
 
 use serde_json::{Map, Value};
 
-use crate::assistant::LEGACY_REMINDER_SESSION_PREFIX;
 use crate::cancel::CancellationToken;
 use crate::games::GameEvent;
 use crate::reminders::{
@@ -32,6 +31,9 @@ use crate::reminders::{
 };
 
 pub use crate::reminders::now_ms;
+
+/// 从 0.1.x `reminders.json` 导入的提醒，执行记录的会话 ID 带这个前缀（只是标记来源）。
+const IMPORTED_REMINDER_SESSION_PREFIX: &str = "legacy-reminder-";
 
 /// 同时运行、绑了游戏窗口的执行上限（ADR 045 D5）；不用窗口的（提醒、只说话的）不占名额。
 pub const MAX_RUNNING_PROGRAMS: usize = 3;
@@ -624,7 +626,7 @@ impl AutomationScheduler {
             }
             next.runs.push(Run {
                 id: reminder.id,
-                session_id: format!("{LEGACY_REMINDER_SESSION_PREFIX}{}", reminder.session_id),
+                session_id: format!("{IMPORTED_REMINDER_SESSION_PREFIX}{}", reminder.session_id),
                 action: RunAction::Program(reminder_action(&reminder.text, &reminder.delivery)),
                 created_at_ms: reminder.created_at_ms,
                 due_at_ms: reminder.due_at_ms,

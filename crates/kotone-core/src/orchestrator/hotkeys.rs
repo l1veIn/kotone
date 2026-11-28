@@ -24,34 +24,16 @@ impl Orchestrator {
     ) -> InteractionPolicy {
         match purpose {
             SessionPurpose::Dictation => InteractionPolicy::from_settings(settings),
+            // 她的会话由呼叫开始（说一句就走 / 录音笔，见 `begin_admitted_with`），不跟着任何热键设置
             SessionPurpose::Assistant => {
-                InteractionPolicy::from_preset(settings.assistant.interaction_mode.into())
+                InteractionPolicy::from_preset(crate::interaction::InteractionMode::OneShot)
             }
         }
     }
 
-    pub(super) fn hotkey_session_snapshot(&self) -> (OrchestratorState, SessionPurpose, u64, bool) {
+    pub(super) fn hotkey_session_snapshot(&self) -> (OrchestratorState, SessionPurpose, u64) {
         let inner = self.inner.lock().unwrap();
-        (
-            inner.state,
-            inner.purpose,
-            inner.gen,
-            inner
-                .process_case_id
-                .as_deref()
-                .is_some_and(is_legacy_reminder_session),
-        )
-    }
-
-    fn is_legacy_assistant_hotkey(&self, purpose: SessionPurpose) -> bool {
-        purpose == SessionPurpose::Assistant
-            && self
-                .settings
-                .read()
-                .unwrap()
-                .ui
-                .legacy_upgrade
-                .has_legacy_reminders()
+        (inner.state, inner.purpose, inner.gen)
     }
 
     /// toggle 触发键（A2 点按事件）按状态路由：
@@ -72,19 +54,8 @@ impl Orchestrator {
             return;
         }
         // 另一用途的热键只能取消旧会话，不结束它、确认它或把结果交给另一条管线。
-        let (state, active_purpose, gen, legacy_reminder) = self.hotkey_session_snapshot();
-        if self.inner.lock().unwrap().assistant_voice_owner
-            && !matches!(
-                state,
-                OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
-            )
-        {
-            return;
-        }
-        if state != OrchestratorState::Idle
-            && (active_purpose != purpose
-                || legacy_reminder != self.is_legacy_assistant_hotkey(purpose))
-        {
+        let (state, active_purpose, gen) = self.hotkey_session_snapshot();
+        if state != OrchestratorState::Idle && active_purpose != purpose {
             self.cancel_inner(Some(ticket), Some(gen)).await;
             return;
         }
@@ -153,19 +124,8 @@ impl Orchestrator {
         if !self.input_ticket_is_current(Some(ticket)) {
             return;
         }
-        let (state, active_purpose, gen, legacy_reminder) = self.hotkey_session_snapshot();
-        if self.inner.lock().unwrap().assistant_voice_owner
-            && !matches!(
-                state,
-                OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
-            )
-        {
-            return;
-        }
-        if state != OrchestratorState::Idle
-            && (active_purpose != purpose
-                || legacy_reminder != self.is_legacy_assistant_hotkey(purpose))
-        {
+        let (state, active_purpose, gen) = self.hotkey_session_snapshot();
+        if state != OrchestratorState::Idle && active_purpose != purpose {
             if pressed {
                 self.cancel_inner(Some(ticket), Some(gen)).await;
             }

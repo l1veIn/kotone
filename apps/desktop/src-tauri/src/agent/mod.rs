@@ -238,7 +238,7 @@ fn store(app: &AppHandle) -> Result<Arc<ConversationStore>, String> {
         .unwrap()
         .ui
         .legacy_upgrade
-        .uses_legacy_assistant()
+        .voice_input_only()
     {
         return Err("还没启用琴音：先在聊天页添加一个 DeepSeek Key".into());
     }

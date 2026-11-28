@@ -73,7 +73,7 @@ impl CommandSpec {
     }
 }
 
-/// 本体自己的命令（来源 `kotone`）。提醒助手热键（D10）、快捷指令（第 3 期，D5）还不是命令；Esc 固定，不能绑。
+/// 本体自己的命令（来源 `kotone`）。快捷指令（第 3 期，D5）还不是命令；Esc 固定，不能绑。
 pub fn core_commands() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(

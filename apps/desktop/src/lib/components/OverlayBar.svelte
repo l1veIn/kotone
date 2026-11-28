@@ -20,16 +20,13 @@
   import {
     confirmSend,
     cancelSession,
-    companionBindings,
     getSettings,
     isTauri,
     dragOverlay,
     overlayGiveBack,
     overlayPointerEnter,
     saveOverlayPosition,
-    hasLegacyReminders,
     type OverlayConfig,
-    type AssistantInteractionMode,
   } from "../ipc";
   import Waveform from "./Waveform.svelte";
   import stickerProud from "../../assets/brand/stickers/proud.webp";
@@ -56,23 +53,11 @@
   /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
   let hotkeyLabel = $state("CapsLock");
   let callHotkeyLabel: string = $state(m.voice_hotkey_name_call());
-  let reminderHotkeyLabel: string = $state(m.voice_overlay_reminder_key());
-  let assistantMode = $state<AssistantInteractionMode>("push-to-talk");
-  const legacyAssistant = $derived($appState.purpose === "assistant" && $appState.legacyReminder);
-  const assistantHotkeyLabel = $derived(legacyAssistant ? reminderHotkeyLabel : callHotkeyLabel);
-  const buttonAssistant = $derived(legacyAssistant && $appState.inputSource === "button");
-  const assistantControl = $derived(buttonAssistant ? m.voice_overlay_control_button() : assistantHotkeyLabel);
-  const legacyListeningHint = $derived({
-    "push-to-talk": m.voice_overlay_legacy_listening_ptt({ control: assistantControl }),
-    dictation: m.voice_overlay_legacy_listening_dictation({ control: assistantControl }),
-    "one-shot": m.voice_overlay_legacy_listening_one_shot(),
-  }[assistantMode]);
-  const assistantListeningHint = $derived(
-    legacyAssistant ? legacyListeningHint : m.voice_overlay_assistant_listening({ hotkey: assistantHotkeyLabel }),
-  );
+  const assistantHotkeyLabel = $derived(callHotkeyLabel);
+  const assistantListeningHint = $derived(m.voice_overlay_assistant_listening({ hotkey: assistantHotkeyLabel }));
   const confirmLabel = $derived($appState.purpose === "assistant" ? m.voice_overlay_confirm_assistant() : m.voice_overlay_confirm_send());
   const confirmHotkey = $derived($appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel);
-  const previewHint = $derived(buttonAssistant ? m.voice_overlay_preview_hint_button() : m.voice_overlay_preview_hint({ hotkey: confirmHotkey, action: confirmLabel }));
+  const previewHint = $derived(m.voice_overlay_preview_hint({ hotkey: confirmHotkey, action: confirmLabel }));
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
   let capsule = $state(false);
   let draggable = $state(true);
@@ -150,13 +135,11 @@
     let unlisten: (() => void) | undefined;
     void (async () => {
       if (isTauri) {
-        const cleanup = await listen<{hotkey: string; assistantHotkey: string; legacyReminderHotkey: string; assistantMode: AssistantInteractionMode}>("kotone://input-config", ({payload}) => {
+        const cleanup = await listen<{hotkey: string; assistantHotkey: string}>("kotone://input-config", ({payload}) => {
           if (disposed) return;
           revision++;
           hotkeyLabel = payload.hotkey;
-          assistantMode = payload.assistantMode;
           callHotkeyLabel = payload.assistantHotkey ? formatHotkey(payload.assistantHotkey) : m.voice_hotkey_name_call();
-          reminderHotkeyLabel = payload.legacyReminderHotkey ? formatHotkey(payload.legacyReminderHotkey) : m.voice_overlay_reminder_key();
         });
         if (disposed) { cleanup(); return; }
         unlisten = cleanup;
@@ -166,10 +149,8 @@
       if (disposed) return;
       if (revision === snapshotRevision) {
         hotkeyLabel = s.hotkey.key;
-        const callHotkey = companionBindings(s.assistant)?.hotkey;
-        assistantMode = s.assistant.interactionMode;
+        const callHotkey = s.assistant.hotkey;
         callHotkeyLabel = callHotkey ? formatHotkey(callHotkey) : m.voice_hotkey_name_call();
-        reminderHotkeyLabel = hasLegacyReminders(s.ui) && s.assistant.hotkey ? formatHotkey(s.assistant.hotkey) : m.voice_overlay_reminder_key();
       }
       applyOverlayConfig(s.overlay);
     })().catch(() => { /* Keep useful defaults if the initial snapshot fails. */ });
@@ -257,7 +238,7 @@
   });
 
   async function onConfirm() {
-    if (sendPending || buttonAssistant) return;
+    if (sendPending) return;
     sendPending = true;
     actionError = "";
     try {
@@ -280,7 +261,7 @@
 
   /** 错误重试：沿用 orchestrator 保留的文本、profile、频道与目标窗口。 */
   async function onRetry() {
-    if (sendPending || buttonAssistant) return;
+    if (sendPending) return;
     actionError = "";
     actionHint = "";
     const text = $appState.errorText ?? $appState.finalText;
@@ -404,7 +385,7 @@
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
           {previewHint}
         </span>
-        {#if mouseInteractive && !buttonAssistant}
+        {#if mouseInteractive}
           <button
             class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onConfirm()}
@@ -435,7 +416,7 @@
         <p class="max-w-[220px] truncate text-sm text-kotone-pink" title={displayError}>
           {displayError}
         </p>
-        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
+        {#if mouseInteractive && $appState.errorText}
           <button
             class="shrink-0 rounded-full bg-kotone-pink/80 px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -446,7 +427,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
-          {#if buttonAssistant}{m.voice_overlay_error_hint_button({ escAction: errorEscAction })}{:else}{$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
+          {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}
         </span>
       {:else}
         <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
@@ -555,13 +536,13 @@
           <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
         </div>
         <p class="text-[11px] leading-tight text-white/45">
-          {buttonAssistant ? previewHint : m.voice_overlay_press_again({ hint: previewHint })}
+          {m.voice_overlay_press_again({ hint: previewHint })}
         </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
         {/if}
       </div>
-      {#if mouseInteractive && !buttonAssistant}
+      {#if mouseInteractive}
         <div class="flex shrink-0 flex-col gap-1.5">
           <button
             class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
@@ -596,7 +577,7 @@
       />
       <div class="min-w-0 flex-1" in:fly={{ y: 6, duration: 200 }}>
         <div class="bubble inline-block max-w-full px-3 py-1.5">
-          <p class="text-sm font-semibold text-white">{$appState.purpose === "assistant" ? m.voice_overlay_success_legacy_assistant() : m.voice_overlay_success_sent()}</p>
+          <p class="text-sm font-semibold text-white">{$appState.purpose === "assistant" ? m.voice_overlay_success_assistant() : m.voice_overlay_success_sent()}</p>
         </div>
         <p class="mt-1 truncate text-xs text-white/55">{$appState.finalText}</p>
       </div>
@@ -624,7 +605,7 @@
         {/if}
       </div>
       <div class="flex shrink-0 flex-col items-end gap-1">
-        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
+        {#if mouseInteractive && $appState.errorText}
           <button
             class="rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -635,7 +616,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="text-[11px] whitespace-nowrap text-white/45">
-          {#if buttonAssistant}{m.voice_overlay_error_hint_button({ escAction: errorEscAction })}{:else}{m.voice_overlay_error_hint({ hotkey: $appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel, action: errorAction, escAction: errorEscAction })}{/if}
+          {m.voice_overlay_error_hint({ hotkey: $appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel, action: errorAction, escAction: errorEscAction })}
         </span>
       </div>
     {:else}

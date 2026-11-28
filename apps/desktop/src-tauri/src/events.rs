@@ -32,13 +32,8 @@ fn on_companion_state(app: &AppHandle, payload: &serde_json::Value) {
 }
 
 /// 琴音（角色）的录音会话：气泡只属于角色、悬浮窗只属于语音输入（ADR 028）。
-/// 0.1.x 的提醒助手仍是语音输入法的一部分，照旧用悬浮窗。
 fn is_companion_session(payload: &serde_json::Value) -> bool {
     payload.pointer("/payload/purpose").and_then(|v| v.as_str()) == Some("assistant")
-        && payload
-            .pointer("/payload/legacyReminder")
-            .and_then(|v| v.as_bool())
-            != Some(true)
 }
 
 impl Emitter for TauriEmitter {

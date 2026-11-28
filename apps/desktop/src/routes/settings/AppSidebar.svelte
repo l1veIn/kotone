@@ -18,7 +18,6 @@
   import ConversationList from "../../lib/agentChat/ConversationList.svelte";
   import { useAgentChat } from "../../lib/agentChat/context";
   import { toast, errText, settingsStore } from "../../lib/stores/ui";
-  import { hasLegacyReminders } from "../../lib/ipc";
   import { sidebarPagesOpen } from "../../lib/stores/navigation";
   import { arrange, canMove, movePage, normalizePrefs, setPageHidden } from "../../lib/sidebarLayout";
   import { footItems as fixedItems, groupLabel, navItems, presentGroups, saveSidebarPrefs, type NavItem, type PageId } from "./sidebarItems";
@@ -47,7 +46,7 @@
   // 组内顺序和隐藏的页面按设置 `ui.sidebar`；整组都藏了就不显示组名。
   const prefs = $derived(normalizePrefs($settingsStore?.ui?.sidebar));
   const items = $derived(navItems($companionName, legacyVoiceOnly));
-  const present = $derived(presentGroups(hasLegacyReminders($settingsStore?.ui)));
+  const present = presentGroups();
   const pageLists = $derived(present.map((g) => g.pages));
   const groups: { label: string; items: Item[] }[] = $derived(
     present

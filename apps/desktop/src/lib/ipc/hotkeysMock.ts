@@ -5,7 +5,7 @@ import type {
   BindablePage, BindableTool, GameKeyKind, GameProfile, HotkeyBinding, HotkeyBindingOptions, HotkeyCheck, HotkeyTable, KeySource,
   KeyUse, NamedHotkeyStatus, Settings,
 } from "./contracts";
-import { companionBindings, hasLegacyReminders, usesLegacyVoiceInput } from "./contracts";
+import { usesLegacyVoiceInput } from "./contracts";
 
 const MAIN_KEYS: Record<string, string> = {
   mouse4: "Mouse4", xbutton1: "Mouse4", mouse5: "Mouse5", xbutton2: "Mouse5", space: "Space", tab: "Tab",
@@ -76,16 +76,14 @@ function commandOf(id: string) {
 }
 
 function mirror(settings: Settings, field: (typeof COMMANDS)[number]["field"]): string {
-  if (field === "call") return companionBindings(settings.assistant)?.hotkey ?? "";
+  if (field === "call") return settings.assistant.hotkey ?? "";
   if (field === "talk") return settings.hotkey.key;
   return settings[field] ?? "";
 }
 
 function setMirror(settings: Settings, field: (typeof COMMANDS)[number]["field"], key: string) {
-  if (field === "call") {
-    if (settings.assistant.companionBindings) settings.assistant.companionBindings.hotkey = key;
-    else settings.assistant.hotkey = key;
-  } else if (field === "talk") settings.hotkey.key = key;
+  if (field === "call") settings.assistant.hotkey = key;
+  else if (field === "talk") settings.hotkey.key = key;
   else settings[field] = key;
 }
 
@@ -98,8 +96,7 @@ const NAMES: Record<string, string> = {
 const PAGE = "设置 → 热键";
 
 function commandRow(settings: Settings, c: (typeof COMMANDS)[number], plugin?: { owner: string; ownerName: string; enabled: boolean }): KeyUse {
-  const field = c.field === "call" ? (settings.ui.legacyUpgrade === "optedIn" ? "assistant.companionBindings.hotkey" : "assistant.hotkey")
-    : c.field === "talk" ? "hotkey.key" : c.field;
+  const field = c.field === "call" ? "assistant.hotkey" : c.field === "talk" ? "hotkey.key" : c.field;
   return entry(c.command, mirror(settings, c.field), plugin ? "plugin" : "core", NAMES[c.command], PAGE, field, {
     command: c.command, statusId: c.statusId, ...(c.defaultKey ? { defaultKey: c.defaultKey } : {}), ...(plugin ?? {}),
   });
@@ -133,9 +130,6 @@ function bindings({ settings, voiceInput, lol }: HotkeySources): KeyUse[] {
   for (const c of COMMANDS.filter((c) => c.command.startsWith("kotone."))) {
     if (legacyOnly && c.command !== "kotone.speech-toggle") continue;
     out.push(commandRow(settings, c));
-  }
-  if (hasLegacyReminders(settings.ui)) {
-    out.push(entry("legacy-reminder", settings.assistant.hotkey, "core", "提醒助手热键", "提醒助手 → 提醒设置", "assistant.hotkey", { statusId: "legacy-reminder" }));
   }
   out.push(entry("escape", "Escape", "fixed", "Esc", "", "", { detail: "取消这次录音；她操作游戏时让她停下" }));
   const plugin = { owner: voiceInput.id, ownerName: voiceInput.name, enabled: voiceInput.enabled };
@@ -403,7 +397,7 @@ export function setHotkey(src: HotkeySources, id: string, key: string): void {
   const isQuick = id.startsWith("custom.") || /^quick-message-\d+$/.test(id);
   const command = commandOf(id);
   const preset = presetOf(id);
-  if (!isQuick && !command && !preset) throw new Error(id === "escape" ? "Esc 是固定的，不能改" : id === "legacy-reminder" ? "提醒助手热键在「提醒助手」页改" : `「${id}」在这里改不了`);
+  if (!isQuick && !command && !preset) throw new Error(id === "escape" ? "Esc 是固定的，不能改" : `「${id}」在这里改不了`);
   // i18n-ignore-end
   if (trimmed) {
     const conflict = checkHotkey(src, trimmed, id).conflicts[0];

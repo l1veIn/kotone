@@ -334,24 +334,23 @@ impl Default for DiagnosticsConfig {
     }
 }
 
-/// 旧版用户的过渡状态。缺少字段的 0.1.x 配置在合并默认值前标为 Pending。
+/// 旧版用户的过渡状态。缺少字段的 0.1.x 配置在合并默认值前标为 Pending（看升级欢迎页）；选了“继续使用语音输入法”
+/// 是 Dismissed（她不出声）。以前启用了她的 `optedIn` 读成 NotNeeded：她的连接和呼叫键在读取时搬回
+/// `assistant.connectionId` / `assistant.hotkey`（ADR 052，见 `migrate_legacy_upgrade_json`），和新用户一样。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LegacyUpgrade {
     #[default]
+    #[serde(alias = "optedIn")]
     NotNeeded,
     Pending,
     Dismissed,
-    OptedIn,
 }
 
 impl LegacyUpgrade {
-    pub fn uses_legacy_assistant(self) -> bool {
+    /// 只用语音输入（还没看升级欢迎页，或选了“继续使用语音输入法”）：她不出声、没有呼叫键和停下热键。
+    pub fn voice_input_only(self) -> bool {
         matches!(self, Self::Pending | Self::Dismissed)
-    }
-
-    pub fn has_legacy_reminders(self) -> bool {
-        self != Self::NotNeeded
     }
 }
 
@@ -749,31 +748,22 @@ impl Default for Settings {
 }
 
 impl Settings {
-    fn companion_bindings(&self) -> Option<&crate::assistant::CompanionBindings> {
-        self.assistant.companion_bindings.as_ref()
-    }
-
+    /// 呼叫她的键。她的连接和呼叫键只在 `assistant.connectionId` / `assistant.hotkey`（ADR 052）；
+    /// 只用语音输入（0.1.x 还没启用她）时没有呼叫键。
     pub fn call_hotkey(&self) -> &str {
-        match self.ui.legacy_upgrade {
-            LegacyUpgrade::NotNeeded => &self.assistant.hotkey,
-            LegacyUpgrade::OptedIn => self.companion_bindings().map_or("", |c| &c.hotkey),
-            LegacyUpgrade::Pending | LegacyUpgrade::Dismissed => "",
-        }
-    }
-
-    pub fn companion_connection_id(&self) -> &str {
-        match self.ui.legacy_upgrade {
-            LegacyUpgrade::NotNeeded => &self.assistant.connection_id,
-            LegacyUpgrade::OptedIn => self.companion_bindings().map_or("", |c| &c.connection_id),
-            LegacyUpgrade::Pending | LegacyUpgrade::Dismissed => "",
-        }
-    }
-
-    pub fn legacy_reminder_hotkey(&self) -> &str {
-        if self.ui.legacy_upgrade.has_legacy_reminders() {
-            &self.assistant.hotkey
-        } else {
+        if self.ui.legacy_upgrade.voice_input_only() {
             ""
+        } else {
+            &self.assistant.hotkey
+        }
+    }
+
+    /// 她用的 API 连接；只用语音输入时没有。
+    pub fn companion_connection_id(&self) -> &str {
+        if self.ui.legacy_upgrade.voice_input_only() {
+            ""
+        } else {
+            &self.assistant.connection_id
         }
     }
 
@@ -783,11 +773,7 @@ impl Settings {
         let is_deepseek = |c: &&crate::connection::Connection| {
             c.provider == "deepseek" || c.base_url.contains("api.deepseek.com")
         };
-        let agent = if self.ui.legacy_upgrade.uses_legacy_assistant() {
-            self.assistant.connection_id.trim()
-        } else {
-            self.companion_connection_id().trim()
-        };
+        let agent = self.assistant.connection_id.trim();
         self.connections
             .iter()
             .filter(is_deepseek)
@@ -1137,6 +1123,13 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
 }
 
 /// 0.1.x 从未写过 Agent、工具服务或呼叫键迁移标记。已试用过 0.2 的配置保留现状。
+///
+/// 提醒助手退掉以后（ADR 052），她的连接和呼叫键只在 `assistant.connectionId` / `assistant.hotkey`：
+/// - `optedIn`（启用了她）：两个字段换成 `companionBindings` 里她自己的，`legacyUpgrade` 写成 `notNeeded`；
+/// - `pending` / `dismissed`（还没启用她）：两个字段原来是旧提醒助手的连接和键，清空，旧连接不会变成她的模型
+///   （连接本身还在「API 连接」里）；以前启用过又选回只用语音输入的，`companionBindings` 一样去掉（再启用时重新设）。
+///
+/// `companionBindings` 读完就去掉。只写旧版本认识的值：两个字符串字段、`legacyUpgrade` 的 `notNeeded`。
 fn migrate_legacy_upgrade_json(user: &mut serde_json::Value) {
     let Some(object) = user.as_object_mut() else {
         return;
@@ -1154,35 +1147,49 @@ fn migrate_legacy_upgrade_json(user: &mut serde_json::Value) {
     else {
         return;
     };
-    let legacy = match ui.get("legacyUpgrade").and_then(|value| value.as_str()) {
+    let opted_in = match ui.get("legacyUpgrade").and_then(|value| value.as_str()) {
         None if !has_agent_settings => {
             ui.insert("legacyUpgrade".into(), "pending".into());
+            false
+        }
+        Some("pending" | "dismissed") => false,
+        Some("optedIn") => {
+            ui.insert("legacyUpgrade".into(), "notNeeded".into());
             true
         }
-        Some("pending" | "dismissed" | "optedIn") => true,
-        _ => false,
+        _ => return,
     };
-    if legacy {
-        // 0.1.x 助手键默认空；显式设置过的键继续用于旧版提醒。
-        if let Some(assistant) = object
-            .entry("assistant")
-            .or_insert_with(|| serde_json::json!({}))
-            .as_object_mut()
-        {
-            assistant.entry("hotkey").or_insert_with(|| "".into());
-        }
-    }
+    let Some(assistant) = object
+        .entry("assistant")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    let bindings = assistant.remove("companionBindings");
+    let hers = |field: &str| {
+        bindings
+            .as_ref()
+            .and_then(|bindings| bindings.get(field))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    // 还没启用她的一律清空：每次读都会走到这里，留着 `companionBindings` 里的值下次读又会被清掉，不如说一不二
+    let (hotkey, connection_id) = if opted_in {
+        (hers("hotkey"), hers("connectionId"))
+    } else {
+        (String::new(), String::new())
+    };
+    assistant.insert("hotkey".into(), hotkey.into());
+    assistant.insert("connectionId".into(), connection_id.into());
 }
 
 /// 默认呼叫键从 ` 改成 Ctrl+`（[`crate::assistant::CALL_HOTKEY_REVISION`]）：更早的配置里还是旧默认的
-/// 呼叫键跟着改，并记上版本，之后玩家自己设回 ` 不会再被改。0.1.x 升级用户的 `assistant.hotkey`
-/// 是他自己设的提醒键，不动；他们的呼叫键在 `companionBindings.hotkey`。
+/// 呼叫键跟着改，并记上版本，之后玩家自己设回 ` 不会再被改。在 [`migrate_legacy_upgrade_json`] 之后跑：
+/// 0.1.x 升级用户的呼叫键那时已经搬到 `assistant.hotkey`（还没启用她的是空的）。
 fn migrate_call_hotkey_json(user: &mut serde_json::Value) {
     use crate::assistant::{CALL_HOTKEY_REVISION, DEFAULT_CALL_HOTKEY, OLD_DEFAULT_CALL_HOTKEY};
-    let legacy = user
-        .pointer("/ui/legacyUpgrade")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| matches!(value, "pending" | "dismissed" | "optedIn"));
     let Some(assistant) = user
         .get_mut("assistant")
         .and_then(|assistant| assistant.as_object_mut())
@@ -1196,19 +1203,12 @@ fn migrate_call_hotkey_json(user: &mut serde_json::Value) {
     if revision >= u64::from(CALL_HOTKEY_REVISION) {
         return;
     }
-    let upgrade = |slot: Option<&mut serde_json::Value>| {
-        if let Some(value) = slot.filter(|value| value.as_str() == Some(OLD_DEFAULT_CALL_HOTKEY)) {
-            *value = DEFAULT_CALL_HOTKEY.into();
-        }
-    };
-    if !legacy {
-        upgrade(assistant.get_mut("hotkey"));
+    if let Some(value) = assistant
+        .get_mut("hotkey")
+        .filter(|value| value.as_str() == Some(OLD_DEFAULT_CALL_HOTKEY))
+    {
+        *value = DEFAULT_CALL_HOTKEY.into();
     }
-    upgrade(
-        assistant
-            .get_mut("companionBindings")
-            .and_then(|bindings| bindings.get_mut("hotkey")),
-    );
     assistant.insert("callHotkeyRevision".into(), CALL_HOTKEY_REVISION.into());
 }
 
@@ -1929,31 +1929,38 @@ mod tests {
         assert_eq!(json["browser"]["enabled"], false);
     }
 
+    const OLD_QWEN: &str = r#"{"id":"old","displayName":"千问","provider":"dashscope","baseUrl":"https://dashscope.aliyuncs.com/compatible-mode/v1","model":"qwen-plus"}"#;
+
     #[test]
-    fn old_profiles_keep_their_voice_and_reminder_settings_without_a_call_key() {
+    fn old_profiles_keep_their_voice_input_settings_but_not_the_reminder_key_or_connection() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let original = serde_json::json!({
-            "hotkey": {"key": "F8", "mode": "hold"},
-            "audioDeviceId": "Test microphone",
-            "assistant": {"interactionMode": "dictation", "connectionId": "old",
-                          "speechEngine": "kokoro", "defaultDelivery": ["danmaku"]},
-            "ui": {"firstRunCompleted": false, "autoStart": true},
-            "lowerSpeakerVolumeWhileListening": true
-        });
+        let original: serde_json::Value = serde_json::from_str(&format!(
+            r#"{{
+                "hotkey": {{"key": "F8", "mode": "hold"}},
+                "audioDeviceId": "Test microphone",
+                "assistant": {{"hotkey": "F9", "interactionMode": "dictation", "connectionId": "old",
+                              "speechEngine": "kokoro", "defaultDelivery": ["danmaku"]}},
+                "connections": [{OLD_QWEN}],
+                "ui": {{"firstRunCompleted": false, "autoStart": true}},
+                "lowerSpeakerVolumeWhileListening": true
+            }}"#
+        ))
+        .unwrap();
         std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
-        let mut old = load_from(&path);
+        let old = load_from(&path);
         assert_eq!(old.ui.legacy_upgrade, LegacyUpgrade::Pending);
         assert!(!old.ui.first_run_completed);
         assert!(old.ui.auto_start);
         assert_eq!(old.hotkey.key, "F8");
         assert_eq!(old.audio_device_id, "Test microphone");
+        // 旧提醒助手的键和连接不留给她（ADR 052）；连接本身还在「API 连接」里
         assert_eq!(old.assistant.hotkey, "");
-        assert_eq!(
-            old.assistant.interaction_mode,
-            crate::assistant::AssistantInteractionMode::Dictation
-        );
-        assert_eq!(old.assistant.connection_id, "old");
+        assert_eq!(old.assistant.connection_id, "");
+        assert_eq!(old.call_hotkey(), "");
+        assert_eq!(old.companion_connection_id(), "");
+        assert_eq!(old.connections.len(), 1);
+        assert_eq!(old.connections[0].id, "old");
         assert_eq!(
             old.assistant.speech_engine,
             crate::assistant::SpeechEngine::Kokoro
@@ -1963,39 +1970,115 @@ mod tests {
             vec![crate::reminders::DeliveryKind::Danmaku]
         );
         assert!(old.lower_speaker_volume_while_listening);
+        // 读取不改文件
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
             original
         );
+    }
 
-        old.ui.legacy_upgrade = LegacyUpgrade::Dismissed;
-        old.assistant.hotkey = "F9".into();
-        save_to(&path, &old).unwrap();
+    #[test]
+    fn dismissed_profiles_lose_the_reminder_key_and_connection_and_stay_voice_input_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"ui":{{"legacyUpgrade":"dismissed","startPage":"voiceInput"}},
+                    "assistant":{{"hotkey":"F9","connectionId":"old"}},"connections":[{OLD_QWEN}]}}"#
+            ),
+        )
+        .unwrap();
         let dismissed = load_from(&path);
         assert_eq!(dismissed.ui.legacy_upgrade, LegacyUpgrade::Dismissed);
-        assert_eq!(dismissed.assistant.hotkey, "F9");
-        assert_eq!(dismissed.legacy_reminder_hotkey(), "F9");
+        assert_eq!(dismissed.ui.start_page, "voiceInput");
+        assert_eq!(dismissed.assistant.hotkey, "");
+        assert_eq!(dismissed.assistant.connection_id, "");
         assert_eq!(dismissed.call_hotkey(), "");
+        assert_eq!(dismissed.connections[0].id, "old");
+        // 存一次再读：还是只用语音输入，旧连接还是不是她的
+        save_to(&path, &dismissed).unwrap();
+        let again = load_from(&path);
+        assert_eq!(again.ui.legacy_upgrade, LegacyUpgrade::Dismissed);
+        assert_eq!(again.assistant.connection_id, "");
+    }
 
-        old.ui.legacy_upgrade = LegacyUpgrade::OptedIn;
-        old.assistant.companion_bindings = Some(crate::assistant::CompanionBindings {
-            hotkey: crate::assistant::DEFAULT_CALL_HOTKEY.into(),
-            connection_id: "game".into(),
-        });
-        save_to(&path, &old).unwrap();
+    #[test]
+    fn opted_in_profiles_move_her_connection_and_call_key_into_assistant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"ui":{{"legacyUpgrade":"optedIn"}},"connections":[{OLD_QWEN}],
+                    "assistant":{{"hotkey":"F9","connectionId":"old","interactionMode":"dictation",
+                                 "companionBindings":{{"hotkey":"Ctrl+Backquote","connectionId":"game"}}}}}}"#
+            ),
+        )
+        .unwrap();
+        let opted_in = load_from(&path);
+        assert_eq!(opted_in.ui.legacy_upgrade, LegacyUpgrade::NotNeeded);
+        assert_eq!(opted_in.assistant.hotkey, "Ctrl+Backquote");
+        assert_eq!(opted_in.assistant.connection_id, "game");
+        assert_eq!(opted_in.call_hotkey(), "Ctrl+Backquote");
+        assert_eq!(opted_in.companion_connection_id(), "game");
+        assert_eq!(opted_in.connections[0].id, "old");
+        save_to(&path, &opted_in).unwrap();
         let disk: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(disk["assistant"]["hotkey"], "F9");
-        assert_eq!(disk["assistant"]["connectionId"], "old");
+        assert_eq!(disk["ui"]["legacyUpgrade"], "notNeeded");
+        assert_eq!(disk["assistant"]["hotkey"], "Ctrl+Backquote");
+        assert_eq!(disk["assistant"]["connectionId"], "game");
+        assert!(disk["assistant"].get("companionBindings").is_none());
+        assert_eq!(load_from(&path).companion_connection_id(), "game");
+    }
+
+    #[test]
+    fn opted_in_without_bindings_never_hands_her_the_reminder_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            br#"{"ui":{"legacyUpgrade":"optedIn"},"assistant":{"hotkey":"F9","connectionId":"old"}}"#,
+        )
+        .unwrap();
         let opted_in = load_from(&path);
-        assert_eq!(opted_in.ui.legacy_upgrade, LegacyUpgrade::OptedIn);
-        assert_eq!(opted_in.legacy_reminder_hotkey(), "F9");
-        assert_eq!(opted_in.assistant.connection_id, "old");
+        assert_eq!(opted_in.ui.legacy_upgrade, LegacyUpgrade::NotNeeded);
+        assert_eq!(opted_in.assistant.hotkey, "");
+        assert_eq!(opted_in.assistant.connection_id, "");
+    }
+
+    #[test]
+    fn going_back_to_voice_input_clears_her_bindings_too() {
+        // 启用过她、又选回“继续使用语音输入法”：她不出声，companionBindings 一样去掉，再启用时重新设
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            br#"{"ui":{"legacyUpgrade":"dismissed"},"assistant":{"hotkey":"F9","connectionId":"old",
+                "companionBindings":{"hotkey":"Ctrl+Backquote","connectionId":"game"}}}"#,
+        )
+        .unwrap();
+        let dismissed = load_from(&path);
+        assert_eq!(dismissed.ui.legacy_upgrade, LegacyUpgrade::Dismissed);
+        assert_eq!(dismissed.assistant.hotkey, "");
+        assert_eq!(dismissed.assistant.connection_id, "");
+        assert_eq!(dismissed.call_hotkey(), "");
+        save_to(&path, &dismissed).unwrap();
+        let disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(disk["assistant"].get("companionBindings").is_none());
+    }
+
+    #[test]
+    fn opted_in_written_by_an_older_build_still_reads() {
+        // 设置接口传进来的旧值（不经过读文件的迁移）也认得
+        let ui: UiConfig = serde_json::from_str(r#"{"legacyUpgrade":"optedIn"}"#).unwrap();
+        assert_eq!(ui.legacy_upgrade, LegacyUpgrade::NotNeeded);
         assert_eq!(
-            opted_in.call_hotkey(),
-            crate::assistant::DEFAULT_CALL_HOTKEY
+            serde_json::to_value(LegacyUpgrade::NotNeeded).unwrap(),
+            "notNeeded"
         );
-        assert_eq!(opted_in.companion_connection_id(), "game");
     }
 
     #[test]
@@ -2048,14 +2131,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(load_from(&path).assistant.hotkey, "F9");
-        // 0.1.x 升级用户：assistant.hotkey 是原来的提醒键，不动；启用琴音后的呼叫键跟着改。
+        // 0.1.x 升级用户：启用她以后的呼叫键（以前在 companionBindings）搬过来以后照样改。
         std::fs::write(
             &path,
-            br#"{"ui":{"legacyUpgrade":"optedIn"},"assistant":{"hotkey":"Backquote","companionBindings":{"hotkey":"Backquote","connectionId":"game"}}}"#,
+            br#"{"ui":{"legacyUpgrade":"optedIn"},"assistant":{"hotkey":"F9","companionBindings":{"hotkey":"Backquote","connectionId":"game"}}}"#,
         )
         .unwrap();
         let upgraded = load_from(&path);
-        assert_eq!(upgraded.assistant.hotkey, "Backquote");
+        assert_eq!(upgraded.assistant.hotkey, "Ctrl+Backquote");
         assert_eq!(upgraded.call_hotkey(), "Ctrl+Backquote");
         // 全新安装直接是新默认。
         let fresh = load_from(&dir.path().join("fresh.json"));
@@ -2096,7 +2179,7 @@ mod tests {
         std::fs::write(&path, br#"{"assistant":{"hotkey":"F9"}}"#).unwrap();
         let old = load_from(&path);
         assert_eq!(old.ui.legacy_upgrade, LegacyUpgrade::Pending);
-        assert_eq!(old.assistant.hotkey, "F9");
+        assert_eq!(old.assistant.hotkey, "", "旧提醒键不留给她（ADR 052）");
     }
 
     #[test]

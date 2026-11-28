@@ -18,7 +18,7 @@
   }
 
   onMount(() => { void refresh(); });
-  $effect(() => { config?.connectionId; config?.companionBindings?.connectionId; config?.companion; $settingsStore?.ocr?.activeModelId; void refresh(); });
+  $effect(() => { config?.connectionId; config?.companion; $settingsStore?.ocr?.activeModelId; void refresh(); });
 </script>
 
 {#if config}

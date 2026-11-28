@@ -10,7 +10,7 @@
   import { Button } from "$lib/components/ui/button";
   import { pluginEnabled, pluginName, setPluginEnabled } from "$lib/plugins";
   import type { PluginPageProps } from "$lib/pluginUi";
-  import { companionBindings, usesLegacyVoiceInput } from "$lib/ipc/contracts";
+  import { usesLegacyVoiceInput } from "$lib/ipc/contracts";
   import { openTarget, type VoiceInputPage } from "$lib/stores/navigation";
   import { pendingPrompt } from "$lib/agentChat/pendingPrompt";
   import { errText, settingsStore, toast } from "$lib/stores/ui";
@@ -53,7 +53,7 @@
   /** 「让 Kotone 帮我配置」：她连好了就请她帮忙（只预填，不经过语音输入）；还没连就先填 Key。 */
   function configure() {
     const s = $settingsStore;
-    const connectionId = companionBindings(s?.assistant)?.connectionId?.trim();
+    const connectionId = s?.assistant.connectionId?.trim();
     if (s && !usesLegacyVoiceInput(s.ui) && connectionId && s.connections.some((c) => c.id === connectionId)) {
       pendingPrompt.set(m.shell_settings_voice_setup_prompt());
       openTarget({ page: "assistant", section: "chat" });

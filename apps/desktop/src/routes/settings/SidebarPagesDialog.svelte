@@ -8,7 +8,7 @@
   import { companionName } from "$lib/stores/companion";
   import { settingsStore } from "../../lib/stores/ui";
   import { sidebarPagesOpen } from "../../lib/stores/navigation";
-  import { hasLegacyReminders, usesLegacyVoiceInput } from "../../lib/ipc/contracts";
+  import { usesLegacyVoiceInput } from "../../lib/ipc/contracts";
   import {
     DEFAULT_SIDEBAR, arrange, canMove, isDefault, movePage, normalizePrefs, setPageHidden,
   } from "../../lib/sidebarLayout";
@@ -18,7 +18,7 @@
 
   const prefs = $derived(normalizePrefs($settingsStore?.ui?.sidebar));
   const items = $derived(navItems($companionName, usesLegacyVoiceInput($settingsStore?.ui)));
-  const groups = $derived(presentGroups(hasLegacyReminders($settingsStore?.ui)));
+  const groups = presentGroups();
   const pageLists = $derived(groups.map((g) => g.pages));
 
   function open(id: PageId) {

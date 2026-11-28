@@ -3,8 +3,8 @@
 //! 宿主和命令行登记热键（[`registration_plan`]）、`hotkeys.status` / `hotkeys.conflicts` 工具都读这里。
 //!
 //! 行从热键表（`hotkeys.bindings`，[`crate::hotkey_bindings`]）和命令目录（本体的 [`core_commands`]、插件清单里的
-//! `[[commands]]`）来；玩家自己加的（快捷指令、运行自动化，第 3 期 D5，[`crate::hotkey_custom`]）也在表里，每条一行；
-//! 提醒助手热键（D10）还存在原来的地方，照旧列出。游戏的聊天键、控制台触发键不是热键、不进表，但参与冲突检查（D2）：
+//! `[[commands]]`）来；玩家自己加的（快捷指令、运行自动化，第 3 期 D5，[`crate::hotkey_custom`]）也在表里，每条一行。
+//! 游戏的聊天键、控制台触发键不是热键、不进表，但参与冲突检查（D2）：
 //! 热键和它们一样时，在游戏里按这个键会被 Kotone 拿走。
 //!
 //! 冲突的规矩（和 [`crate::hotkey::combos_conflict`] 一样）：修饰键集合加主键完全相同才算；
@@ -21,15 +21,13 @@ use crate::hotkey_custom::{
     command_binding, custom_entries, resolve_row, row_id, Action, CustomState,
 };
 use crate::profile::GameProfile;
-use crate::settings::{LegacyUpgrade, Settings};
+use crate::settings::Settings;
 
 /// 语音输入热键（按下说话）的 id。它不是具名热键（宿主当主键登记），沿用设置页的 id。
 pub const HK_RECORD: &str = "record";
-/// 0.1.x 升级用户保留的提醒助手热键。
-pub const HK_LEGACY_REMINDER: &str = "legacy-reminder";
 /// Esc：固定的键，不能改。
 pub const KEY_ESCAPE: &str = "escape";
-/// 热键在哪改（ADR 040 D3：只在这一页改；提醒助手热键照旧在提醒助手页，D10）。
+/// 热键在哪改（ADR 040 D3：只在这一页改）。
 pub const HOTKEYS_PAGE: &str = "设置 → 热键";
 /// 热键和 Esc 撞上时的话（ADR 040 实施记录，主会话定的第 4 条）。
 pub const ESC_REASON: &str = "Esc 留给停下她和取消收音，换一个键";
@@ -71,12 +69,12 @@ pub enum GameKey {
 #[serde(rename_all = "camelCase")]
 pub struct KeyUse {
     /// 稳定 id：命令就是命令的完整名（`kotone.call`、`voice-input.talk`）；自己加的 `custom.<条目 id>`（第 1、2 期的
-    /// `quick-message-n` 改键、`except` 里还认，指快捷指令镜像的第 n 条）、提醒助手热键 `legacy-reminder`、Esc `escape`、
+    /// `quick-message-n` 改键、`except` 里还认，指快捷指令镜像的第 n 条）、Esc `escape`、
     /// 找不到的 `binding.<序号>`；游戏的键是 `game.<配置 id>.<哪个键>`（频道再加 `.<频道 id>`）。
     /// （`hotkeys.status` 的 `named[].id` 照旧是第 1 期的 id：`assistant`、`channel-cycle`……，对照表 `hotkey_bindings::LEGACY`；
     /// 自己加的就是这里的 id。）
     pub id: String,
-    /// 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、自己加的、Esc、游戏的键没有。
+    /// 绑的命令（`kotone.call`、`voice-input.talk`）；自己加的、Esc、游戏的键没有。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// 自己加的要做什么：`say`（跟她说一句）、`automation`（运行自动化）、`tool`、`page`；插件登记的调工具的命令
@@ -243,13 +241,7 @@ fn command_row(
     plugin: Option<&PluginInfo<'_>>,
 ) -> KeyUse {
     let legacy = legacy_for(name);
-    let field = match legacy {
-        Some(_) if name == CMD_CALL && s.ui.legacy_upgrade == LegacyUpgrade::OptedIn => {
-            "assistant.companionBindings.hotkey"
-        }
-        Some(l) => l.field,
-        None => "hotkeys.bindings",
-    };
+    let field = legacy.map_or("hotkeys.bindings", |l| l.field);
     KeyUse {
         command: Some(name.into()),
         owner: plugin.map(|p| p.id.into()),
@@ -281,11 +273,11 @@ fn command_row(
 
 /// 表里的全部热键，顺序 = 页面上的顺序 = 登记时谁先拿到键：本体的（Esc 跟在后面）→ 插件的 → 自己加的
 /// → 这个版本找不到的。没绑键的命令也列出来（玩家看得到还能设什么）。只列这个玩家用得上的：0.1.x 升级后只用
-/// 语音输入的人没有呼叫键、停下热键和快捷指令；提醒助手热键只有升级用户有。
+/// 语音输入的人没有呼叫键、停下热键和快捷指令。
 pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
     let settings = normalized(src.settings);
     let s: &Settings = &settings;
-    let legacy_only = s.ui.legacy_upgrade.uses_legacy_assistant();
+    let legacy_only = s.ui.legacy_upgrade.voice_input_only();
     let mut out = Vec::new();
     for spec in core_commands() {
         let name = format!("{CORE_SOURCE}.{}", spec.id);
@@ -293,21 +285,6 @@ pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
             continue;
         }
         out.push(command_row(s, &name, &spec, None));
-    }
-    if s.ui.legacy_upgrade.has_legacy_reminders() {
-        out.push(KeyUse {
-            page: "提醒助手 → 提醒设置".into(),
-            field: "assistant.hotkey".into(),
-            hold: s.assistant.interaction_mode
-                == crate::assistant::AssistantInteractionMode::PushToTalk,
-            status_id: HK_LEGACY_REMINDER.into(),
-            ..row(
-                HK_LEGACY_REMINDER,
-                s.legacy_reminder_hotkey(),
-                "提醒助手热键",
-                KeySource::Core,
-            )
-        });
     }
     out.push(KeyUse {
         detail: "取消这次录音；她操作游戏时让她停下".into(),
@@ -602,7 +579,7 @@ pub enum HintAt {
 /// 登记计划里的一条（宿主和命令行照它登记，谁先拿到键只在这里算一次）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Planned {
-    /// 登记用的 id（第 1 期的 id、命令的完整名、`legacy-reminder`、自己加的 `custom.<id>`）。
+    /// 登记用的 id（第 1 期的 id、命令的完整名、自己加的 `custom.<id>`）。
     pub id: String,
     pub command: Option<String>,
     /// 设置里写的键。
@@ -617,7 +594,7 @@ pub struct Planned {
     pub error: Option<String>,
 }
 
-/// 登记计划：表里每个绑了键、插件开着的热键一条，顺序 = 表的顺序 = 谁先拿到键（本体 → 提醒助手 → 插件 → 自己加的）。
+/// 登记计划：表里每个绑了键、插件开着的热键一条，顺序 = 表的顺序 = 谁先拿到键（本体 → 插件 → 自己加的）。
 /// 撞上 Esc 的不登记（Esc 留给停下她和取消收音）；撞上前面已经拿到的、找不到命令的也不登记，都写原因。
 /// 和游戏聊天键一样的照旧登记（表里标红；写入时 [`new_conflict_error`] 会拦新的）。
 pub fn registration_plan(src: &Sources<'_>) -> Vec<Planned> {

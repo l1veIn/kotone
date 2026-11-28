@@ -92,13 +92,9 @@ pub fn voice_of_connection(connection: &Connection) -> Option<(TtsEngine, Region
     }
 }
 
-/// 她正在用的连接 ID（0.1.x 旧提醒助手还没升级时是旧字段里的那条）。
+/// 她正在用的连接 ID（`assistant.connectionId`，ADR 052：只有这一个地方）。
 pub fn her_connection_id(settings: &Settings) -> &str {
-    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
-        settings.assistant.connection_id.trim()
-    } else {
-        settings.companion_connection_id().trim()
-    }
+    settings.assistant.connection_id.trim()
 }
 
 /// “自动”会跟的几家（ADR 048）：她用这几家的模型、连接里有 Key，就用这家的声音。

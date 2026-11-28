@@ -21,8 +21,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::assistant::{CompanionBindings, DEFAULT_CALL_HOTKEY};
-use crate::settings::{LegacyUpgrade, Settings};
+use crate::assistant::DEFAULT_CALL_HOTKEY;
+use crate::settings::Settings;
 
 /// 呼叫 / 挂断（呼叫键）。
 pub const CMD_CALL: &str = "kotone.call";
@@ -42,7 +42,7 @@ pub const CMD_PP_TOGGLE: &str = "voice-input.post-process-toggle";
 pub const CMD_PP_CYCLE: &str = "voice-input.post-process-cycle";
 
 /// 一个有旧字段的命令：命令名、第 1 期起热键表 / `hotkeys.status` 用的 id、旧版本缺这个字段时的默认。
-/// 迁移、镜像、旧写法都查这一张（顺序 = 热键表里的顺序）。提醒助手热键（ADR 040 D10）不在这里，照旧存在原来的地方；
+/// 迁移、镜像、旧写法都查这一张（顺序 = 热键表里的顺序）。
 /// 快捷指令（第 3 期，D5）的镜像按 id 对，见 [`crate::hotkey_custom`]。
 pub struct Legacy {
     pub command: &'static str,
@@ -283,15 +283,9 @@ pub fn normalized(settings: &Settings) -> std::borrow::Cow<'_, Settings> {
 /// 这个命令在旧字段里的镜像（这种用户没有这个镜像时为 None）。
 fn mirror<'a>(settings: &'a Settings, command: &str) -> Option<&'a str> {
     Some(match command {
-        CMD_CALL => match settings.ui.legacy_upgrade {
-            LegacyUpgrade::NotNeeded => settings.assistant.hotkey.as_str(),
-            LegacyUpgrade::OptedIn => settings
-                .assistant
-                .companion_bindings
-                .as_ref()
-                .map_or("", |c| c.hotkey.as_str()),
-            LegacyUpgrade::Pending | LegacyUpgrade::Dismissed => return None,
-        },
+        // 还没启用她（只用语音输入）：没有呼叫键的镜像
+        CMD_CALL if settings.ui.legacy_upgrade.voice_input_only() => return None,
+        CMD_CALL => &settings.assistant.hotkey,
         CMD_STOP => &settings.automation_stop_hotkey,
         CMD_SPEECH_TOGGLE => &settings.runtime_toggle_hotkey,
         CMD_TALK => &settings.hotkey.key,
@@ -305,20 +299,8 @@ fn mirror<'a>(settings: &'a Settings, command: &str) -> Option<&'a str> {
 
 fn set_mirror(settings: &mut Settings, command: &str, key: String) {
     match command {
-        CMD_CALL => match settings.ui.legacy_upgrade {
-            LegacyUpgrade::NotNeeded => settings.assistant.hotkey = key,
-            LegacyUpgrade::OptedIn => match settings.assistant.companion_bindings.as_mut() {
-                Some(bindings) => bindings.hotkey = key,
-                None if !key.is_empty() => {
-                    settings.assistant.companion_bindings = Some(CompanionBindings {
-                        hotkey: key,
-                        ..Default::default()
-                    })
-                }
-                None => {}
-            },
-            LegacyUpgrade::Pending | LegacyUpgrade::Dismissed => {}
-        },
+        CMD_CALL if settings.ui.legacy_upgrade.voice_input_only() => {}
+        CMD_CALL => settings.assistant.hotkey = key,
         CMD_STOP => settings.automation_stop_hotkey = key,
         CMD_SPEECH_TOGGLE => settings.runtime_toggle_hotkey = key,
         CMD_TALK => settings.hotkey.key = key,
@@ -350,10 +332,10 @@ pub fn migrate_hotkeys_json(user: &mut Value) {
     let mut bindings = Vec::new();
     for legacy in LEGACY {
         let found = match legacy.command {
+            // 还没启用她：没有呼叫键。启用过她的（以前的 `optedIn`）那时已经读成 `notNeeded`、
+            // 呼叫键搬到了 `assistant.hotkey`（`settings::migrate_legacy_upgrade_json` 先跑）
             CMD_CALL => match legacy_mode.as_str() {
-                // 还没启用她：没有呼叫键（`assistant.hotkey` 是提醒键）
                 "pending" | "dismissed" => continue,
-                "optedIn" => Some(text("/assistant/companionBindings/hotkey").unwrap_or_default()),
                 _ => text("/assistant/hotkey"),
             },
             CMD_STOP => text("/automationStopHotkey"),

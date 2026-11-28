@@ -52,7 +52,7 @@ pub fn start(app: &AppHandle) {
                 continue;
             }
             let settings = settings(&app);
-            if settings.ui.legacy_upgrade.uses_legacy_assistant() || !settings.agent.match_recap {
+            if settings.ui.legacy_upgrade.voice_input_only() || !settings.agent.match_recap {
                 continue;
             }
             let seconds = event

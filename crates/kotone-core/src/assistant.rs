@@ -46,29 +46,23 @@ pub enum AssistantRoute {
     Agent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AssistantVoiceSession {
-    pub session_id: String,
-    pub interaction_mode: AssistantInteractionMode,
-}
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AssistantConfig {
-    /// 首次安装为呼叫键。旧用户保留原提醒设置，启用琴音后单独绑定呼叫键。
+    /// 呼叫她的键（热键表 `kotone.call` 的镜像）。0.1.x 时是提醒助手的键；提醒助手退掉以后（ADR 052）
+    /// 读取时换成她的呼叫键或清空（`settings::migrate_legacy_upgrade_json`）。
     pub hotkey: String,
     /// 旧试用版用过的呼叫键迁移标记，读取时用于识别已有 0.2 配置。
     pub call_hotkey_defaulted: bool,
     /// 默认呼叫键改过几次（[`CALL_HOTKEY_REVISION`]）。配置里没有这一项 = 更早的版本：读取时把还是旧默认
     /// `Backquote` 的呼叫键改成新默认，再记上（之后玩家自己设回 `~` 不会再被改）。
     pub call_hotkey_revision: u32,
-    /// 旧版提醒助手热键的交互方式。呼叫她不看这一项（呼叫以后怎么听是 [`Self::call_mode`]）。
+    /// 0.1.x 提醒助手热键的交互方式。提醒助手退掉了（ADR 052），只为旧版本能读保留；呼叫以后怎么听是
+    /// [`Self::call_mode`]。
     pub interaction_mode: AssistantInteractionMode,
+    /// 她用的 API 连接（0.1.x 时是提醒助手的连接，读取时同 [`Self::hotkey`] 处理）。
     pub connection_id: String,
-    /// 仅旧版升级后使用，保留 0.1.x 可直接读取的提醒热键和连接。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub companion_bindings: Option<CompanionBindings>,
+    /// 提醒和她的回答没说用语音还是弹幕时用的方式。
     pub default_delivery: Vec<DeliveryKind>,
     pub voice_id: String,
     pub speech_volume: u16,
@@ -124,13 +118,6 @@ pub enum CallMode {
     #[default]
     #[serde(other)]
     OneShot,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct CompanionBindings {
-    pub hotkey: String,
-    pub connection_id: String,
 }
 
 /// 对话气泡放在屏幕哪个角。不认识的值按右下角处理。
@@ -449,7 +436,6 @@ impl Default for AssistantConfig {
             call_hotkey_revision: CALL_HOTKEY_REVISION,
             interaction_mode: AssistantInteractionMode::PushToTalk,
             connection_id: String::new(),
-            companion_bindings: None,
             default_delivery: vec![DeliveryKind::Voice, DeliveryKind::Danmaku],
             voice_id: String::new(),
             speech_volume: 80,
@@ -477,7 +463,7 @@ impl Default for AssistantConfig {
 
 impl AssistantConfig {
     /// 实际的呼叫方式：选了通话、可是 `callIdleSeconds` 是 0（旧配置的“不通话，一问一答”）读成说一句就走
-    /// （ADR 033 2026-11-26 修订）。0.1.x 旧提醒助手没有通话，由调用方另判。
+    /// （ADR 033 2026-11-26 修订）。
     pub fn effective_call_mode(&self) -> CallMode {
         match self.call_mode {
             CallMode::Call if self.call_idle_seconds == 0 => CallMode::OneShot,
@@ -533,12 +519,6 @@ impl AssistantConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.companion_bindings.as_ref().is_some_and(|bindings| {
-            !bindings.hotkey.trim().is_empty()
-                && crate::hotkey::parse_hotkey(&bindings.hotkey).is_none()
-        }) {
-            return Err("呼叫琴音的热键无法识别".into());
-        }
         if self.default_delivery.is_empty() || self.default_delivery.len() > 2 {
             return Err("默认回答方式需选择语音、弹幕或两者".into());
         }
@@ -636,12 +616,6 @@ pub struct AssistantRequest {
     pub text: String,
     /// 识别完成时刻，提醒相对时间以此计算，不叠加 AI 请求耗时。
     pub received_at_ms: u64,
-}
-
-pub const LEGACY_REMINDER_SESSION_PREFIX: &str = "legacy-reminder-";
-
-pub fn is_legacy_reminder_session(id: &str) -> bool {
-    id.starts_with(LEGACY_REMINDER_SESSION_PREFIX)
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

@@ -23,7 +23,7 @@ export function isCompanionSection(value: string): value is CompanionSection {
 export const CHAT_MODEL_ANCHOR = "chat-model";
 
 export type PageTarget =
-  | { page: "automation" | "game" | "about" | "legacy-reminders"; anchor?: string }
+  | { page: "automation" | "game" | "about"; anchor?: string }
   /** 左侧栏的“全部页面”（排顺序、显示 / 隐藏；ADR 034 第六节）。 */
   | { page: "sidebar-pages" }
   /** 角色页的一个分页；`anchor` 是分页里的分组（聊天页上是 `chat-model`：打开选模型的菜单）。 */
@@ -136,8 +136,9 @@ const PLUGIN_NAMES: Record<string, string> = {
   ),
 };
 
-const PAGES: Record<string, "automation" | "game" | "about" | "legacy-reminders"> = {
-  "自动化": "automation", "游戏列表": "game", "游戏": "game", "游戏适配": "game", "关于": "about", "提醒助手": "legacy-reminders",
+// 「提醒助手」退掉了（ADR 052）：提醒在「自动化」里，旧写法跳到那里
+const PAGES: Record<string, "automation" | "game" | "about"> = {
+  "自动化": "automation", "游戏列表": "game", "游戏": "game", "游戏适配": "game", "关于": "about", "提醒助手": "automation",
 };
 
 /** 旧版「设置 → 其他热键」里的热键现在分散在三处（「设置 → 热键」一页列出全部，ADR 040）；按第三段（热键名）分，认不出就去语音输入的其他热键。 */

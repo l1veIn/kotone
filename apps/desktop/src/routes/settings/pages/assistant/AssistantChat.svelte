@@ -34,7 +34,7 @@
   import DeepSeekKeyForm from "../../../../lib/components/DeepSeekKeyForm.svelte";
   import type { DeepSeekSetupResult } from "../../../../lib/deepseekSetup";
   import { startRuntime } from "../../../../lib/ipc";
-  import { LOCAL_ASR_LABELS, companionBindings } from "../../../../lib/ipc/contracts";
+  import { LOCAL_ASR_LABELS } from "../../../../lib/ipc/contracts";
   import { untrack } from "svelte";
   import { asrStore } from "../../../../lib/stores/runtime";
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
@@ -76,7 +76,7 @@
   const notReady = $derived(ready ? (chat.state?.notReadyReason ?? null) : null);
   // 连接或角色的 AI 设置变了（填 Key、换连接、0.1.x 用户启用角色）：重新读一次 Agent 的状态，
   // 否则“还没准备好”会停在打开软件时读到的那一刻（2026-11-20 真机：填完 Key 进聊天发不出去）。
-  const companionConnection = $derived(companionBindings($settingsStore?.assistant)?.connectionId ?? "");
+  const companionConnection = $derived($settingsStore?.assistant.connectionId ?? "");
   $effect(() => {
     companionConnection;
     $settingsStore?.connections;

@@ -11,7 +11,7 @@
   import { m } from "$lib/paraglide/messages.js";
   import { companionName } from "$lib/stores/companion";
   import {
-    activateCatalogModel, companionBindings, companionStatus, getElevationStatus, restartAsAdmin, updateSettings,
+    activateCatalogModel, companionStatus, getElevationStatus, restartAsAdmin, updateSettings,
     type CompanionStatus, type ConnectionInfo, type ElevationStatus,
   } from "../ipc";
   import { isDeepSeekConnection, switchToDeepSeek } from "../deepseekSetup";
@@ -42,8 +42,8 @@
 
   const name = $derived($companionName);
   const deepseek = $derived(connections.find((c) => c.kind === "remote" && c.hasApiKey && isDeepSeekConnection(c)) ?? null);
-  const current = $derived(connections.find((c) => c.id === companionBindings($settingsStore?.assistant)?.connectionId) ?? null);
-  const callKey = $derived(companionBindings($settingsStore?.assistant)?.hotkey.trim() ?? "");
+  const current = $derived(connections.find((c) => c.id === $settingsStore?.assistant.connectionId) ?? null);
+  const callKey = $derived($settingsStore?.assistant.hotkey.trim() ?? "");
   const lol = $derived($pluginsStore.find((p) => p.manifest.id === "lol") ?? null);
 
   async function fix(id: string, run: () => unknown) {

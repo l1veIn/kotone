@@ -4,7 +4,6 @@
 mod agent;
 mod app_proxy;
 mod assistant;
-mod assistant_input;
 mod attention;
 mod automation;
 mod browser;
@@ -244,8 +243,8 @@ pub fn run() {
 
             // 用量账本（usage.jsonl）：之后的在线调用都记进去。
             usage::start();
-            // 旧版提醒沿用自己的音色；琴音角色在选择体验后才初始化。
-            let companion_enabled = !settings.ui.legacy_upgrade.uses_legacy_assistant();
+            // 0.1.x 升级后只用语音输入时不初始化琴音角色，启用她以后才初始化。
+            let companion_enabled = !settings.ui.legacy_upgrade.voice_input_only();
             if companion_enabled {
                 roles::remember(&settings.agent.role_id);
             }
@@ -302,8 +301,7 @@ pub fn run() {
             app.manage(browser::BrowserRuntime::default());
             // 插件 MCP App 的回环代理（ADR 039 D5）：每个插件第一次显示 App 时才起
             app.manage(app_proxy::Proxies::default());
-            let assistant_runtime =
-                assistant::initialize(app.handle(), settings.clone(), connections.clone());
+            let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
             let mut orchestrator = Orchestrator::new(
@@ -523,14 +521,6 @@ pub fn run() {
             get_resource_usage,
             confirm_send,
             cancel_session,
-            assistant::list_reminders,
-            assistant::cancel_reminder,
-            assistant::assistant_submit_text,
-            assistant::cancel_assistant_request,
-            assistant_input::assistant_voice_begin,
-            assistant_input::assistant_voice_end,
-            assistant_input::assistant_voice_confirm,
-            assistant_input::assistant_voice_cancel,
             runtime_cmd::voice_input_trial_begin,
             runtime_cmd::voice_input_trial_finish,
             runtime_cmd::voice_input_trial_cancel,

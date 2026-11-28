@@ -16,10 +16,7 @@ use std::time::Duration;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::assistant::{
-    is_legacy_reminder_session, AssistantHandler, AssistantRequest, AssistantVoiceSession,
-    SessionPurpose, LEGACY_REMINDER_SESSION_PREFIX,
-};
+use crate::assistant::{AssistantHandler, AssistantRequest, SessionPurpose};
 use crate::audio::{AudioBackend, AudioHandle};
 use crate::automation::AutomationScheduler;
 use crate::inject::{CancelToken, FocusBackend, Injector, TargetWindow};
@@ -109,8 +106,6 @@ struct Inner {
     processing_cancel: Option<ProcessingCancelToken>,
     /// 本地诊断流程的 case id；无论 history 是否关闭，每次 begin 都生成。
     process_case_id: Option<String>,
-    /// 仅面板按钮创建的会话接受带 ID 的面板结束/确认/取消命令。
-    assistant_voice_owner: bool,
     /// 松手宽限期的延迟结束任务（见 DEFAULT_RELEASE_GRACE）；
     /// 再次按下 / cancel / 状态变迁时 abort
     release_grace_task: Option<tokio::task::JoinHandle<()>>,
@@ -204,7 +199,6 @@ impl Orchestrator {
                 send_operation: None,
                 processing_cancel: None,
                 process_case_id: None,
-                assistant_voice_owner: false,
                 release_grace_task: None,
                 continuous_session: false,
             })),
@@ -422,22 +416,10 @@ impl Orchestrator {
         });
     }
 
-    fn vad_fallback_warning(&self) -> &'static str {
-        if self.inner.lock().unwrap().assistant_voice_owner {
-            "自动静音检测暂时不可用；请点击语音按钮结束并提交本次请求"
-        } else {
-            VAD_FALLBACK_WARNING
-        }
-    }
-
     pub fn emit_state(&self, state: OrchestratorState, mut payload: Option<serde_json::Value>) {
-        let (case_id, purpose, button_owned) = {
+        let (case_id, purpose) = {
             let inner = self.inner.lock().unwrap();
-            (
-                inner.process_case_id.clone(),
-                inner.purpose,
-                inner.assistant_voice_owner,
-            )
+            (inner.process_case_id.clone(), inner.purpose)
         };
         if state != OrchestratorState::Idle {
             let data = payload.get_or_insert_with(|| json!({}));
@@ -449,15 +431,6 @@ impl Orchestrator {
                         SessionPurpose::Dictation => "dictation",
                     }),
                 );
-                if purpose == SessionPurpose::Assistant {
-                    data.insert(
-                        "inputSource".into(),
-                        json!(if button_owned { "button" } else { "hotkey" }),
-                    );
-                    if case_id.as_deref().is_some_and(is_legacy_reminder_session) {
-                        data.insert("legacyReminder".into(), json!(true));
-                    }
-                }
             }
         }
         self.emitter.emit(

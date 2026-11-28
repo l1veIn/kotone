@@ -31,8 +31,8 @@
 | 内置浏览器 / 网页 | 聊天页右侧栏的“网页”标签：你自己能上网，她在后台的事里也用它打开网页（ADR 031）。它留在本体，不是插件；“设置 → 浏览器”里有开关（默认开），关掉后右侧栏没有“网页”、她也不再打开网页（ADR 038） | | `browser.enabled`、`browser.*` | built-in browser / Web |
 | 扩展 | 内置浏览器里装的 Chrome / Edge 扩展（已解压的扩展文件夹，例如去广告），在“设置 → 浏览器”里加、删、开关。“插件”只指她身上的本事，所以浏览器里的不叫插件 | `浏览器插件` | `browser.extensions` | extension |
 | 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` | external agent |
-| 提醒助手 | 只给 0.1.x 升级用户保留的旧页面名 | | `LegacyRemindersPage` | Reminder assistant (0.1.x) |
-| 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的。「设置 → 热键」一页列出全部，标来源（Kotone / 插件名 / 自己加的 / 固定的 Esc），冲突标红；**热键只在那一页改**，别的页面（唤醒、系统 → 停下、模型 → 语音识别、语音输入）只显示现在的键和“去「设置 → 热键」改”，提醒助手热键照旧在提醒助手页改；游戏配置里的聊天键不是热键、不列在那里，但参与冲突检查（ADR 040） | `快捷键` | `*Hotkey`、`hotkey_table` | hotkey (Settings → Hotkeys) |
+| 提醒助手 | 0.1.x 的旧页面名，2026-11-28 退掉了（ADR 052）：界面上只在升级欢迎页说一次它不再单独有；提醒在「自动化」里 | | （已删） | Reminder assistant (0.1.x, retired) |
+| 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的。「设置 → 热键」一页列出全部，标来源（Kotone / 插件名 / 自己加的 / 固定的 Esc），冲突标红；**热键只在那一页改**，别的页面（唤醒、系统 → 停下、模型 → 语音识别、语音输入）只显示现在的键和“去「设置 → 热键」改”；游戏配置里的聊天键不是热键、不列在那里，但参与冲突检查（ADR 040） | `快捷键` | `*Hotkey`、`hotkey_table` | hotkey (Settings → Hotkeys) |
 | 快捷指令 | 「设置 → 热键」里自己加的、按一下就替你跟她说一句预设的话的热键（选了通话时按了也会接通）。同一处还能加运行自动化的热键（ADR 040 第 3 期）；这些都叫“自己加的” | `快捷消息`、`快捷短语` | `hotkeys.bindings[].say`（旧字段 `assistant.companion.quickMessages` 是镜像） | quick command |
 | 后台的事 / 交给后台 | 她交出去慢慢做的复杂的事，聊天里是一张卡片，做完她说一句 | `子代理`、`子会话`、`后台任务` | `agent.start`、`Subagent` | background task / hand off to the background |
 | 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）：正在跑的全停，还没开始、要操作游戏窗口的取消；还没到点的提醒留着，要取消在「自动化」页单条取消（ADR 045 D6）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` | Stop (stop everything); “stop hotkey” |
@@ -86,7 +86,7 @@
 | 中文 / English | 代码名 | 含义与边界 |
 | --- | --- | --- |
 | 呼叫 / Call | `assistant_call`, `call_hotkey()`, `HK_ASSISTANT`, `call.rs` | 接通和角色的通话（ADR 033，见上面“界面用语”）。四种触发：呼叫键、唤醒词、聊天页的呼叫按钮、快捷指令。听和答都在**悬浮窗的气泡**里。语音识别没准备好时，呼叫按钮先启动本地识别再听；呼叫键只在气泡里提示。 |
-| 呼叫键 / Call key | `assistant.hotkey`；0.1.x 升级用户为 `assistant.companionBindings.hotkey` | 按一下就呼叫，通话中再按 = 挂断。新用户默认 `Ctrl + ~`，升级用户默认空。不再叫“陪玩热键”“呼叫热键”。 |
+| 呼叫键 / Call key | `assistant.hotkey`（所有人；0.1.x 升级用户以前的 `assistant.companionBindings.hotkey` 读取时搬过来，ADR 052） | 按一下就呼叫，通话中再按 = 挂断。新用户默认 `Ctrl + ~`，升级用户默认空。不再叫“陪玩热键”“呼叫热键”。 |
 | 语音输入 / Voice input | `hotkey`, `Orchestrator`（`purpose = input`） | 说话，原话打进游戏聊天框。**不经过 Agent**。状态显示在**输入条**里（以前叫悬浮窗）。是一个插件（`plugins/voice-input`，ADR 038）：从左侧栏「插件 → 语音输入」打开它的页面，分页 输入 / 文字处理 / 历史（分页 ID `general` / `processing` / `history`）；关掉插件时语音输入热键、输入条一起停。语音识别和往游戏聊天里打字属于本体，语音输入借用它们；她替你在游戏聊天里发言（`game_chat.send`）在本体，关掉语音输入不影响；每个游戏的聊天键留在游戏配置（ADR 039）。 |
 | 语音输入热键 / Voice input hotkey | `hotkey.key` | 按下说话的那个键（原“录制热键”）。 |
 | 停下 / Stop | `stop::stop_everything`, `automationStopHotkey` | 停止角色正在做的事和所有自动化（运行中的全停，等待中绑了游戏窗口的取消，等待中的提醒留着，ADR 045 D6）。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘「停下」。不取消语音输入的录音（那是 Esc）。 |
@@ -123,7 +123,7 @@
 
 | 中文 / English | 代码名 | 含义与边界 |
 | --- | --- | --- |
-| 提醒助手 / Reminder assistant | `assistant`, `voice_reminder`, `danmaku_reminder` | 面向屏幕前用户本人，通过独立热键或文字入口让 AI 提出受限的提醒计划；不向第三人喊话或注入游戏。语音入口要等语音识别准备好（本地识别要先启动），文字入口不依赖。0.2 起只有 0.1.x 升级用户保留（「提醒助手」页）。 |
+| 提醒助手 / Reminder assistant | （已删：`kotone-ai` 的 `ReminderAssistant`、`voice_reminder` / `danmaku_reminder`） | 0.1.x 的独立入口：自己的热键、文字框和 API 连接，让 AI 提出受限的提醒计划。0.2 起只给 0.1.x 升级用户保留，2026-11-28 退掉（ADR 052）：提醒只是自动化，跟她说或在「自动化」里安排；已经安排的照常提醒。 |
 | 助手交互模式 / Assistant interaction mode | `AssistantInteractionMode`, `assistant.interactionMode` | 与游戏输入独立的对讲机、录音笔、说一句就走三种模式，默认对讲机，热键默认未绑定；录音笔确认提交给助手，其余模式按各自结束规则提交，不走游戏发送出口。旧助手独奏配置兼容为对讲机。 |
 | 提醒 / Reminder | `ReminderIntent`, `Reminder`, `schedule_reminder`, `automation::reminder_source` | 一次性的内容、到期时间、输出方式和状态；输出采用简短正文，不附称呼或开场白。本机保存，应用未退出时调度，停止语音运行时不停止既有提醒；不等于系统级闹钟。2026-11-27 起（ADR 045 D3）提醒是“晚一会儿开始、只说一句”的程序：`say(args.text)` / `toast(args.text)` / `say(args.text, { toast = true })`，不绑游戏窗口、不占名额，停下时等待中的提醒留着；以前的 `ReminderScheduler`、播报的投递循环已经并进自动化调度器。 |
 | 语音播报 / Text to speech (TTS) | `SpeechOutput`, `SpeechRequest`, `SpeechVoice` | 文本转成可听语音，默认 Windows SAPI 声音，无需下载 Kotone TTS 模型；Kokoro 中文模型可选、手动下载。与 STT、提示音分开。 |
@@ -152,7 +152,7 @@
 | 游标 / Cursor | `cursor`, `newSince` | 绑定会话与代际的事件位置，只用于读取其后的新增与修订；`visible` 读取与游标无关。 |
 | 事件总线 / Event bus | `EventBus`, `event.read`, `GET /v1/events` | 工具服务内 Kotone → Agent 的有界事件流（`user.request`、`agent.*`、`runtime.phase`、`app.*`）；游标 `ev1.<实例>.<序号>` 只在本实例有效，失效报错而不跳过。与聊天跟踪的游标是两回事。 |
 | 用户请求 / User request | `user.request`, `AgentRequests`, `areq_…` | 用户经 Kotone（`assistant.route=agent` 时的助手热键语音或文字入口）发给外部 Agent 的原文；pending → claimed → replied / expired，十分钟有效。原文对 Kotone 是数据。 |
-| 助手去向 / Assistant route | `AssistantRoute`, `assistant.route` | 助手入口把请求交给谁：`reminders`（默认，Kotone 自己的 AI 连接规划提醒）或 `agent`（发布 `user.request`）。 |
+| 助手去向 / Assistant route | `AssistantRoute`, `assistant.route` | 助手入口把请求交给谁：`reminders`（默认，交给她；旧值的名字沿用，0.1.x 时是提醒规划）或 `agent`（发布 `user.request`）。 |
 | 领取 / Claim | `agent.request.claim`, `consumer` | Agent 处理用户请求前声明归属；同一领取者幂等，其他领取者被拒绝，保证多个 Agent 在线时一条请求只处理一次。 |
 | Agent 回复 / Agent reply | `agent.reply`, `deliveryId` | Agent 经 Kotone 对用户说话（语音/弹幕），复用提醒的交付路径；默认受理即返回，交付结果以 `agent.reply.delivered/failed` 事件给出。 |
 | 桌面宿主 / App host | `AppHost`, `DesktopHost` | 工具服务调用应用级能力（启停运行时、退出、交付回复、助手提交）的端口；`kotone-tools` 不依赖 Tauri。 |
@@ -160,7 +160,7 @@
 
 ## 四种交互模式
 
-下表描述游戏语音输入的四种模式；助手仅复用前三种的采集规则，提交对象是提醒助手。助手录音笔预览后确认创建请求，其余两种模式结束后提交。呼叫键也有说一句就走、录音笔（`assistant.callMode`，见界面用语“说一句就走 / 录音笔 / 通话”），采集规则同下表，交给她；呼叫键的录音笔不预览。
+下表描述游戏语音输入的四种模式（0.1.x 的提醒助手热键以前复用前三种，2026-11-28 退掉了，ADR 052）。呼叫键也有说一句就走、录音笔（`assistant.callMode`，见界面用语“说一句就走 / 录音笔 / 通话”），采集规则同下表，交给她；呼叫键的录音笔不预览。
 
 | 产品名称 | 配置值 | 开始 | 结束与交付 |
 | --- | --- | --- | --- |

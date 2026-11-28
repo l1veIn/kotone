@@ -114,7 +114,7 @@ test("3 · 0.1.x config → upgrade welcome → 继续使用语音输入法 chan
   await expect(upgrade).toBeVisible();
   await expect(upgrade).toContainText("Kotone 0.2：多了一位游戏陪玩");
   await expect(page.getByTestId("onboarding-upgrade-summary")).toContainText("CapsLock");
-  await expect(page.getByTestId("onboarding-upgrade-summary")).toContainText("提醒助手照旧");
+  await expect(page.getByTestId("onboarding-upgrade-summary")).not.toContainText("提醒助手");
   // “继续使用语音输入法”是第一个、最醒目的按钮
   await expect(upgrade.getByRole("button").first()).toHaveText("继续使用语音输入法");
   await screenshot(page, { path: testInfo.outputPath("w4-upgrade.png") });
@@ -129,11 +129,12 @@ test("3 · 0.1.x config → upgrade welcome → 继续使用语音输入法 chan
   // 本地识别和启动按钮照旧；没有呼叫键、没有唤醒词
   await expect(page.getByTestId("asr-card")).toHaveAttribute("data-asr-state", /local-/);
   await expect(page.getByTestId("titlebar-asr")).toBeVisible();
-  expect(after.assistant.companionBindings).toBeUndefined();
+  expect(after.assistant.hotkey).toBe("");
+  expect(after.assistant.connectionId).toBe("");
   expect(after.assistant.wake.enabled).toBe(false);
-  // 完整侧栏（D4）：琴音、游戏适配、提醒助手都在；点聊天看到的是 Key 卡片和“回到语音输入”
+  // 完整侧栏（D4）：琴音、游戏适配都在（提醒助手退掉了，ADR 052）；点聊天看到的是 Key 卡片和“回到语音输入”
   await expect(page.getByTestId("settings-nav-game")).toHaveText("游戏适配");
-  await expect(page.getByTestId("settings-nav-legacy-reminders")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-legacy-reminders")).toHaveCount(0);
   await page.getByTestId("sidebar-new-chat").click();
   await expect(page.getByTestId("chat-unconfigured")).toBeVisible();
   await page.getByTestId("chat-back-to-voice").click();
@@ -160,15 +161,15 @@ test("4 · 0.1.x config → add a key → chat; voice input stays on local recog
   await expect(page.getByTestId("assistant-request")).toHaveValue("你能做什么？");
 
   const after = await settingsOf(page);
-  expect(after.ui.legacyUpgrade).toBe("optedIn");
+  expect(after.ui.legacyUpgrade).toBe("notNeeded");
   expect(after.ui.startPage).toBe("chat");
   expect(after.activeModelId).toBe(before.activeModelId);
   expect(after.sttEngine).toBe(before.sttEngine);
   expect(after.hotkey).toEqual(before.hotkey);
-  // 0.1.x 的提醒键和连接原样保留；呼叫键和新连接写进 companionBindings
-  expect(after.assistant.hotkey).toBe(before.assistant.hotkey);
-  expect(after.assistant.connectionId).toBe(before.assistant.connectionId);
-  expect(after.assistant.companionBindings?.hotkey).toBe("Ctrl+Backquote");
+  // 她的连接和呼叫键和新用户一样在 assistant.connectionId / assistant.hotkey（ADR 052）；以前的提醒连接还在
+  expect(after.assistant.hotkey).toBe("Ctrl+Backquote");
+  expect(after.connections.find((c) => c.id === after.assistant.connectionId)?.provider).toBe("deepseek");
+  expect(after.connections.map((c) => c.id)).toContain("original-reminder");
   expect(after.ocr.activeModelId).toBe("deepseek-ocr");
   // 本地识别的状态和启动按钮还在
   await expect(page.getByTestId("titlebar-asr")).toBeVisible();
@@ -332,8 +333,7 @@ test("8 · every location in settings_guide (and the old wording) opens the righ
       // 插件的 App（ADR 038）：从左侧栏「插件」的卡片点开，左侧栏亮的是「插件」
       await expect(page.locator(`[data-testid="plugin-page"][data-plugin-id="${target.id}"]`), where).toBeVisible();
       await expect(page.getByTestId("settings-nav-plugins"), where).toHaveAttribute("aria-current", "page");
-    } else if (target.page !== "legacy-reminders") {
-      // 提醒助手只有 0.1.x 升级用户才有，这里只核对能解析出来
+    } else {
       await expect(page.getByTestId(`settings-nav-${target.page}`), where).toHaveAttribute("aria-current", "page");
     }
     if ("anchor" in target && target.anchor) {

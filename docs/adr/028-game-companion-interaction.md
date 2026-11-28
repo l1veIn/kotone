@@ -8,6 +8,8 @@
 
 2026-11-25 修订（默认呼叫键，[共享资源评估](../research/2026-11-25-shared-resources-audit.md)第五节第 4 条：文档和代码对不上）：默认呼叫键从 2026-11-21 起是 `Ctrl+Backquote`（界面上写“Ctrl + ~”，`kotone-core/src/assistant.rs` 的 `DEFAULT_CALL_HOTKEY`），不再是单独的 `~`。原因：单独的 `~` 是英雄联盟默认的“只攻击英雄”键，Kotone 按下时吞掉它，游戏就收不到（玩家 2026-11-21 反馈，提交 `2fd7c2eb`，0.2.0-rc.2）。还停在旧默认 `~` 的配置，读取时升级一次（`settings.rs` 的 `migrate_call_hotkey_json`，`assistant.callHotkeyRevision` 记下版本；之后玩家自己设回 `~` 就不再改）；0.1.x 升级用户的 `assistant.hotkey` 是他自己设的提醒键，不动，呼叫键在 `companionBindings.hotkey`。下文 A 第 3 步、B 第 3 步、第三节聊天页的例子、D3 已改成现在的值；末尾的真机验收记录（2026-11-20）是当时的样子，不改。
 
+2026-11-28 修订（[ADR 052](052-retire-reminder-assistant.md)）：0.1.x 的提醒助手退掉了。流程 B：升级欢迎页不再写“提醒助手照旧”，改说提醒助手不再单独有、没到点的提醒在「自动化」里；“继续使用语音输入法”照旧只写 `dismissed` 和落地页，但提醒助手的键、页面没有了；“添加 DeepSeek Key，认识琴音”写 `assistant.connectionId` 和 `legacyUpgrade = notNeeded`（不再有 `optedIn` 和 `companionBindings`），呼叫键写 `assistant.hotkey`，语音识别照旧不动。侧栏没有「语音输入 → 提醒助手」了（这一组也没了）。“气泡关掉时”那条里“提醒助手照旧用悬浮窗”去掉。下文是当时的样子。
+
 ## 背景
 
 0.2.0 把 Kotone 从语音输入法变成桌面端的游戏陪玩 Agent，但界面还是语音输入法的骨架：打开先看到语音输入，标题栏是“启动 / 停止 Kotone”，没点「启动」时呼叫按钮写“先点右上角「启动」”，琴音的设置藏在「琴音 → 设置」里。新用户要先理解“启动”才能和角色说上话；老用户一升级就被新概念包围。

@@ -1,6 +1,6 @@
 // 左侧栏的页面清单（AppSidebar 和“全部页面”共用）。分组和默认顺序在 lib/sidebarLayout.ts。
 import type { Component } from "svelte";
-import { Bell, Bot, Gamepad2, Info, LayoutGrid, Settings2, Zap } from "@lucide/svelte";
+import { Bot, Gamepad2, Info, LayoutGrid, Settings2, Zap } from "@lucide/svelte";
 import { m } from "$lib/paraglide/messages.js";
 import { SIDEBAR_GROUPS, type SidebarGroupId, type SidebarPrefs } from "../../lib/sidebarLayout";
 import { updateSettings } from "../../lib/ipc";
@@ -8,7 +8,7 @@ import { errText, settingsStore, toast } from "../../lib/stores/ui";
 
 export type PageId =
   | "assistant" | "automation" | "game"
-  | "advanced" | "about" | "character" | "legacy-reminders"
+  | "advanced" | "about" | "character"
   /** 左侧栏的「插件」：每个插件一张卡片（ADR 038，照 MCP Apps：每个插件是一个独立的 App）。 */
   | "plugins"
   /** 一个插件的 App（`plugin:<插件 id>`）：从「插件」的卡片点开，占满内容区。 */
@@ -23,7 +23,6 @@ export function navItems(companionName: string, legacyVoiceOnly: boolean): Recor
     game: { id: "game", label: legacyVoiceOnly ? m.shell_sidebar_game_adapt() : m.shell_sidebar_game_list(), icon: Gamepad2 },
     automation: { id: "automation", label: m.shell_sidebar_automation(), icon: Zap },
     plugins: { id: "plugins", label: m.shell_sidebar_plugins(), icon: LayoutGrid },
-    "legacy-reminders": { id: "legacy-reminders", label: m.shell_sidebar_legacy_reminders(), icon: Bell },
   };
 }
 
@@ -35,16 +34,13 @@ export function footItems(): NavItem[] {
   ];
 }
 
-export function groupLabel(id: SidebarGroupId): string {
-  return id === "companion" ? m.shell_sidebar_group_companion() : m.shell_sidebar_group_voice_input();
+export function groupLabel(_id: SidebarGroupId): string {
+  return m.shell_sidebar_group_companion();
 }
 
-/** 每组现在有的页面（默认顺序）：旧提醒只有升级用户有。 */
-export function presentGroups(legacyReminders: boolean): { id: SidebarGroupId; pages: string[] }[] {
-  return SIDEBAR_GROUPS.map((group) => ({
-    id: group.id,
-    pages: group.pages.filter((id) => id !== "legacy-reminders" || legacyReminders),
-  })).filter((group) => group.pages.length > 0);
+/** 每组现在有的页面（默认顺序）。 */
+export function presentGroups(): { id: SidebarGroupId; pages: string[] }[] {
+  return SIDEBAR_GROUPS.map((group) => ({ id: group.id, pages: [...group.pages] }));
 }
 
 /** 存左侧栏的顺序 / 隐藏（整份写回 `ui.sidebar`；数组在设置补丁里是整个替换）。不弹“已保存”：点一下就看得到。 */

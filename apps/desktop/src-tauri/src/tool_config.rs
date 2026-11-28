@@ -588,7 +588,7 @@ pub async fn invoke_until(
             let SpeechStatusArgs { check } = parse(tool, args)?;
             let package = crate::speech_models::get_speech_model_status(app.clone());
             let (voices, voices_error) =
-                match crate::assistant::list_speech_voices(app.clone(), None).await {
+                match crate::assistant::list_speech_voices(app.clone()).await {
                     Ok(voices) => (
                         serde_json::to_value(voices).unwrap_or(json!([])),
                         Value::Null,

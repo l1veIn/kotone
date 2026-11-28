@@ -25,7 +25,6 @@
   } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import { startPageOf, usesLegacyVoiceInput } from "../../lib/ipc/contracts";
-  import LegacyRemindersPage from "./pages/LegacyRemindersPage.svelte";
   import { checkForUpdates } from "../../lib/updater";
   import { Sonner } from "$lib/components/ui/sonner";
   import AdminExplainDialog from "../../lib/components/AdminExplainDialog.svelte";
@@ -383,8 +382,6 @@
       <AssistantPage {chatRequest} open={assistantOpen}
         onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => navigate("automation")}
         onKeyConnected={keyConnected} onBackToVoice={() => openVoiceInput()} />
-    {:else if page === "legacy-reminders"}
-      <LegacyRemindersPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "automation"}
       <AutomationPage onOpenHotkeys={() => openAdvanced("system", "system-stop")} />
     {:else if page === "game"}

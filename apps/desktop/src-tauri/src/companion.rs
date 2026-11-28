@@ -58,7 +58,6 @@ impl Default for CompanionRuntime {
 pub enum Source {
     Voice,
     QuickMessage,
-    Text,
     Tool,
 }
 
@@ -67,7 +66,6 @@ impl Source {
         match self {
             Self::Voice => "voice",
             Self::QuickMessage => "quick-message",
-            Self::Text => "text",
             Self::Tool => "tool",
         }
     }

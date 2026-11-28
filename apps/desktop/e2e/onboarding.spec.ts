@@ -219,10 +219,14 @@ test("a failed model download keeps an inline error and retry action", async ({ 
   await expect(page.getByRole("button", { name: "手动下载", exact: true }).first()).toBeVisible();
 });
 
-test("a legacy upgrade that keeps voice input preserves the reminder entry and stays quiet", async ({ page }) => {
+test("a legacy upgrade that keeps voice input stays quiet; the welcome says the reminder assistant is gone", async ({ page }) => {
   await page.goto("/#/settings?mockLegacyUpgrade=pending");
   const upgrade = page.getByTestId("onboarding-upgrade");
   await expect(upgrade.getByRole("heading")).toHaveText("Kotone 0.2：多了一位游戏陪玩");
+  // 提醒助手退掉了（ADR 052）：欢迎页说清楚，摘要里不再写“提醒助手照旧”
+  await expect(upgrade).toContainText("「提醒助手」不再单独有了");
+  await expect(upgrade).toContainText("在「自动化」里看得到");
+  await expect(page.getByTestId("onboarding-upgrade-summary")).not.toContainText("提醒助手");
   await expect(page.getByTestId("onboarding-welcome")).toHaveCount(0);
   await page.getByTestId("onboarding-keep-voice").click();
   await expect(page.getByTestId("onboarding")).toHaveCount(0);
@@ -230,8 +234,7 @@ test("a legacy upgrade that keeps voice input preserves the reminder entry and s
   // 侧栏完整（D4），但角色没启用：对话列表是空的说明，点聊天是 Key 卡片
   await expect(page.getByTestId("sidebar-conversations-empty")).toBeVisible();
   await expect(page.getByTestId("settings-nav-game")).toHaveText("游戏适配");
-  await page.getByTestId("settings-nav-legacy-reminders").click();
-  await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-legacy-reminders")).toHaveCount(0);
   // 还没启用她：「设置」里不指向唤醒、交互这些，角色页也没有这四个分页（以前是「设置」里没有陪玩组）
   await page.getByTestId("settings-nav-advanced").click();
   await expect(page.getByTestId("advanced-companion-moved")).toHaveCount(0);
@@ -245,19 +248,23 @@ test("a legacy upgrade that keeps voice input preserves the reminder entry and s
   expect(settings.assistant.hotkey).toBe("");
 });
 
-test("an upgraded user explicitly picks a separate call key and keeps the old reminder settings", async ({ page }) => {
+test("an upgraded user picks a call key; her connection and call key are the same fields as a new user's", async ({ page }) => {
   await page.goto("/#/settings?mockLegacyUpgrade=pending&mockLegacyReminder=configured&mockModels=none");
   const original = await mockSettings(page);
-  expect(original.assistant.hotkey).toBe("Alt+F9");
+  // 旧提醒助手的键和连接读取时就清掉了（ADR 052），连接还在「API 连接」里
+  expect(original.assistant.hotkey).toBe("");
+  expect(original.assistant.connectionId).toBe("");
+  expect(original.connections.map((c) => c.id)).toContain("original-reminder");
   await page.getByTestId("onboarding-meet-companion").click();
   await page.getByTestId("onboarding-key-input").fill("sk-test-123");
   await page.getByTestId("onboarding-key-submit").click();
   await expect(page.getByTestId("onboarding-connected")).toBeVisible();
-  // 升级用户的呼叫键默认空、推荐 ~；不能和提醒助手热键相同
+  // 升级用户的呼叫键默认空、推荐 ~；不能和别的热键相同（停下热键）
   await expect(page.getByTestId("onboarding-call-key-value")).toHaveText("未设置");
+  await expect(page.getByTestId("onboarding-connected")).toContainText("你原来的语音输入热键不受影响");
   await page.getByTestId("onboarding-call-key-record").click();
-  await page.keyboard.press("Alt+F9");
-  await expect(page.getByTestId("onboarding-call-key-conflict")).toContainText("提醒助手热键");
+  await page.keyboard.press("Control+Shift+F12");
+  await expect(page.getByTestId("onboarding-call-key-conflict")).toContainText("停下");
   await expect(page.getByTestId("onboarding-enter-chat")).toBeDisabled();
   await page.getByTestId("onboarding-call-key-record").click();
   await page.keyboard.press("Control+Alt+F10");
@@ -266,13 +273,10 @@ test("an upgraded user explicitly picks a separate call key and keeps the old re
   await expect(page.getByTestId("onboarding")).toHaveCount(0);
 
   const next = await mockSettings(page);
-  expect(next.ui.legacyUpgrade).toBe("optedIn");
-  expect(next.assistant.hotkey).toBe(original.assistant.hotkey);
-  expect(next.assistant.connectionId).toBe(original.assistant.connectionId);
-  expect(next.assistant.companionBindings).toEqual({
-    hotkey: "Ctrl+Alt+F10",
-    connectionId: expect.stringMatching(/^deepseek-/),
-  });
+  expect(next.ui.legacyUpgrade).toBe("notNeeded");
+  expect(next.assistant.hotkey).toBe("Ctrl+Alt+F10");
+  expect(next.assistant.connectionId).toMatch(/^deepseek-/);
+  expect(next.assistant).not.toHaveProperty("companionBindings");
   // 第一次设的呼叫键写进「设置 → 热键」那张表（ADR 040 D3 的例外）
   expect(next.hotkeys?.bindings).toContainEqual({ key: "Ctrl+Alt+F10", command: "kotone.call" });
   expect(next.connections).toContainEqual(original.connections[0]);
@@ -280,13 +284,8 @@ test("an upgraded user explicitly picks a separate call key and keeps the old re
   expect(next.activeModelId).toBe(original.activeModelId);
   expect(next.activeProfileId).toBe(original.activeProfileId);
   expect(next.hotkey).toEqual(original.hotkey);
-
-  // 提醒助手照旧：原来的连接和热键
-  await page.getByTestId("settings-nav-legacy-reminders").click();
-  await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
-  await page.getByTestId("assistant-nav-settings").click();
-  await expect(page.getByRole("combobox", { name: "提醒助手 API 连接" })).toContainText("原来的提醒连接");
-  await expect(page.getByTestId("hotkey-input-legacy-reminder")).toHaveValue("Alt+F9");
+  // 没有「提醒助手」页了
+  await expect(page.getByTestId("settings-nav-legacy-reminders")).toHaveCount(0);
 });
 
 test("a legacy key that fails the test leaves no connection behind and the user can still keep voice input", async ({ page }) => {
@@ -299,7 +298,7 @@ test("a legacy key that fails the test leaves no connection behind and the user 
   await expect(page.getByTestId("onboarding-key-error")).toBeVisible();
   expect(await mockConnections(page)).toEqual(original);
   expect((await mockSettings(page)).ui.legacyUpgrade).toBe("pending");
-  expect((await mockSettings(page)).assistant.companionBindings).toBeUndefined();
+  expect((await mockSettings(page)).assistant.connectionId).toBe("");
   // 返回升级欢迎页，或在 Key 页直接“继续使用语音输入法”
   await page.getByTestId("onboarding-key-back").click();
   await expect(page.getByTestId("onboarding-upgrade")).toBeVisible();

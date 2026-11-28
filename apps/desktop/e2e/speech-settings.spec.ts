@@ -76,7 +76,6 @@ async function openNativeSettings(page: Page) {
           ? [{ id: "system/sapi:test", name: "系统测试声音" }]
           : ["001", "003", "017"].map((id) => ({ id: `kokoro/zf_${id}`, name: `中文女声 ${id}` }));
       }
-      if (command === "list_reminders") return [];
       if (command === "get_startup_options") return { onboarding: "never" };
       if (command === "update_settings") return browser.updateSettings(args.patch);
       // 她的声音（ADR 048）：服务商状态、Key 都走浏览器预览的那份（不联网）

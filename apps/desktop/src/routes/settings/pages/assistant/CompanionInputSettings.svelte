@@ -3,7 +3,7 @@
   // 选了通话才有“通话多久挂断”和回声消除（ADR 033），下面接快捷指令等（ADR 028）。
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
-  import { companionBindings, type CallMode } from "../../../../lib/ipc";
+  import { type CallMode } from "../../../../lib/ipc";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import HotkeyLink from "../../../../lib/components/HotkeyLink.svelte";
@@ -13,7 +13,6 @@
   import CompanionSettings from "./CompanionSettings.svelte";
 
   const config = $derived($settingsStore?.assistant);
-  const bindings = $derived(companionBindings(config));
   const name = $derived($companionName);
   /** 通话多久没人说话挂断（新字段 assistant.callIdleSeconds，旧配置没有 = 30 秒；0 = 旧写法的“不通话”）。 */
   const callIdle = $derived(config?.callIdleSeconds ?? 30);
@@ -47,13 +46,13 @@
   const echoCancellation = $derived(config?.echoCancellation ?? true);
 </script>
 
-{#if bindings}
+{#if config}
   <div class="space-y-6" data-testid="call-settings">
     <SettingsSection title={m.companion_call_title({ name })} id="assistant-hotkey-title" description={m.companion_call_desc({ name })}>
       <SettingsRow label={m.companion_call_hotkey_label()} description={m.companion_call_hotkey_desc()} stacked>
         {#snippet control()}
           <!-- 热键只在「设置 → 热键」改（ADR 040 D3） -->
-          <HotkeyLink id="kotone.call" value={bindings.hotkey} />
+          <HotkeyLink id="kotone.call" value={config.hotkey} />
         {/snippet}
       </SettingsRow>
       <div class="py-3.5">

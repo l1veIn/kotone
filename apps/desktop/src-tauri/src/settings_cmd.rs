@@ -42,10 +42,8 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         || old.toggle_post_processing_hotkey != next.toggle_post_processing_hotkey
         || old.cycle_post_processing_hotkey != next.cycle_post_processing_hotkey
         || old.call_hotkey() != next.call_hotkey()
-        || old.legacy_reminder_hotkey() != next.legacy_reminder_hotkey()
-        || old.assistant.interaction_mode != next.assistant.interaction_mode
-        || old.ui.legacy_upgrade.uses_legacy_assistant()
-            != next.ui.legacy_upgrade.uses_legacy_assistant()
+        || old.ui.legacy_upgrade.voice_input_only()
+            != next.ui.legacy_upgrade.voice_input_only()
         // 语音输入插件开关：语音输入热键跟着登记 / 撤掉（ADR 038）
         || crate::plugins::voice_input_on(old) != crate::plugins::voice_input_on(next)
         // 热键表（ADR 040 D8）：上面的旧字段都是它的镜像，表里别的条目（更新的版本写的）变了也重新算一遍；
@@ -64,8 +62,8 @@ fn hotkey_table_changed(old: &Settings, next: &Settings) -> bool {
 fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
     old.runtime_toggle_hotkey != next.runtime_toggle_hotkey
         || old.automation_stop_hotkey != next.automation_stop_hotkey
-        || old.ui.legacy_upgrade.uses_legacy_assistant()
-            != next.ui.legacy_upgrade.uses_legacy_assistant()
+        || old.ui.legacy_upgrade.voice_input_only()
+            != next.ui.legacy_upgrade.voice_input_only()
         // 谁先拿到键按表的顺序算（ADR 040 D6）：呼叫键变了，停下热键可能从“被占了”变成能登记；
         // 自己加的不用听的（运行自动化、调工具、打开页面，第 3 期）也随应用登记
         || hotkey_table_changed(old, next)
@@ -226,9 +224,6 @@ fn apply_update(
             serde_json::json!({
                 "hotkey": updated.hotkey.key,
                 "assistantHotkey": updated.call_hotkey(),
-                "legacyReminderHotkey": updated.legacy_reminder_hotkey(),
-                "assistantMode": updated.assistant.interaction_mode,
-                "legacyAssistant": updated.ui.legacy_upgrade.uses_legacy_assistant(),
             }),
         );
     }
@@ -259,8 +254,8 @@ fn apply_update(
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
-    if !updated.ui.legacy_upgrade.uses_legacy_assistant() {
-        if old.ui.legacy_upgrade.uses_legacy_assistant() {
+    if !updated.ui.legacy_upgrade.voice_input_only() {
+        if old.ui.legacy_upgrade.voice_input_only() {
             automation::ensure_builtin(&app);
             roles::migrate(&app);
             // 同步命令跑在主线程的 IPC 回调里：在这里直接建 WebView（气泡窗）会让 WebView2
@@ -392,15 +387,14 @@ mod hotkey_settings_tests {
     }
 
     #[test]
-    fn changing_assistant_input_mode_requires_registration_but_not_voice_settings() {
+    fn changing_the_call_key_requires_registration_but_not_voice_settings() {
         let old = Settings::default();
         let mut next = old.clone();
         next.assistant.speech_volume = 30;
         assert!(!hotkey_registration_changed(&old, &next));
-        next.assistant.interaction_mode =
-            kotone_core::assistant::AssistantInteractionMode::Dictation;
+        next.assistant.hotkey = "F7".into();
+        next.reconcile_hotkeys(&old);
         assert!(hotkey_registration_changed(&old, &next));
-        assert!(!app_hotkey_changed(&old, &next));
     }
 
     fn quick(id: &str, hotkey: &str) -> kotone_core::assistant::QuickMessage {

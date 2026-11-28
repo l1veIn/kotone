@@ -86,20 +86,16 @@ export async function connectDeepSeek(rawKey: string, current: Settings | null):
  *
  * - 新用户：五项都换。只有一个例外：玩家已经自己下好并选了本地识别模型（走过“只想用语音输入？”），
  *   语音识别保持本地——不在玩家没选择的情况下换掉他选的识别方式。
- * - 0.1.x 升级用户：语音识别一律不动（ADR 028 / 027），她的连接写进 `assistant.companionBindings`，
- *   旧提醒助手的键和连接原样保留。还没启用她的（`pending` / `dismissed`）这就启用，落地页改成聊天（D5）；
- *   已经启用的只换她的连接、呼叫键不动。
+ * - 0.1.x 升级后还没启用她的（`pending` / `dismissed`）：这就启用（`legacyUpgrade` 写成 `notNeeded`），落地页改成聊天
+ *   （D5）；语音识别不动（ADR 028 / 027）。呼叫键另设（升级用户默认空）。
+ * 她的连接只在 `assistant.connectionId`（ADR 052）；启用了她的 0.1.x 用户和新用户一样。
  */
 export async function switchToDeepSeek(connectionId: string, current: Settings | null): Promise<DeepSeekSetupResult> {
-  const upgrade = current?.ui.legacyUpgrade;
   const items: SwitchedItem[] = [{ id: "chat", label: m.shell_deepseek_item_chat(), ok: true }];
-  if (upgrade === "optedIn") {
-    await updateSettings({ assistant: { companionBindings: { connectionId } } });
-    items.push({ id: "asr", label: m.shell_deepseek_item_asr(), ok: true, note: m.shell_deepseek_asr_keep_settings() });
-  } else if (usesLegacyVoiceInput(current?.ui)) {
+  if (usesLegacyVoiceInput(current?.ui)) {
     await updateSettings({
-      assistant: { companionBindings: { connectionId, hotkey: current?.assistant.companionBindings?.hotkey ?? "" } },
-      ui: { legacyUpgrade: "optedIn", firstRunCompleted: true, startPage: "chat" },
+      assistant: { connectionId },
+      ui: { legacyUpgrade: "notNeeded", firstRunCompleted: true, startPage: "chat" },
     });
     items.push({ id: "asr", label: m.shell_deepseek_item_asr(), ok: true, note: m.shell_deepseek_asr_keep_settings() });
   } else {

@@ -2,14 +2,8 @@ use super::capture::SessionOrigin;
 use super::*;
 
 impl Orchestrator {
-    /// 助手使用同一个音频/STT端口，但用途在开始时固定，识别结果绝不进入游戏注入。
-    pub async fn begin_assistant(&self) -> Result<(), String> {
-        self.begin_inner(false, SessionPurpose::Assistant, None, None)
-            .await
-    }
-
-    /// 语音唤醒后的收音（ADR 017）：助手会话，说完（VAD 静音）直接提交，不管助手热键的
-    /// 交互模式；一直没开口超过 `no_speech_timeout_ms` 就安静取消。会话 ID 以
+    /// 语音唤醒后的收音（ADR 017）：助手会话（和语音输入用同一个音频 / 识别端口，但识别结果绝不进入游戏
+    /// 注入），说完（VAD 静音）直接提交；一直没开口超过 `no_speech_timeout_ms` 就安静取消。会话 ID 以
     /// `assistant-wake-` 开头，宿主据此把它记为唤醒来源。只在空闲时开始。
     pub async fn begin_assistant_wake(&self, no_speech_timeout_ms: u32) -> Result<(), String> {
         self.begin_assistant_call(SessionOrigin::Wake {
@@ -58,122 +52,18 @@ impl Orchestrator {
         if !self.input_ticket_is_current(ticket) {
             return;
         }
-        let (state, purpose, gen, legacy_reminder) = self.hotkey_session_snapshot();
+        let (state, purpose, gen) = self.hotkey_session_snapshot();
         match state {
             OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error => {
                 if let Err(e) = self.begin_assistant_call(origin).await {
                     crate::log::log(&format!("呼叫琴音没有开始：{e}"));
                 }
             }
-            OrchestratorState::Listening
-                if purpose == SessionPurpose::Assistant && !legacy_reminder =>
-            {
+            OrchestratorState::Listening if purpose == SessionPurpose::Assistant => {
                 let _ = self.end_inner(Some(gen), ticket).await;
             }
             _ => self.cancel_inner(ticket, Some(gen)).await,
         }
-    }
-
-    /// 独立助手键的点按入口，按助手自己的预设路由。
-    pub async fn on_assistant_hotkey(&self) {
-        self.on_assistant_hotkey_with_ticket(self.hotkey_input_ticket())
-            .await;
-    }
-
-    pub async fn on_assistant_hotkey_with_ticket(&self, ticket: u64) {
-        self.on_purpose_hotkey_toggle(SessionPurpose::Assistant, ticket)
-            .await;
-    }
-
-    /// 对讲机必须由壳传入真实 down/up；松开沿用尾音宽限与重按撤回机制。
-    pub async fn on_assistant_hotkey_hold(&self, pressed: bool) {
-        self.on_assistant_hotkey_hold_with_ticket(pressed, self.hotkey_input_ticket())
-            .await;
-    }
-
-    pub async fn on_assistant_hotkey_hold_with_ticket(&self, pressed: bool, ticket: u64) {
-        self.on_purpose_hotkey_hold(SessionPurpose::Assistant, pressed, ticket)
-            .await;
-    }
-
-    /// 面板语音按钮专用入口。会话 ID 在同一入场临界区内生成和返回，
-    /// 迟到的按钮命令不能接管热键会话，也不能操作下一次录音。
-    pub async fn start_assistant_voice_input(
-        &self,
-        input_ticket: u64,
-    ) -> Result<AssistantVoiceSession, String> {
-        let _op = self.op.lock().await;
-        if !self.input_ticket_is_current(Some(input_ticket)) {
-            return Err("语音输入操作已失效，请重试".into());
-        }
-        let clear_terminal = {
-            let inner = self.inner.lock().unwrap();
-            match inner.state {
-                OrchestratorState::Idle => false,
-                OrchestratorState::Success | OrchestratorState::Error
-                    if inner.purpose == SessionPurpose::Assistant =>
-                {
-                    true
-                }
-                _ => return Err("已有语音会话正在进行，请先结束或取消".into()),
-            }
-        };
-        if clear_terminal {
-            self.cancel_locked();
-        }
-        self.begin_admitted(false, SessionPurpose::Assistant, None, true)?;
-        let session_id = self
-            .inner
-            .lock()
-            .unwrap()
-            .process_case_id
-            .clone()
-            .expect("begin assigned session ID");
-        // begin_admitted 持有 op；配置发布也使用 op，故这里读取与开麦相同的模式。
-        let interaction_mode = self.settings.read().unwrap().assistant.interaction_mode;
-        Ok(AssistantVoiceSession {
-            session_id,
-            interaction_mode,
-        })
-    }
-
-    fn assistant_voice_generation(&self, session_id: &str) -> Option<u64> {
-        let inner = self.inner.lock().unwrap();
-        (inner.assistant_voice_owner
-            && inner.purpose == SessionPurpose::Assistant
-            && inner.process_case_id.as_deref() == Some(session_id))
-        .then_some(inner.gen)
-    }
-
-    pub async fn finish_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
-        let op = self.op.lock().await;
-        let Some(gen) = self.assistant_voice_generation(session_id) else {
-            return Ok(());
-        };
-        if self.state() != OrchestratorState::Listening {
-            return Ok(());
-        }
-        if self.policy().end == EndTrigger::HotkeyRelease {
-            self.schedule_release_end(gen, self.hotkey_input_ticket());
-            return Ok(());
-        }
-        drop(op);
-        self.end_inner(Some(gen), None).await
-    }
-
-    pub async fn confirm_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
-        let Some(gen) = self.assistant_voice_generation(session_id) else {
-            return Ok(());
-        };
-        self.confirm_send_inner(None, Some(gen)).await
-    }
-
-    pub async fn cancel_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
-        let _op = self.op.lock().await;
-        if self.assistant_voice_generation(session_id).is_some() {
-            self.cancel_locked();
-        }
-        Ok(())
     }
 
     pub(super) async fn run_assistant(

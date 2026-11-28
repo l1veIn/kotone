@@ -187,7 +187,7 @@ fn post_from(
     push: Push,
 ) -> Result<PushOutcome, String> {
     let settings = settings(app);
-    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+    if settings.ui.legacy_upgrade.voice_input_only() {
         // 0.1.x 升级上来、还没启用琴音：没有她的聊天
         return Ok(PushOutcome::Off);
     }

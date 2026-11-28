@@ -134,11 +134,8 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
     // ---- 游戏陪玩（角色 / Agent）：呼叫 = 呼叫键、唤醒词、聊天页的呼叫按钮 ----
-    f("assistant.hotkey", "呼叫键", "设置 → 热键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在悬浮窗里听你说（怎么听看 assistant.callMode，缺省说完自动交给她）。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
-    f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "设置 → 热键", "仅 0.1.x 升级用户启用琴音后使用；按一下在悬浮窗里听，说完自动交给她。", NONE, NOW),
-    f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项（呼叫以后怎么听是 assistant.callMode）。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
-    f("assistant.connectionId", "API 连接", "聊天页 → 她用的模型，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
-    f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "聊天页 → 她用的模型", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
+    f("assistant.hotkey", "呼叫键", "设置 → 热键", "呼叫键，新用户默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在悬浮窗里听你说（怎么听看 assistant.callMode，缺省说完自动交给她）。空 = 不用。0.1.x 升级后还没启用她的用户没有呼叫键。", NONE, NOW),
+    f("assistant.connectionId", "API 连接", "聊天页 → 她用的模型", "她用哪条连接（连接 ID，用 connections.list 查）。", NONE, NOW),
     f("assistant.callMode", "呼叫以后怎么听", "琴音 → 唤醒", "按呼叫键、喊唤醒词、点聊天页的呼叫按钮、按快捷指令以后怎么听。缺省 one-shot。说一句就走和录音笔里她答完就安静，只有她这次最后一句是问句（以“？”结尾）才再听一会儿（assistant.followUpSeconds）。", &[("one-shot", "说一句就走（缺省）：听你说一句，说完自动交给她；再按呼叫键可以提前结束"), ("dictation", "录音笔：按一下呼叫键开始听，再按一下结束、交给她；唤醒词、呼叫按钮、快捷指令照说一句就走"), ("call", "通话：一直在听，开口就是下一句；说“退下”、再按呼叫键或 assistant.callIdleSeconds 秒没人说话就挂断")], NOW),
     f("assistant.followUpSeconds", "她问了一句以后再听几秒", "琴音 → 唤醒", "秒，0–30，缺省 8。说一句就走和录音笔里，她这次最后一句以问号结尾时，答完再听这么久，你直接回答就行；0 = 问了也不再听。通话里一直在听，不看这一项。", NONE, NOW),
     f("assistant.callIdleSeconds", "通话多久没人说话挂断", "琴音 → 唤醒", "秒，0–600，缺省 30。只在 assistant.callMode 是 call（通话）时有用：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话（旧的写法），按说一句就走。", NONE, NOW),
@@ -347,6 +344,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("toolService.ocr", "旧字段，保留兼容"),
     ("ui.firstRunCompleted", "首次向导是否完成"),
     ("ui.legacyUpgrade", "由玩家在升级欢迎页或新手引导中选择"),
+    (
+        "assistant.interactionMode",
+        "0.1.x 提醒助手热键的说话方式；提醒助手退掉了（ADR 052），只为旧版本能读保留",
+    ),
     ("adminPromptDismissed", "界面提示状态"),
     ("autoAdminPromptDismissed", "界面提示状态"),
     ("adminPromptRevision", "界面提示状态：管理员身份的说明问过没有（ADR 044）"),
@@ -637,10 +638,7 @@ mod tests {
 
     #[test]
     fn documented_paths_exist_and_are_unique() {
-        let mut settings = Settings::default();
-        settings.assistant.companion_bindings =
-            Some(crate::assistant::CompanionBindings::default());
-        let json = serde_json::to_value(settings).unwrap();
+        let json = serde_json::to_value(Settings::default()).unwrap();
         let mut seen = std::collections::HashSet::new();
         for field in FIELDS {
             assert!(seen.insert(field.path), "重复的说明 {}", field.path);
@@ -730,7 +728,6 @@ mod tests {
             "音乐",
             "插件",
             "左侧栏",
-            "提醒助手",
             "关于",
         ];
         const SECOND: &[(&str, &[&str])] = &[
@@ -757,7 +754,6 @@ mod tests {
                     "热键",
                 ],
             ),
-            ("提醒助手", &["提醒设置"]),
         ];
         for field in FIELDS {
             for location in field.page.split("，或") {

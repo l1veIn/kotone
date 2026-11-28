@@ -458,7 +458,7 @@ fn lists_every_hotkey_with_its_source_in_page_order() {
 
 #[test]
 fn legacy_users_only_see_what_they_use() {
-    // 0.1.x 升级、只用语音输入：没有呼叫键、停下热键、快捷指令；提醒助手热键是原来的 assistant.hotkey
+    // 0.1.x 升级、只用语音输入：没有呼叫键、停下热键、快捷指令；提醒助手和它的热键退掉了（ADR 052）
     let mut settings = Settings::default();
     settings.ui.legacy_upgrade = LegacyUpgrade::Dismissed;
     settings.assistant.hotkey = "Alt+F9".into();
@@ -469,31 +469,21 @@ fn legacy_users_only_see_what_they_use() {
         !ids.contains(&HK_ASSISTANT)
             && !ids.contains(&HK_AUTOMATION_STOP)
             && !ids.contains(&"custom.q-集合")
+            && !ids.contains(&"legacy-reminder")
     );
-    assert_eq!(row(&table, HK_LEGACY_REMINDER).key, "Alt+F9");
+    assert!(
+        table.bindings.iter().all(|b| b.key != "Alt+F9"),
+        "只用语音输入的人没有呼叫键"
+    );
     assert!(
         check_ids(&settings, "F8", Some(HK_RECORD)).is_empty(),
         "不用的快捷指令不占键"
     );
-    // 升级后启用了她：呼叫键在 companionBindings 里，和提醒助手热键互相查
-    settings.ui.legacy_upgrade = LegacyUpgrade::OptedIn;
-    settings.assistant.companion_bindings = Some(crate::assistant::CompanionBindings {
-        hotkey: "Alt+F9".into(),
-        ..Default::default()
-    });
+    // 启用了她：呼叫键和新用户一样在 assistant.hotkey
+    settings.ui.legacy_upgrade = LegacyUpgrade::NotNeeded;
     let table = table_of(&settings);
-    assert_eq!(
-        row(&table, HK_ASSISTANT).field,
-        "assistant.companionBindings.hotkey"
-    );
-    assert_eq!(
-        row(&table, HK_ASSISTANT).conflicts,
-        vec![HK_LEGACY_REMINDER]
-    );
-    assert_eq!(
-        check_ids(&settings, "Alt+F9", Some(HK_ASSISTANT)),
-        vec![HK_LEGACY_REMINDER]
-    );
+    assert_eq!(row(&table, HK_ASSISTANT).field, "assistant.hotkey");
+    assert_eq!(row(&table, HK_ASSISTANT).key, "Alt+F9");
 }
 
 /// 表里写的字段和“在哪改”和设置说明（她和外部 Agent 读的那张）一致：改了一边忘了另一边就失败。
@@ -502,7 +492,7 @@ fn fields_and_pages_match_the_settings_guide() {
     let mut settings = Settings::default();
     settings.assistant.companion.quick_messages = vec![quick("F8", "集合")];
     let mut rows = table_of(&settings).bindings;
-    settings.ui.legacy_upgrade = LegacyUpgrade::OptedIn;
+    settings.ui.legacy_upgrade = LegacyUpgrade::Dismissed;
     rows.extend(table_of(&settings).bindings);
     for row in rows.iter().filter(|r| r.source != KeySource::Fixed) {
         let field = crate::settings_guide::field_for(&row.field)
@@ -631,7 +621,7 @@ fn the_first_one_keeps_a_shared_key_and_esc_is_never_taken() {
 }
 
 #[test]
-fn plugin_off_unknown_commands_and_legacy_reminders_in_the_plan() {
+fn plugin_off_unknown_commands_and_voice_input_only_users_in_the_plan() {
     let mut settings = Settings::default();
     settings
         .hotkeys
@@ -668,7 +658,7 @@ fn plugin_off_unknown_commands_and_legacy_reminders_in_the_plan() {
         .iter()
         .any(|b| b.source == KeySource::Unknown && b.label == "someone.new-thing"));
 
-    // 0.1.x 升级用户的提醒助手热键：按交互模式按住 / 按一下，识别没跑时不登记也不提示（D10 照旧）
+    // 0.1.x 升级、只用语音输入：不登记呼叫、停下，旧提醒键也不登记（提醒助手退掉了，ADR 052）
     let legacy = Settings {
         ui: crate::settings::UiConfig {
             legacy_upgrade: LegacyUpgrade::Dismissed,
@@ -681,11 +671,7 @@ fn plugin_off_unknown_commands_and_legacy_reminders_in_the_plan() {
         ..Default::default()
     };
     let plan = plan_of(&legacy);
-    let reminder = planned(&plan, HK_LEGACY_REMINDER);
-    assert_eq!(
-        (reminder.hold, reminder.always, reminder.hint),
-        (true, false, None)
-    );
+    assert!(plan.iter().all(|p| p.combo != "Alt+F9"));
     assert!(plan
         .iter()
         .all(|p| p.id != HK_ASSISTANT && p.id != HK_AUTOMATION_STOP));

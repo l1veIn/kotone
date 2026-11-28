@@ -7,7 +7,7 @@
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
   import { onMount, tick, untrack } from "svelte";
-  import { companionBindings, listConnections, type ConnectionInfo } from "../../../lib/ipc";
+  import { listConnections, type ConnectionInfo } from "../../../lib/ipc";
   import { usesLegacyVoiceInput } from "../../../lib/ipc/contracts";
   import { useAgentChat } from "../../../lib/agentChat/context";
   import { errText, settingsStore } from "../../../lib/stores/ui";
@@ -46,7 +46,7 @@
   /** 每加一，聊天页就打开一次输入框旁的模型菜单（“去看看：她用的模型”）。 */
   let modelRequest = $state(0);
   const legacy = $derived(usesLegacyVoiceInput($settingsStore?.ui));
-  const ready = $derived(!legacy && !!connections.find((item) => item.id === companionBindings($settingsStore?.assistant)?.connectionId)?.hasApiKey);
+  const ready = $derived(!legacy && !!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
   // 角色 · 记忆 · 技能；唤醒 · 交互 · 权限 · 用量（逃生通道用户还没启用她，没有后四个，和原来设置里不显示陪玩组一样）
   const baseTabs = [
     { id: "identity", label: m.companion_page_tab_identity() }, { id: "memory", label: m.companion_page_tab_memory() }, { id: "skills", label: m.companion_page_tab_skills() },

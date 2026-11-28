@@ -144,7 +144,6 @@ fn hotkey_patch(current: &Settings, id: &str, key: &str) -> Result<Value, String
     if split_command(command).is_none() {
         return Err(match id {
             hotkey_table::KEY_ESCAPE => "Esc 是固定的，不能改".to_string(),
-            hotkey_table::HK_LEGACY_REMINDER => "提醒助手热键在「提醒助手」页改".to_string(),
             _ => format!("「{id}」在这里改不了"),
         });
     }
@@ -204,6 +203,7 @@ mod tests {
         assert!(hotkey_patch(&settings, "custom.gone", "F8").is_err());
         // 改不了的、认不出的键
         assert!(hotkey_patch(&settings, "escape", "F8").is_err());
+        // 0.1.x 提醒助手的键退掉了（ADR 052）：这个 id 也改不了
         assert!(hotkey_patch(&settings, "legacy-reminder", "F8").is_err());
         assert!(hotkey_patch(&settings, CMD_TALK, "NotAKey").is_err());
     }

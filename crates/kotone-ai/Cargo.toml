@@ -2,7 +2,7 @@
 name = "kotone-ai"
 version = "0.1.0"
 edition = "2021"
-description = "Kotone shared AI transport, credentials, reminder planning and the built-in agent loop"
+description = "Kotone shared AI transport, credentials and the built-in agent loop"
 
 [dependencies]
 kotone-core.workspace = true

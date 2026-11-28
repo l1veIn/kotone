@@ -722,7 +722,7 @@ pub fn start_schedules(app: &AppHandle) {
                     .unwrap()
                     .ui
                     .legacy_upgrade
-                    .uses_legacy_assistant()
+                    .voice_input_only()
                 {
                     last = now;
                     continue;

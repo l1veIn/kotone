@@ -8,7 +8,6 @@ const NAMES: Record<string, () => string> = {
   "kotone.call": m.voice_hotkey_name_call,
   "kotone.stop": m.voice_hotkey_name_automation_stop,
   "kotone.speech-toggle": m.voice_hotkey_name_runtime_toggle,
-  "legacy-reminder": m.voice_hotkey_name_legacy_reminder,
   escape: m.hotkeys_escape,
 };
 

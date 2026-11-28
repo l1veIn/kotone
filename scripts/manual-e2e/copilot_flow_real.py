@@ -9,7 +9,8 @@ while the player is in a game. Three parts:
    listening; switch back online: the local status disappears and the start shortcut keeps its value.
 2. 0.1.x config → 继续使用语音输入法 (acceptance 3): only ui.legacyUpgrade / ui.startPage change; next launch lands on
    voice input without the onboarding.
-3. 0.1.x config → add a key (acceptance 4): opted in, call key in companionBindings, speech recognition untouched.
+3. 0.1.x config → add a key (acceptance 4): she is on (legacyUpgrade notNeeded), her connection and call key in
+   assistant.connectionId / assistant.hotkey (ADR 052), speech recognition untouched.
 The DeepSeek connections created in the isolated instances are deleted at the end (their keys live in the isolated
 credential space `kotone@<KOTONE_HOME>`). Hotkeys are off or F24, speech volume 0, input tools denied.
 usage: python -X utf8 -I scripts/manual-e2e/copilot_flow_real.py [new] [keep] [key]
@@ -278,7 +279,8 @@ out.card = await page.getByTestId("asr-card").getAttribute("data-asr-state");
         changed = sorted(k for k in before["ui"] if before["ui"].get(k) != after["ui"].get(k))
         check("old ui values unchanged; only legacyUpgrade / startPage added", not changed and set(after["ui"]) - set(before["ui"]) <= {"legacyUpgrade", "startPage", "updatePromptDisabled"}, str(changed))
         same = all(before.get(k) == after.get(k) for k in ["hotkey", "interactionMode", "activeProfileId", "sttEngine", "activeModelId", "connections"] if k in before)
-        check("voice input settings unchanged", same and after["assistant"]["hotkey"] == "Alt+F9" and "companionBindings" not in after["assistant"])
+        # 提醒助手退掉了（ADR 052）：旧提醒助手的键和连接读取时清掉
+        check("voice input settings unchanged", same and after["assistant"]["hotkey"] == "" and after["assistant"].get("connectionId", "") == "" and "companionBindings" not in after["assistant"])
         check("written: dismissed + voiceInput", after["ui"].get("legacyUpgrade") == "dismissed" and after["ui"].get("startPage") == "voiceInput")
     finally:
         stop(app, home, tools=False)
@@ -308,9 +310,10 @@ await page.getByTestId("assistant-request").waitFor();
 """)
         after = read_config(home)
         status = ui('out.s = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_runtime_status"));')["s"]
-        check("opted in, chat landing", after["ui"].get("legacyUpgrade") == "optedIn" and after["ui"].get("startPage") == "chat")
-        check("call key and connection in companionBindings", (after["assistant"].get("companionBindings") or {}).get("hotkey") == "Ctrl+Backquote")
-        check("old reminder key and ASR untouched", after["assistant"]["hotkey"] == "Alt+F9" and after.get("sttEngine") == before.get("sttEngine")
+        check("she is on, chat landing", after["ui"].get("legacyUpgrade") == "notNeeded" and after["ui"].get("startPage") == "chat")
+        check("call key and connection in assistant.*", after["assistant"].get("hotkey") == "Ctrl+Backquote"
+              and after["assistant"].get("connectionId", "").startswith("deepseek-") and "companionBindings" not in after["assistant"])
+        check("ASR untouched", after.get("sttEngine") == before.get("sttEngine")
               and after.get("activeModelId", "") == before.get("activeModelId", ""))
         check("recognition is still local", status.get("asrLocal") is True, json.dumps(status, ensure_ascii=False))
     finally:

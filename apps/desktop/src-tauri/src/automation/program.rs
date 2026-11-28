@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use kotone_agent::catalog::ToolEntry;
-use kotone_core::assistant::is_legacy_reminder_session;
 use kotone_core::automation::{program_failure, program_view, ProgramAction, Run};
 use kotone_core::cancel::CancellationToken;
 use kotone_core::input_lock::{InputGuard, InputUser};
@@ -44,8 +43,6 @@ pub(super) struct DesktopHost {
     started: Instant,
     /// 执行记录 id（推送的 key 用它）。
     run_id: String,
-    /// 0.1 升级上来的提醒（执行记录的会话是 `legacy-reminder-…`）：用旧语音引擎说。
-    legacy_voice: bool,
     /// 这次执行的程序：名字、来自哪个自动化、触发它的游戏事件（`ask()` 的护栏和附件用）。
     action: ProgramAction,
     /// 已经推送了几条（推送的 key 是 `<执行记录 id>-<第几条>`，每条都是新的）。
@@ -68,7 +65,6 @@ impl DesktopHost {
             cancel,
             started: Instant::now(),
             run_id: run.id.clone(),
-            legacy_voice: is_legacy_reminder_session(&run.session_id),
             tools: kotone_core::automation::library::tools_called(&action.source)
                 .unwrap_or_default(),
             action,
@@ -469,13 +465,12 @@ impl ScriptHost for DesktopHost {
         };
         let app = self.app.clone();
         let text = text.to_string();
-        let legacy_voice = self.legacy_voice;
         tauri::async_runtime::block_on(say_bounded(
             &self.cancel,
             SAY_LIMIT,
             SAY_GRACE,
             move |token| async move {
-                crate::assistant::deliver_text_with(&app, text, kinds, token, legacy_voice)
+                crate::assistant::deliver_text_with(&app, text, kinds, token)
                     .await
                     .map(|_| ())
             },

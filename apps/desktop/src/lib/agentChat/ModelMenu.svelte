@@ -1,6 +1,6 @@
 <script lang="ts">
   // 输入框底栏的“她用的模型”：一个小按钮写着当前的模型，点开按 API 连接分组列出模型（照 DeepSeek Harness 输入框的模型下拉）。
-  // 选一个就换。选了别的连接里的模型，会同时换她用的连接（assistant.connectionId；0.1.x 升级用户是 companionBindings.connectionId）
+  // 选一个就换。选了别的连接里的模型，会同时换她用的连接（assistant.connectionId）
   // 和那条连接的模型——和原来「设置 → 她怎么回答 → 她用的模型」改的是同一组字段。
   // 2026-11-21 挪进设置（ADR 029 待定），2026-11-25 玩家说“模型选择这块，我觉得还是放在 chat 聊天吧”，挪回来（交接第十一节第 8 条）。
   // 模型清单照 DeepSeek Harness：读服务商的模型列表（GET /models，不花 token），读不到时用预置的模型名。换模型不自检。
@@ -9,7 +9,7 @@
   import * as Menu from "$lib/components/ui/dropdown-menu";
   import { m } from "$lib/paraglide/messages.js";
   import {
-    companionBindingPatch, companionBindings, connectionModels, listConnectionPresets, updateSettings, upsertConnection,
+    connectionModels, listConnectionPresets, updateSettings, upsertConnection,
     type ConnectionInfo, type ConnectionPreset,
   } from "../ipc";
   import { errText, settingsStore, toast } from "../stores/ui";
@@ -35,7 +35,7 @@
   /** 刚保存的模型（连接清单还没刷新时先显示这个）。 */
   let saved = $state<Record<string, string>>({});
 
-  const connectionId = $derived(companionBindings($settingsStore?.assistant)?.connectionId ?? "");
+  const connectionId = $derived($settingsStore?.assistant.connectionId ?? "");
   const current = $derived(connections.find((c) => c.id === connectionId) ?? null);
   /** 能选模型的连接：有 Key 的在线连接。 */
   const usable = $derived(connections.filter((c) => c.hasApiKey && c.kind === "remote"));
@@ -72,7 +72,7 @@
     if (busy || (c.id === connectionId && modelOf(c) === model)) return;
     busy = true;
     try {
-      if (c.id !== connectionId) settingsStore.set(await updateSettings({ assistant: companionBindingPatch($settingsStore?.assistant, { connectionId: c.id }) }));
+      if (c.id !== connectionId) settingsStore.set(await updateSettings({ assistant: { connectionId: c.id } }));
       if (modelOf(c) !== model) {
         const { hasApiKey: _key, ...connection } = c;
         settingsStore.set(await upsertConnection({ ...connection, model }));

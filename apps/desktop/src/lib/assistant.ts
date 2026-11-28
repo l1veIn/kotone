@@ -1,38 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { isTauri, type AssistantInteractionMode } from "./ipc";
+import { isTauri } from "./ipc";
 import * as browserMock from "./ipc/browserMock";
 import { m } from "./paraglide/messages.js";
 
-export interface AssistantVoiceSession { sessionId: string; interactionMode: AssistantInteractionMode }
-export async function beginAssistantVoice(): Promise<AssistantVoiceSession> {
-  if (!isTauri) throw new Error(m.shell_assistant_voice_desktop_only());
-  return invoke("assistant_voice_begin");
-}
-export async function endAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_end", { sessionId });
-}
-export async function confirmAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_confirm", { sessionId });
-}
-export async function cancelAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_cancel", { sessionId });
-}
-
 export type DeliveryKind = "voice" | "danmaku";
-export interface Reminder {
-  id: string;
-  sessionId: string;
-  text: string;
-  delivery: DeliveryKind[];
-  createdAtMs: number;
-  dueAtMs: number;
-  status: "pending" | "delivering" | "delivered" | "failed" | "cancelled" | "missed";
-  error?: string | null;
-}
-export interface ReminderIntent { delaySeconds: number; text: string; delivery: DeliveryKind[] }
-export interface AssistantPlan { message: string; reminders: ReminderIntent[] }
-export interface AssistantEvent { sessionId: string; text: string; message: string; reminders: Reminder[] }
 export interface SpeechVoice { id: string; name: string }
 export interface SpeechModelStatus {
   modelId: string;
@@ -50,6 +22,7 @@ export async function getSpeechModelStatus(): Promise<SpeechModelStatus> {
     modelId: "kokoro-int8-multi-lang-v1_1", installed: false, downloading: false,
     // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
     downloadedBytes: 0, totalBytes: 147031220, phase: "idle", error: null, modelDir: "界面预览",
+    // i18n-ignore-end
   };
 }
 export async function downloadSpeechModel(): Promise<SpeechModelStatus> {
@@ -63,46 +36,8 @@ export async function subscribeSpeechModel(callback: (status: SpeechModelStatus)
   return isTauri ? listen<SpeechModelStatus>("kotone://speech-model", (event) => callback(event.payload)) : () => {};
 }
 
-// Browser preview uses labelled, local fixtures; it never pretends to run AI or schedule system output.
-const previewTime = Date.now();
-let previewReminders: Reminder[] = [{
-  id: "preview-reminder", sessionId: "preview", text: "界面示例：打野有闪了",
-  delivery: ["voice", "danmaku"], createdAtMs: previewTime, dueAtMs: previewTime + 300_000,
-  status: "pending", error: null,
-}];
-const previewListeners = new Set<() => void>();
-
-export function addPreviewReminder(): void {
-  if (isTauri) throw new Error(m.shell_assistant_preview_reminder_desktop());
-  const createdAtMs = Date.now();
-  previewReminders = [{
-    id: `preview-${crypto.randomUUID()}`, sessionId: "preview", text: "界面示例：该打小龙了",
-    delivery: ["voice", "danmaku"], createdAtMs, dueAtMs: createdAtMs + 300_000, status: "pending",
-  }, ...previewReminders];
-  previewListeners.forEach((notify) => notify());
-}
-
-export async function listReminders(): Promise<Reminder[]> {
-  return isTauri ? invoke("list_reminders") : structuredClone(previewReminders);
-}
-export async function cancelReminder(id: string): Promise<boolean> {
-  if (isTauri) return invoke("cancel_reminder", { id });
-  const reminder = previewReminders.find((item) => item.id === id && item.status === "pending");
-  if (!reminder) return false;
-  reminder.status = "cancelled";
-  previewListeners.forEach((notify) => notify());
-  return true;
-}
-// i18n-ignore-end
-export async function submitAssistantText(text: string, legacyReminder?: boolean): Promise<AssistantPlan> {
-  if (!isTauri) throw new Error(m.shell_assistant_reminder_desktop_only());
-  return invoke("assistant_submit_text", { text, legacyReminder });
-}
-export async function cancelAssistantRequest(): Promise<void> {
-  if (isTauri) await invoke("cancel_assistant_request");
-}
-export async function listSpeechVoices(legacyReminder?: boolean): Promise<SpeechVoice[]> {
-  return isTauri ? invoke("list_speech_voices", { legacyReminder }) : browserMock.speechVoices();
+export async function listSpeechVoices(): Promise<SpeechVoice[]> {
+  return isTauri ? invoke("list_speech_voices") : browserMock.speechVoices();
 }
 
 /** Key 从哪来（ADR 048；不含 Key 本身）。 */
@@ -165,9 +100,9 @@ export async function tryVoice(voiceId: string): Promise<void> {
   if (!isTauri) throw new Error(m.shell_assistant_preview_output_desktop_only());
   await invoke("speech_try_voice", { voiceId });
 }
-export async function previewReminder(kind: DeliveryKind, legacyReminder?: boolean): Promise<void> {
+export async function previewReminder(kind: DeliveryKind): Promise<void> {
   if (!isTauri) throw new Error(m.shell_assistant_preview_output_desktop_only());
-  await invoke("preview_reminder", { kind, legacyReminder });
+  await invoke("preview_reminder", { kind });
 }
 /** 呼叫琴音（和热键一样）：按一下就是通话（ADR 033），一直在听；通话中再按一下挂断。 */
 export async function callKotone(): Promise<void> {
@@ -184,12 +119,4 @@ export async function subscribeCall(callback: (active: boolean) => void): Promis
 }
 export async function stopSpeech(): Promise<void> {
   if (isTauri) await invoke("stop_speech");
-}
-export async function subscribeReminders(callback: () => void): Promise<UnlistenFn> {
-  if (isTauri) return listen("kotone://reminders-updated", callback);
-  previewListeners.add(callback);
-  return () => { previewListeners.delete(callback); };
-}
-export async function subscribeAssistant(callback: (event: AssistantEvent) => void): Promise<UnlistenFn> {
-  return isTauri ? listen<AssistantEvent>("kotone://assistant", ({ payload }) => callback(payload)) : () => {};
 }

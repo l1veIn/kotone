@@ -233,16 +233,11 @@ test("other pages show the current key and 去改 opens its row in 设置 → �
   await goTo("voice-input.resend-last");
 });
 
-test("the reminder assistant hotkey stays on its own page (D10)", async ({ page }) => {
+test("a 0.1.x user who kept voice input has no call, stop or old reminder-assistant key (ADR 052)", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never&mockLegacyUpgrade=dismissed&mockLegacyReminder=configured");
   await openSettingsTab(page, "hotkeys");
-  const row = page.getByTestId("hotkeys-row-legacy-reminder");
-  await expect(row).toContainText("提醒助手热键");
-  await expect(page.getByTestId("hotkeys-key-legacy-reminder")).toHaveText("Alt + F9");
-  await expect(row.locator("input")).toHaveCount(0);
-  // 只用语音输入的老用户没有呼叫键、停下热键
+  await expect(page.getByTestId("hotkeys-row-legacy-reminder")).toHaveCount(0);
   await expect(page.getByTestId("hotkeys-row-kotone.call")).toHaveCount(0);
   await expect(page.getByTestId("hotkeys-row-kotone.stop")).toHaveCount(0);
-  await page.getByTestId("hotkeys-goto-legacy-reminder").click();
-  await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
+  await expect(page.getByTestId("hotkeys-row-voice-input.talk")).toBeVisible();
 });

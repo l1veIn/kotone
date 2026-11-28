@@ -48,20 +48,20 @@ pub fn call_active() -> bool {
     active()
 }
 
-/// 呼叫以后怎么听（ADR 033 2026-11-26 修订）。0.1.x 旧提醒助手没有通话、也没有录音笔：按说一句就走。
+/// 呼叫以后怎么听（ADR 033 2026-11-26 修订）。还没启用她（只用语音输入）时按说一句就走。
 pub fn mode(app: &AppHandle) -> CallMode {
     let state = app.state::<SharedState>();
     let settings = state.settings.read().unwrap();
-    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+    if settings.ui.legacy_upgrade.voice_input_only() {
         return CallMode::OneShot;
     }
     settings.assistant.effective_call_mode()
 }
 
-/// 设置里的空闲挂断秒数；0 = 不通话（一问一答）。0.1.x 旧提醒助手没有通话。
+/// 设置里的空闲挂断秒数；0 = 不通话（一问一答）。还没启用她时不通话。
 pub fn idle_seconds(app: &AppHandle) -> u32 {
     let settings = app.state::<SharedState>().settings.read().unwrap().clone();
-    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+    if settings.ui.legacy_upgrade.voice_input_only() {
         return 0;
     }
     settings.assistant.call_idle_seconds

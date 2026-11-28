@@ -2,7 +2,6 @@
   /*
    * 她的声音（ADR 048）：只在这里配。选服务商 → 就地填 Key（先试一次再存，存进 Windows 的凭据库）→ 选声音（能试听）。
    * Key 一家一份：声音设置里没填就用同一家 API 连接的 Key；页面上写明 Key 从哪来、怎么计费。“自动”跟着她用的模型走。
-   * 旧提醒助手（legacyReminder）只有系统语音和 Kokoro。
    */
   import { onMount } from "svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
@@ -16,7 +15,6 @@
     type SpeechCheck, type SpeechCurrent, type SpeechModelStatus, type SpeechProvider, type SpeechVoice,
   } from "../../../../lib/assistant";
 
-  let { legacyReminder = false }: { legacyReminder?: boolean } = $props();
   let model = $state<SpeechModelStatus | null>(null);
   let voices = $state<SpeechVoice[]>([]);
   let providers = $state<SpeechProvider[]>([]);
@@ -87,7 +85,6 @@
    */
   const engine = $derived<Engine | undefined>(
     !config ? undefined
-      : legacyReminder ? config.speechEngine
       : config.ttsModelId && isOnline(config.ttsModelId) ? config.ttsModelId
       : config.speechEngine === "kokoro" ? "kokoro"
       : config.ttsModelId === "local" ? "system"
@@ -125,7 +122,6 @@
 
   function selectEngine(value: string) {
     keyOpen = false; keyInput = ""; checked = null;
-    if (legacyReminder) return save({ speechEngine: value === "kokoro" ? "kokoro" : "system" });
     // 在线的几家不写旧字段（旧版本读不懂会把整份配置当作损坏）。
     if (isOnline(value)) return save({ ttsModelId: value });
     if (value === "auto") return save({ speechEngine: "system", ttsModelId: "" });
@@ -152,7 +148,6 @@
   }
 
   async function refreshProviders() {
-    if (legacyReminder) return;
     try {
       const [list, now] = await Promise.all([listSpeechProviders(), getSpeechCurrent()]);
       if (!disposed) { providers = list; current = now; }
@@ -193,7 +188,7 @@
   async function refreshVoices() {
     const revision = ++voicesRevision;
     try {
-      const items = await listSpeechVoices(legacyReminder || undefined);
+      const items = await listSpeechVoices();
       if (disposed || revision !== voicesRevision) return;
       voices = !isTauri && (voicePrefix === "system") ? [] : (items ?? []);
       voiceError = "";
@@ -258,7 +253,7 @@
     finally { if (!disposed) cancelling = false; }
   }
 
-  const engineOptions = $derived((legacyReminder ? (["system", "kokoro"] as Engine[]) : (["auto", "system", "kokoro", ...ONLINE] as Engine[]))
+  const engineOptions = $derived((["auto", "system", "kokoro", ...ONLINE] as Engine[])
     .map((value) => ({ value, label: LABELS[value]() })));
   const regionLabel = (region: "cn" | "intl" | null | undefined) =>
     region === "intl" ? m.companion_speech_region_intl() : region === "cn" ? m.companion_speech_region_cn() : "";
@@ -365,13 +360,11 @@
           <div class="min-w-0 flex-1"><SelectField ariaLabel={m.companion_speech_voice_label()} value={selectedVoice} disabled={saving}
             options={voiceOptions} onchange={(value) => void saveVoice(value)} /></div>
         {/if}
-        {#if !legacyReminder}
-          <Button size="sm" variant="outline" disabled={trying || !selectedVoice} onclick={() => void preview()} data-testid="speech-try">
-            {trying ? m.companion_speech_trying() : m.companion_speech_try()}</Button>
-        {/if}
+        <Button size="sm" variant="outline" disabled={trying || !selectedVoice} onclick={() => void preview()} data-testid="speech-try">
+          {trying ? m.companion_speech_trying() : m.companion_speech_try()}</Button>
       </div>
     </div>
-    {#if !legacyReminder && actualOnline}
+    {#if actualOnline}
       <p class="m-0 text-[11px] text-muted-foreground">{m.companion_speech_try_hint()}</p>
     {/if}
     {#if voiceError}<p class="m-0 text-xs text-destructive" role="alert">{voiceError}</p>{/if}
@@ -385,22 +378,20 @@
     </div>
     {#if !rateSupported}<p class="m-0 text-[11px] text-muted-foreground">{m.companion_speech_no_rate()}</p>{/if}
 
-    {#if !legacyReminder}
-      <!-- 怎么计费（ADR 048：页面写明在用哪家、怎么计费） -->
-      <p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="speech-billing">
-        {#if actualOnline}{m.companion_speech_sends_text({ name: NAMES[actualOnline]() })}{BILLING[actualOnline]()}{:else}{m.companion_speech_billing_local()}{/if}
-      </p>
-      {#if engine === "minimax-tts"}
-        <details class="text-xs text-muted-foreground" data-testid="speech-more">
-          <summary class="cursor-pointer select-none">{m.companion_speech_more()}</summary>
-          <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
-            <span>{m.companion_speech_model_label()}</span>
-            <div class="w-64 max-w-full"><SelectField ariaLabel={m.companion_speech_model_label()} value={configText("minimax-tts", "model") || "speech-2.8-turbo"}
-              options={[{ value: "speech-2.8-turbo", label: m.companion_speech_minimax_turbo() }, { value: "speech-2.8-hd", label: m.companion_speech_minimax_hd() }]}
-              onchange={(value) => void saveConfig("minimax-tts", { model: value })} /></div>
-          </div>
-        </details>
-      {/if}
+    <!-- 怎么计费（ADR 048：页面写明在用哪家、怎么计费） -->
+    <p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="speech-billing">
+      {#if actualOnline}{m.companion_speech_sends_text({ name: NAMES[actualOnline]() })}{BILLING[actualOnline]()}{:else}{m.companion_speech_billing_local()}{/if}
+    </p>
+    {#if engine === "minimax-tts"}
+      <details class="text-xs text-muted-foreground" data-testid="speech-more">
+        <summary class="cursor-pointer select-none">{m.companion_speech_more()}</summary>
+        <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
+          <span>{m.companion_speech_model_label()}</span>
+          <div class="w-64 max-w-full"><SelectField ariaLabel={m.companion_speech_model_label()} value={configText("minimax-tts", "model") || "speech-2.8-turbo"}
+            options={[{ value: "speech-2.8-turbo", label: m.companion_speech_minimax_turbo() }, { value: "speech-2.8-hd", label: m.companion_speech_minimax_hd() }]}
+            onchange={(value) => void saveConfig("minimax-tts", { model: value })} /></div>
+        </div>
+      </details>
     {/if}
   </div>
 {/if}

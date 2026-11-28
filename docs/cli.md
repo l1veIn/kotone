@@ -60,7 +60,7 @@
 环境变量 `KOTONE_HOME` 把 Kotone 数据目录（默认 `~/.kotone`：配置、日志、历史、工具服务描述文件）整体换到别处，CLI 与桌面端都读取，用于隔离运行与测试；`KOTONE_EXE` 指定 `app launch` 使用的 `kotone.exe`。
 
 `config get` 可读取存在的配置路径，`config set` 仅支持上述白名单，不等于全部设置字段。
-评测参数、旧模型族别名与缓存规则见 [评测手册](eval-playbook.md)。提醒助手当前通过桌面页和独立热键使用，不是 `eval` 或 `listen` 的隐藏模式。
+评测参数、旧模型族别名与缓存规则见 [评测手册](eval-playbook.md)。提醒是桌面端的自动化（跟她说，或在「自动化」页安排），不是 `eval` 或 `listen` 的隐藏模式。
 
 ### 工具服务客户端（tools 命令）
 

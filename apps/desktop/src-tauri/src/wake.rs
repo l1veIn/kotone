@@ -279,7 +279,7 @@ pub fn sync(app: &AppHandle) {
     let Some(rt) = runtime(app) else { return };
     let settings = app.state::<SharedState>().settings.read().unwrap().clone();
     let mut config = settings.assistant.wake.clone();
-    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+    if settings.ui.legacy_upgrade.voice_input_only() {
         config.enabled = false;
     }
     let device = settings.audio_device_id.clone();

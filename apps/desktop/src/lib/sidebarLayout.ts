@@ -1,17 +1,17 @@
-// 侧边栏可以自己排（ADR 034 第六节）：两组（游戏陪玩、语音输入）里的页面在组内上移 / 下移、隐藏。
+// 侧边栏可以自己排（ADR 034 第六节）：组里的页面在组内上移 / 下移、隐藏。以前还有一组「语音输入」，最后只剩
+// 0.1.x 升级用户的「提醒助手」，提醒助手退掉以后（ADR 052）这一组也没了；旧配置里记着的 `legacy-reminders` 不在
+// 任何一组里，和旧的单个插件页一样排序时跳过。
 // 插件（ADR 038，2026-11-24 玩家定的）：左侧栏只有一项「插件」（页面 id `plugins`，和别的页面一样能排、能藏），
 // 点开是插件的卡片，每个插件是一个独立的 App。旧配置里记的单个插件页（`plugin:<id>`、`music`）不在任何一组里，排序时自然跳过。
 // 存在设置 `ui.sidebar`（order、hidden），她也能改。“设置”和“关于”在底部固定，不在这里。
 // 规则：order 只管它认得的页面；没在 order 里的（新加的页面、旧版本没有的）按默认位置插回去，
 // 所以排过序以后新加的页面也看得见。纯函数，不碰界面。
 
-export type SidebarGroupId = "companion" | "voice";
+export type SidebarGroupId = "companion";
 
-/** 两组的默认顺序（页面 ID 和 AppSidebar 的 PageId 一致）。 */
+/** 各组的默认顺序（页面 ID 和 AppSidebar 的 PageId 一致）。语音输入搬进了插件（ADR 038，「插件 → 语音输入」）。 */
 export const SIDEBAR_GROUPS: { id: SidebarGroupId; pages: string[] }[] = [
   { id: "companion", pages: ["assistant", "game", "automation", "plugins"] },
-  // 语音输入搬进了插件（ADR 038，「插件 → 语音输入」）；这一组只剩 0.1.x 升级用户的旧提醒
-  { id: "voice", pages: ["legacy-reminders"] },
 ];
 
 /** 永远不能隐藏的页面（“设置”：藏起来就改不回来了）。 */
@@ -30,7 +30,7 @@ export function normalizePrefs(value: unknown): SidebarPrefs {
 }
 
 /**
- * 一组页面按玩家的顺序排（含隐藏的）。`present` = 这一组现在有的页面（按默认顺序；例如没有旧提醒就没有那一项）。
+ * 一组页面按玩家的顺序排（含隐藏的）。`present` = 这一组现在有的页面（按默认顺序）。
  * order 里有的按 order 排；没有的插回默认位置：跟在默认顺序里它前面最近的那一项后面（前面都没有就放最前）。
  */
 export function arrange(present: string[], prefs: SidebarPrefs): string[] {

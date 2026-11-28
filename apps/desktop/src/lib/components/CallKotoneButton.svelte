@@ -7,7 +7,7 @@
   import { Mic } from "@lucide/svelte";
   import { callActive, callKotone, subscribeCall } from "../assistant";
   import { hotkeyLabel } from "../hotkeyCombo";
-  import { companionBindings, isTauri, startRuntime } from "../ipc";
+  import { isTauri, startRuntime } from "../ipc";
   import { appState } from "../stores/state";
   import { asrStore } from "../stores/runtime";
   import { errText, settingsStore, toast } from "../stores/ui";
@@ -27,10 +27,10 @@
   } = $props();
 
   const name = $derived($companionName);
-  const hotkey = $derived(companionBindings($settingsStore?.assistant)?.hotkey.trim() ?? "");
+  const hotkey = $derived($settingsStore?.assistant.hotkey.trim() ?? "");
   const wake = $derived($settingsStore?.assistant.wake);
   const wakeWord = $derived(wake?.enabled ? (wakePhrases.find((p) => p.value === wake.phrase)?.label ?? wake.phrase) : "");
-  const listening = $derived($appState.purpose === "assistant" && !$appState.legacyReminder && $appState.state === "listening");
+  const listening = $derived($appState.purpose === "assistant" && $appState.state === "listening");
   const asr = $derived($asrStore);
   const preparing = $derived(asr === "local-starting" || asr === "online-preparing");
   const blocked = $derived(!isTauri ? m.chat_call_desktop_only() : !ready ? m.chat_call_needs_connection() : "");

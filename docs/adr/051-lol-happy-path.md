@@ -2,6 +2,8 @@
 
 状态：Accepted（2026-11-28）/ 已实现（浏览器预览的端到端测试），待真机。
 
+2026-11-28 修订（[ADR 052](052-retire-reminder-assistant.md)）：提醒助手退掉了，`companionBindings` 没有了：她的连接所有人都在 `assistant.connectionId`。规则第 2 条改成：还没启用她的 0.1.x 用户读取配置时就清掉旧提醒助手的连接和键（以前配的千问不会变成她的模型，连接还在「API 连接」里），存 DeepSeek Key 时写 `assistant.connectionId` 和 `legacyUpgrade = notNeeded`；启用过她的读成和新用户一样。下文提到 `companionBindings`、“旧提醒助手的连接和键都不动”的地方是当时的样子。
+
 修订：[ADR 028](028-game-companion-interaction.md) 的“一个 Key 打开全部”（从引导和 Key 卡片扩到所有存 DeepSeek Key 的地方）。相关：[ADR 044](044-run-as-admin-by-default.md)（管理员身份）、[ADR 043](043-plugin-shape-and-pushes.md)（推送）、[ADR 050](050-humanlike-speech.md)（这局结束的那句话）。
 
 ## 背景

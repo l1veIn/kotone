@@ -15,8 +15,6 @@
   import { Input } from "$lib/components/ui/input";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import {
-    companionBindingPatch,
-    companionBindings,
     connectionSelfCheck,
     deleteConnection,
     listConnectionPresets,
@@ -57,7 +55,7 @@
   let confirmDelete = $state<ConnectionInfo | null>(null);
 
   const companionEnabled = $derived(!usesLegacyVoiceInput($settingsStore?.ui));
-  const agentConnectionId = $derived(companionEnabled ? companionBindings($settingsStore?.assistant)?.connectionId ?? "" : "");
+  const agentConnectionId = $derived(companionEnabled ? $settingsStore?.assistant.connectionId ?? "" : "");
   const check = $derived<CompanionCheck | null>($settingsStore?.assistant.companion.check ?? null);
   const presetOf = (id: string) => presets.find((preset) => preset.id === id);
   const editingPreset = $derived(editing ? presetOf(editing.provider) : undefined);
@@ -175,7 +173,7 @@
   async function useForAgent(id: string) {
     if (!companionEnabled) return;
     try {
-      settingsStore.set(await updateSettings({ assistant: companionBindingPatch($settingsStore?.assistant, { connectionId: id }) }));
+      settingsStore.set(await updateSettings({ assistant: { connectionId: id } }));
       toast(true, m.system_connections_use_done({ name: $companionName }));
     } catch (error) {
       toast(false, m.system_connections_use_failed({ name: $companionName, error: errText(error) }));

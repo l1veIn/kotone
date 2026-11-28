@@ -131,7 +131,6 @@ impl Orchestrator {
         // 宽限期倒计时一并收回（Esc / 停止 runtime / 状态变迁兜底）
         self.abort_release_grace();
         let mut inner = self.inner.lock().unwrap();
-        inner.assistant_voice_owner = false;
         if let Some(trial) = &inner.trial {
             trial.cancel();
         }

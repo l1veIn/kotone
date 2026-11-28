@@ -160,35 +160,36 @@ fn the_old_call_key_default_is_upgraded_before_it_moves() {
 }
 
 #[test]
-fn upgraded_users_keep_their_reminder_key_out_of_the_table() {
-    // 0.1.x 升级、还没启用她：没有呼叫键，assistant.hotkey 是提醒键（D10，不进表）
+fn upgraded_users_have_one_call_key_in_assistant_hotkey() {
+    // 0.1.x 升级、还没启用她：没有呼叫键；assistant.hotkey 原来是提醒键，提醒助手退掉以后清空（ADR 052）
     let (pending, _dir) = load_json(json!({
         "hotkey": {"key": "F8", "mode": "hold"},
         "assistant": {"hotkey": "Alt+F9"}
     }));
-    assert_eq!(pending.ui.legacy_upgrade, LegacyUpgrade::Pending);
+    assert_eq!(
+        pending.ui.legacy_upgrade,
+        crate::settings::LegacyUpgrade::Pending
+    );
     assert_eq!(pending.binding_key(CMD_CALL), "");
     assert_eq!(pending.binding_key(CMD_TALK), "F8");
-    assert_eq!(pending.assistant.hotkey, "Alt+F9", "提醒键不动");
-    assert_eq!(saved_json(&pending)["assistant"]["hotkey"], "Alt+F9");
+    assert_eq!(pending.assistant.hotkey, "");
+    assert_eq!(saved_json(&pending)["assistant"]["hotkey"], "");
 
-    // 启用了她：呼叫键在 companionBindings.hotkey
+    // 启用了她：companionBindings 里的呼叫键和连接搬到 assistant.hotkey / assistant.connectionId
     let (opted, _dir) = load_json(json!({
         "ui": {"legacyUpgrade": "optedIn"},
         "assistant": {"hotkey": "Alt+F9", "companionBindings": {"hotkey": "Ctrl+Alt+F10", "connectionId": "c1"}}
     }));
+    assert_eq!(
+        opted.ui.legacy_upgrade,
+        crate::settings::LegacyUpgrade::NotNeeded
+    );
     assert_eq!(opted.binding_key(CMD_CALL), "Ctrl+Alt+F10");
-    assert_eq!(opted.assistant.hotkey, "Alt+F9");
+    assert_eq!(opted.assistant.hotkey, "Ctrl+Alt+F10");
     let saved = saved_json(&opted);
-    assert_eq!(saved["assistant"]["hotkey"], "Alt+F9");
-    assert_eq!(
-        saved["assistant"]["companionBindings"]["hotkey"],
-        "Ctrl+Alt+F10"
-    );
-    assert_eq!(
-        saved["assistant"]["companionBindings"]["connectionId"],
-        "c1"
-    );
+    assert_eq!(saved["assistant"]["hotkey"], "Ctrl+Alt+F10");
+    assert_eq!(saved["assistant"]["connectionId"], "c1");
+    assert!(saved["assistant"].get("companionBindings").is_none());
 }
 
 #[test]
@@ -429,27 +430,23 @@ fn settings_update_accepts_the_old_field_names() {
 
 #[test]
 fn opting_in_starts_without_a_call_key_until_one_is_set() {
-    // 0.1.x 用户在引导里启用她（deepseekSetup.ts：companionBindings + legacyUpgrade 一起写）
+    // 0.1.x 用户在引导里启用她（deepseekSetup.ts：assistant.connectionId + legacyUpgrade 一起写，ADR 052）
     let (pending, _dir) = load_json(json!({"assistant": {"hotkey": "Alt+F9"}}));
+    assert_eq!(pending.assistant.hotkey, "", "旧提醒键读取时就清掉了");
     let opted = patch(
         &pending,
         json!({
-            "assistant": {"companionBindings": {"connectionId": "c1", "hotkey": ""}},
-            "ui": {"legacyUpgrade": "optedIn"}
+            "assistant": {"connectionId": "c1"},
+            "ui": {"legacyUpgrade": "notNeeded"}
         }),
     );
     assert_eq!(opted.binding_key(CMD_CALL), "");
-    assert_eq!(opted.assistant.hotkey, "Alt+F9");
-    // 然后在引导里设呼叫键
-    let with_key = patch(
-        &opted,
-        json!({"assistant": {"companionBindings": {"hotkey": "Ctrl+Alt+F10"}}}),
-    );
+    assert_eq!(opted.call_hotkey(), "");
+    assert_eq!(opted.companion_connection_id(), "c1");
+    // 然后在引导里设呼叫键：和新用户一样写 assistant.hotkey
+    let with_key = patch(&opted, json!({"assistant": {"hotkey": "Ctrl+Alt+F10"}}));
     assert_eq!(with_key.binding_key(CMD_CALL), "Ctrl+Alt+F10");
-    // 改提醒键（assistant.hotkey）不碰呼叫键
-    let reminder = patch(&with_key, json!({"assistant": {"hotkey": "Alt+F8"}}));
-    assert_eq!(reminder.binding_key(CMD_CALL), "Ctrl+Alt+F10");
-    assert_eq!(reminder.assistant.hotkey, "Alt+F8");
+    assert_eq!(with_key.call_hotkey(), "Ctrl+Alt+F10");
 }
 
 #[test]

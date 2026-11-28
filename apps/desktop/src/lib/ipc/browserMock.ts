@@ -44,7 +44,7 @@ import type {
   OverlayHealth,
   OverlayStateSnapshot,
 } from "./contracts";
-import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
+import { defaultPostProcessing, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
 import type { BrowserAction, BrowserBounds, BrowserExtension, BrowserState, BrowserTab } from "../browser";
 import {
   bindingOptions, checkHotkey as checkHotkeyInMock, confirmCustom, customStatus, hotkeyTable, presetStatus, removeCustom, saveCustom,
@@ -397,7 +397,7 @@ function applyMockDefaultBlocklist(text: string): string {
   return result;
 }
 
-/** 0.1.x 用户的旧提醒助手连接（`?mockLegacyReminder=`）。 */
+/** 0.1.x 用户以前给提醒助手配的连接（`?mockLegacyReminder=`；提醒助手退掉了，连接还在「API 连接」里，ADR 052）。 */
 const LEGACY_REMINDER_CONNECTIONS: Record<string, Connection> = {
   configured: { id: "original-reminder", displayName: "原来的提醒连接", kind: "remote", provider: "custom", baseUrl: "https://example.invalid/v1", model: "original-model" },
   qwen: { id: "original-qwen", displayName: "通义千问", kind: "remote", provider: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-turbo" },
@@ -448,21 +448,23 @@ export async function getSettings(): Promise<Settings> {
   }
   const legacyMode = mockQuery("mockLegacyUpgrade");
   if ((legacyMode === "pending" || legacyMode === "dismissed" || legacyMode === "optedIn") && mock.settings.ui.legacyUpgrade === undefined) {
-    // 0.1.x 升级用户；dismissed = 上次选了“继续使用语音输入法”之后再打开（ADR 028 流程 B2）；
-    // optedIn = 已经启用了她，而她用的是旧提醒助手那条连接（ADR 051 的起点：她默认用了以前配的千问）。
-    mock.settings.ui.legacyUpgrade = legacyMode;
+    // 0.1.x 升级用户，后端读取迁移以后的样子（`settings::migrate_legacy_upgrade_json`，ADR 052）：
+    // pending / dismissed（dismissed = 上次选了“继续使用语音输入法”之后再打开，ADR 028 流程 B2）：旧提醒助手的键和连接
+    // 读取时清空，连接本身还在「API 连接」里；
+    // optedIn = 已经启用了她（读成 notNeeded），而她用的是以前那条连接（ADR 051 的起点：她默认用了以前配的千问）。
+    mock.settings.ui.legacyUpgrade = legacyMode === "optedIn" ? "notNeeded" : legacyMode;
     if (legacyMode === "dismissed") mock.settings.ui.startPage = "voiceInput";
     mock.settings.assistant.hotkey = "";
-    // 旧提醒助手用的连接：configured = 随便一家，qwen = 通义千问，deepseek = 0.1.x 就配过 DeepSeek
+    mock.settings.assistant.connectionId = "";
+    // 以前给提醒助手配的连接：configured = 随便一家，qwen = 通义千问，deepseek = 0.1.x 就配过 DeepSeek
     const reminder = LEGACY_REMINDER_CONNECTIONS[mockQuery("mockLegacyReminder") ?? ""];
     if (reminder) {
-      mock.settings.assistant.hotkey = "Alt+F9";
-      mock.settings.assistant.connectionId = reminder.id;
       mock.settings.connections.push(clone(reminder));
       mockConnectionSecrets.set(reminder.id, "test-legacy-key");
     }
     if (legacyMode === "optedIn") {
-      mock.settings.assistant.companionBindings = { connectionId: reminder?.id ?? "", hotkey: "Ctrl+Backquote" };
+      mock.settings.assistant.connectionId = reminder?.id ?? "";
+      mock.settings.assistant.hotkey = "Ctrl+Backquote";
       mock.settings.ui.startPage = "chat";
     }
   }
@@ -956,10 +958,7 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
       error: null,
       backend: registered ? "llhook" : "none",
       named: [
-        { id: "assistant", key: usesLegacyVoiceInput(mock.settings.ui) ? null : companionBindings(mock.settings.assistant)?.hotkey || null, error: null },
-        ...(hasLegacyReminders(mock.settings.ui)
-          ? [{ id: "legacy-reminder", key: mock.settings.assistant.hotkey || null, error: null }]
-          : []),
+        { id: "assistant", key: usesLegacyVoiceInput(mock.settings.ui) ? null : mock.settings.assistant.hotkey || null, error: null },
         { id: "channel-cycle", key: mock.settings.channelCycleHotkey, error: null },
         { id: "resend-last", key: mock.settings.resendLastHotkey || null, error: null },
         {
@@ -1523,7 +1522,7 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 // ---------- Kotone 陪玩 ----------
 
 export async function companionSelfCheck(): Promise<CompanionCheck> {
-  const id = companionBindings(mock.settings.assistant)?.connectionId;
+  const id = mock.settings.assistant.connectionId;
   if (!id) throw new Error("还没有选 API 连接：请在聊天页输入框旁的「她用的模型」里选一个");
   return connectionSelfCheck(id);
 }
@@ -1555,14 +1554,14 @@ export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
     checkedAtMs: Date.now(),
     message: mockQuery("mockCompanionCheck") === "fail" ? `连得上，但服务商的模型列表里没有“${connection.model}”，请换一个模型` : "连接正常",
   };
-  if (!usesLegacyVoiceInput(mock.settings.ui) && companionBindings(assistant)?.connectionId === id) assistant.companion.check = check;
+  if (!usesLegacyVoiceInput(mock.settings.ui) && assistant.connectionId === id) assistant.companion.check = check;
   return clone(check);
 }
 
 export async function companionStatus(): Promise<CompanionStatus> {
   const assistant = mock.settings.assistant;
   const check = assistant.companion.check ?? null;
-  const connectionId = companionBindings(assistant)?.connectionId ?? "";
+  const connectionId = assistant.connectionId ?? "";
   const ocr = mock.settings.ocr.activeModelId || null;
   const reason = !connectionId
     ? "还没有选 API 连接：请在「设置 → API 连接」里添加一条，再在聊天页输入框旁的「她用的模型」里选它"

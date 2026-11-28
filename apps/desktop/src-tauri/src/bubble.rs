@@ -364,8 +364,7 @@ pub struct BubbleRuntime {
 fn config(app: &AppHandle) -> Option<BubbleConfig> {
     app.try_state::<SharedState>().and_then(|state| {
         let settings = state.settings.read().unwrap();
-        (!settings.ui.legacy_upgrade.uses_legacy_assistant())
-            .then(|| settings.assistant.bubble.clone())
+        (!settings.ui.legacy_upgrade.voice_input_only()).then(|| settings.assistant.bubble.clone())
     })
 }
 
@@ -374,18 +373,9 @@ pub fn enabled(app: &AppHandle) -> bool {
     config(app).is_some_and(|c| c.enabled)
 }
 
-/// 这次录音会话归气泡管吗：琴音会话、来自热键 / 唤醒（设置窗口语音按钮的会话在聊天窗口里显示）。
+/// 这次录音会话归气泡管吗：琴音的会话（呼叫键、唤醒、聊天页的呼叫按钮）。
 pub fn owns_session(app: &AppHandle, payload: &Value) -> bool {
-    enabled(app)
-        && payload.pointer("/payload/purpose").and_then(Value::as_str) == Some("assistant")
-        && payload
-            .pointer("/payload/legacyReminder")
-            .and_then(Value::as_bool)
-            != Some(true)
-        && payload
-            .pointer("/payload/inputSource")
-            .and_then(Value::as_str)
-            != Some("button")
+    enabled(app) && payload.pointer("/payload/purpose").and_then(Value::as_str) == Some("assistant")
 }
 
 /// 改状态并推送；返回改后的序号。

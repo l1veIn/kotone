@@ -47,6 +47,8 @@ VOICE_FIELDS = (
     "channelCycleHotkey", "resendLastHotkey",
 )
 REMINDER_FIELDS = ("hotkey", "interactionMode", "connectionId", "defaultDelivery", "speechEngine")
+# 提醒助手退掉以后（ADR 052）：0.2 读取时清掉还没启用她的用户的旧提醒助手键和连接，启用过她的换成她自己的
+RETIRED_FIELDS = ("hotkey", "connectionId")
 MODES = {"push-to-talk", "dictation", "one-shot", "solo"}
 KEY = "lowerSpeakerVolumeWhileListening"
 
@@ -137,11 +139,13 @@ def read(probe, home, command="persist"):
                                   env={**os.environ, "KOTONE_HOME": str(home)})
     return json.loads(out)
 
-def require_same(a, b):
+def require_same(a, b, retired=False):
     for field in VOICE_FIELDS:
         if a.get(field) != b.get(field):
             raise AssertionError(f"voice setting changed: {field}")
     for field in REMINDER_FIELDS:
+        if retired and field in RETIRED_FIELDS:
+            continue
         if a.get("assistant", {}).get(field) != b.get("assistant", {}).get(field):
             raise AssertionError(f"legacy reminder setting changed: {field}")
 
@@ -162,8 +166,10 @@ def exercise(home, old, maint, new):
 
     for case, expected in ((home, 0), (keep, 1)):
         upgraded = read(new, case)
-        require_same(baseline, upgraded["settings"])
+        require_same(baseline, upgraded["settings"], retired=True)
         assert upgraded["settings"]["ui"]["legacyUpgrade"] == "pending"
+        assert upgraded["settings"]["assistant"]["hotkey"] == ""
+        assert upgraded["settings"]["assistant"]["connectionId"] == ""
         assert upgraded["settings"][KEY] is True
         assert upgraded["profiles"].count("dota2") == expected
         if expected == 1:
@@ -175,13 +181,16 @@ def exercise(home, old, maint, new):
             }
             json_write(opted_config, opted_data)
             opted = read(new, case)["settings"]
-            require_same(baseline, opted)
-            assert opted["assistant"]["companionBindings"] == opted_data["assistant"]["companionBindings"]
+            require_same(baseline, opted, retired=True)
+            # 她的连接搬到 assistant.connectionId，optedIn 读成 notNeeded，companionBindings 去掉
+            assert opted["ui"]["legacyUpgrade"] == "notNeeded"
+            assert opted["assistant"]["connectionId"] == "isolated-companion-connection"
+            assert "companionBindings" not in opted["assistant"]
         downgraded = read(maint, case)
-        require_same(baseline, downgraded["settings"])
+        require_same(baseline, downgraded["settings"], retired=True)
         assert downgraded["settings"][KEY] is True
         assert downgraded["profiles"].count("dota2") == expected
-        require_same(baseline, read(old, case, "inspect")["settings"])
+        require_same(baseline, read(old, case, "inspect")["settings"], retired=True)
 
 def main():
     if os.name != "nt":

@@ -3,7 +3,9 @@ import { openSettingsTab } from "./nav";
 import { screenshot } from "./screenshot.cjs";
 
 // ADR 051 英雄联盟玩家的 happy path：不管从哪存的 DeepSeek Key，她都换成 DeepSeek，文字识别、语音合成、联网搜索跟着换；
-// 聊天页最上面的“准备好了吗”一行一样，全都 ✓ 就不显示。三种起点：新用户、0.1.x 用户（旧提醒助手用千问）、0.1.x 就配过 DeepSeek。
+// 聊天页最上面的“准备好了吗”一行一样，全都 ✓ 就不显示。三种起点：新用户、0.1.x 用户（以前给提醒助手配的是千问）、0.1.x 就配过 DeepSeek。
+// 她的连接和呼叫键只在 assistant.connectionId / assistant.hotkey（ADR 052）：还没启用她的 0.1.x 用户读取时就清掉了旧提醒助手的
+// 连接和键（连接还在「API 连接」里，不是她的模型）；已经启用她的读成和新用户一样。
 // 浏览器预览里装成 Windows、已经是管理员身份（管理员那一行也算进来）。
 
 const settingsOf = (page: Page) => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings());
@@ -67,10 +69,13 @@ test("a · new user: one key in onboarding → she and everything else on DeepSe
   await screenshot(page, { path: testInfo.outputPath("a-chat.png") });
 });
 
-test("b1 · 0.1.x user whose reminders used Qwen: the upgrade onboarding puts her on DeepSeek and leaves the reminders alone", async ({ page }) => {
+test("b1 · 0.1.x user whose reminders used Qwen: the old Qwen is not her model; the upgrade onboarding puts her on DeepSeek", async ({ page }) => {
   await open(page, "#/settings?mockLegacyUpgrade=pending&mockLegacyReminder=qwen&mockModels=none");
   const before = await settingsOf(page);
-  expect(before.assistant.connectionId).toBe("original-qwen");
+  // 读取以后：旧提醒助手的千问不是她的连接，键也清掉了；千问连接还在「API 连接」里
+  expect(before.assistant.connectionId).toBe("");
+  expect(before.assistant.hotkey).toBe("");
+  expect(before.connections.map((c) => c.id)).toContain("original-qwen");
   await page.getByTestId("onboarding-meet-companion").click();
   await page.getByTestId("onboarding-key-input").fill("sk-test-123");
   await page.getByTestId("onboarding-key-submit").click();
@@ -80,12 +85,12 @@ test("b1 · 0.1.x user whose reminders used Qwen: the upgrade onboarding puts he
   await expect(page.getByTestId("onboarding")).toHaveCount(0);
 
   const s = await settingsOf(page);
-  expect(s.ui.legacyUpgrade).toBe("optedIn");
-  expect(s.connections.find((c) => c.id === s.assistant.companionBindings?.connectionId)?.provider).toBe("deepseek");
-  expect(s.assistant.companionBindings?.hotkey).toBe("Ctrl+Backquote");
-  // 旧提醒助手照旧用千问；语音识别不动
-  expect(s.assistant.connectionId).toBe("original-qwen");
-  expect(s.assistant.hotkey).toBe("Alt+F9");
+  expect(s.ui.legacyUpgrade).toBe("notNeeded");
+  expect(s.connections.find((c) => c.id === s.assistant.connectionId)?.provider).toBe("deepseek");
+  expect(s.assistant.hotkey).toBe("Ctrl+Backquote");
+  expect(s.assistant).not.toHaveProperty("companionBindings");
+  // 千问连接还在，只是不是她的；语音识别不动
+  expect(s.connections.map((c) => c.id)).toContain("original-qwen");
   expect(s.sttEngine).toBe(before.sttEngine);
   expect(s.ocr.activeModelId).toBe("deepseek-ocr");
   await backToChat(page);
@@ -95,18 +100,18 @@ test("b1 · 0.1.x user whose reminders used Qwen: the upgrade onboarding puts he
 
 test("b2 · 0.1.x user who is on the old Qwen: adding DeepSeek in 「API 连接」 switches her; picking Qwen again is respected", async ({ page }, testInfo) => {
   await open(page, "#/settings?onboarding=never&mockLegacyUpgrade=optedIn&mockLegacyReminder=qwen");
-  // 起点：她用的是旧提醒助手那条千问（那位老用户的情形）
+  // 起点：已经启用了她，她用的是以前那条千问（那位老用户的情形）；读取以后和新用户一样在 assistant.connectionId
   await expect(page.getByTestId("composer-model")).toHaveAttribute("data-model", "qwen-turbo");
   expect(await failing(page)).toEqual(["key", "ocr"]);
   await screenshot(page, { path: testInfo.outputPath("b2-before.png") });
   const before = await settingsOf(page);
 
+  expect(before.ui.legacyUpgrade).toBe("notNeeded");
+  expect(before.assistant.connectionId).toBe("original-qwen");
   await addDeepSeekInConnections(page);
   const s = await settingsOf(page);
-  expect(s.connections.find((c) => c.id === s.assistant.companionBindings?.connectionId)?.provider).toBe("deepseek");
-  expect(s.assistant.companionBindings?.hotkey).toBe("Ctrl+Backquote");
-  expect(s.assistant.connectionId).toBe("original-qwen");
-  expect(s.sttEngine).toBe(before.sttEngine);
+  expect(s.connections.find((c) => c.id === s.assistant.connectionId)?.provider).toBe("deepseek");
+  expect(s.assistant.hotkey).toBe("Ctrl+Backquote");
   expect(s.ocr.activeModelId).toBe("deepseek-ocr");
   expect(s.assistant.ttsModelId).toBe("deepseek-tts");
   expect(s.search.activeModelId).toBe("deepseek-search");
@@ -121,13 +126,13 @@ test("b2 · 0.1.x user who is on the old Qwen: adding DeepSeek in 「API 连接�
   await page.getByTestId("composer-model-original-qwen-qwen-turbo").click();
   await expect(page.getByTestId("composer-model")).toHaveAttribute("data-model", "qwen-turbo");
   expect(await failing(page)).toEqual(["model"]);
-  expect((await settingsOf(page)).assistant.companionBindings?.connectionId).toBe("original-qwen");
+  expect((await settingsOf(page)).assistant.connectionId).toBe("original-qwen");
   await page.getByTestId("chat-ready-model-fix").click();
   await expect(page.getByTestId("composer-model")).toHaveAttribute("data-model", "deepseek-flash");
   await expectAllReady(page);
 });
 
-test("b3 · 0.1.x user on Qwen fills the key from the checklist: her connection changes, the reminder one does not", async ({ page }) => {
+test("b3 · 0.1.x user on Qwen fills the key from the checklist: her connection changes, the Qwen one stays in 「API 连接」", async ({ page }) => {
   await open(page, "#/settings?onboarding=never&mockLegacyUpgrade=optedIn&mockLegacyReminder=qwen");
   expect(await failing(page)).toEqual(["key", "ocr"]);
   await page.getByTestId("chat-ready-key-fix").click();
@@ -137,8 +142,8 @@ test("b3 · 0.1.x user on Qwen fills the key from the checklist: her connection 
   await expect(page.getByTestId("onboarding-call-key-value")).toHaveText("Ctrl + ~");
   await page.getByTestId("onboarding-enter-chat").click();
   const s = await settingsOf(page);
-  expect(s.connections.find((c) => c.id === s.assistant.companionBindings?.connectionId)?.provider).toBe("deepseek");
-  expect(s.assistant.connectionId).toBe("original-qwen");
+  expect(s.connections.find((c) => c.id === s.assistant.connectionId)?.provider).toBe("deepseek");
+  expect(s.connections.map((c) => c.id)).toContain("original-qwen");
   await expect(page.getByTestId("composer-model")).toHaveAttribute("data-model", "deepseek-flash");
   await expectAllReady(page);
 });
@@ -148,10 +153,9 @@ test("b4 · 0.1.x user who kept voice input adds DeepSeek in 「API 连接」: s
   await expect(page.getByTestId("voice-input")).toBeVisible();
   await addDeepSeekInConnections(page);
   const s = await settingsOf(page);
-  expect(s.ui.legacyUpgrade).toBe("optedIn");
-  expect(s.connections.find((c) => c.id === s.assistant.companionBindings?.connectionId)?.provider).toBe("deepseek");
-  expect(s.assistant.connectionId).toBe("original-qwen");
-  expect(s.assistant.hotkey).toBe("Alt+F9");
+  expect(s.ui.legacyUpgrade).toBe("notNeeded");
+  expect(s.connections.find((c) => c.id === s.assistant.connectionId)?.provider).toBe("deepseek");
+  expect(s.assistant.hotkey).toBe("");
   await backToChat(page);
   // 升级用户的呼叫键默认空：清单里只剩这一行，按钮去角色页的「唤醒」
   expect(await failing(page)).toEqual(["call"]);
@@ -168,7 +172,7 @@ test("c · 0.1.x user who already had DeepSeek: she stays on it and the one miss
   await expectAllReady(page);
   const s = await settingsOf(page);
   expect(s.ocr.activeModelId).toBe("deepseek-ocr");
-  expect(s.assistant.companionBindings?.connectionId).toBe("original-deepseek");
+  expect(s.assistant.connectionId).toBe("original-deepseek");
 });
 
 test("c2 · 0.1.x user who already had DeepSeek goes through the upgrade onboarding: ends on DeepSeek, nothing left", async ({ page }) => {
@@ -179,8 +183,9 @@ test("c2 · 0.1.x user who already had DeepSeek goes through the upgrade onboard
   await page.getByTestId("onboarding-call-key-recommended").click();
   await page.getByTestId("onboarding-enter-chat").click();
   const s = await settingsOf(page);
-  expect(s.connections.find((c) => c.id === s.assistant.companionBindings?.connectionId)?.provider).toBe("deepseek");
-  expect(s.assistant.connectionId).toBe("original-deepseek");
+  // 以前的 DeepSeek 连接读取时不交给她（还没启用她）；引导里填的新 Key 是她的
+  expect(s.connections.find((c) => c.id === s.assistant.connectionId)?.provider).toBe("deepseek");
+  expect(s.assistant.connectionId).not.toBe("original-deepseek");
   await backToChat(page);
   await expectAllReady(page);
 });
@@ -216,6 +221,6 @@ test("a DeepSeek key that fails its test in 「API 连接」 is kept but she is 
   const card = page.locator('[data-testid^="connection-card-deepseek-"]');
   await expect(card.getByTestId("connection-check-result")).toContainText("模型列表里没有");
   const s = await settingsOf(page);
-  expect(s.assistant.companionBindings?.connectionId).toBe("original-qwen");
+  expect(s.assistant.connectionId).toBe("original-qwen");
   expect(s.ocr.activeModelId).toBe("");
 });

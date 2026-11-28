@@ -3,7 +3,7 @@
    * 「设置 → 热键」（ADR 040 D2、D3）：Kotone 里所有的热键都在这一页——Kotone 自己的、每个插件的、
    * 玩家自己加的，还有固定的 Esc；能搜索，每行标来源，冲突标红。**热键只在这里改**：点一行的键录新的
    * （或者直接打），后端查冲突，撞了就不存并说清楚和谁撞了（主会话定的第 1 条）；别的页面只显示键和“去改”。
-   * 提醒助手热键照旧在提醒助手页改（D10），Esc 不能改，这个版本找不到的命令只列出来。游戏配置里的聊天键、
+   * Esc 不能改，这个版本找不到的命令只列出来。游戏配置里的聊天键、
    * 控制台触发键不进表，但参与冲突检查。表和冲突都是后端给的（`get_hotkey_table`），这里只显示。
    * 照 VS Code 的“键盘快捷方式”、Obsidian 的“设置 → 快捷键”。
    *
@@ -124,8 +124,8 @@
         source: keyUseSource(use),
         key: use.key ? hotkeyLabel(use.combo || use.key) : "",
         conflicts: (use.conflicts ?? []).map((id) => byId.get(id)).filter((other): other is KeyUse => !!other),
-        // 提醒助手热键在提醒助手页改（D10）；Esc 固定；找不到的命令不登记、不改
-        editable: (use.source === "core" || use.source === "plugin" || use.source === "custom") && use.id !== "legacy-reminder",
+        // Esc 固定；找不到的命令不登记、不改
+        editable: use.source === "core" || use.source === "plugin" || use.source === "custom",
       };
     });
   });

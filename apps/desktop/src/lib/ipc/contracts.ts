@@ -21,7 +21,9 @@ export type CallMode = "one-shot" | "dictation" | "call";
 export interface UiConfig {
   /** 首启向导已完成（或已跳过） */
   firstRunCompleted: boolean;
-  legacyUpgrade?: "notNeeded" | "pending" | "dismissed" | "optedIn";
+  /** 0.1.x 升级用户：`pending` = 还没看升级欢迎页，`dismissed` = 只用语音输入；启用了她和新用户一样是 `notNeeded`
+   *  （以前的 `optedIn` 读取时就改成 `notNeeded`，ADR 052）。 */
+  legacyUpgrade?: "notNeeded" | "pending" | "dismissed";
   /** 打开 Kotone 时自动启动本地语音识别（在线识别打开即就绪，不看这一项）。 */
   autoStart: boolean;
   /** 新版本弹窗里选了「不再提醒」：启动时不自动弹出（关于页仍可手动检查） */
@@ -39,12 +41,9 @@ export function startPageOf(ui: UiConfig | undefined): StartPage {
   return ui?.startPage === "voiceInput" ? "voiceInput" : "chat";
 }
 
+/** 0.1.x 升级后还没启用她（只用语音输入）。 */
 export function usesLegacyVoiceInput(ui: UiConfig | undefined): boolean {
   return ui?.legacyUpgrade === "pending" || ui?.legacyUpgrade === "dismissed";
-}
-
-export function hasLegacyReminders(ui: UiConfig | undefined): boolean {
-  return usesLegacyVoiceInput(ui) || ui?.legacyUpgrade === "optedIn";
 }
 
 /** 模型存储配置（core settings `models` 段） */
@@ -251,19 +250,16 @@ export function browserEnabled(settings: Pick<Settings, "browser"> | null | unde
   return settings?.browser?.enabled !== false;
 }
 
-export interface AssistantBindings {
+export interface AssistantConfig {
+  /** 呼叫键（她的连接和呼叫键只在这里，ADR 052）。 */
   hotkey: string;
+  /** 她用的 API 连接。 */
   connectionId: string;
-}
-
-export interface AssistantConfig extends AssistantBindings {
-  /** 老用户主动启用琴音时单独设置，保留原提醒助手热键和连接。 */
-  companionBindings?: AssistantBindings | null;
   /** 老配置补过默认呼叫键的标记（只补一次）。 */
   callHotkeyDefaulted?: boolean;
   /** 默认呼叫键的版本（1 = Ctrl+Backquote）；迁移标记，界面不用。 */
   callHotkeyRevision?: number;
-  /** 旧的提醒助手热键方式；呼叫琴音固定为说完自动提交，只剩旧的窗口语音按钮在用。 */
+  /** 0.1.x 提醒助手热键的说话方式；提醒助手退掉了（ADR 052），只为旧版本能读保留，界面不用。 */
   interactionMode: AssistantInteractionMode;
   defaultDelivery: ("voice" | "danmaku")[];
   voiceId: string;
@@ -588,15 +584,6 @@ type Patch<T> = T extends unknown[] ? T : T extends object ? { [K in keyof T]?: 
 
 export type SettingsPatch = Patch<Settings>;
 
-export function companionBindings(config: AssistantConfig | undefined): AssistantBindings | undefined {
-  return config?.companionBindings ?? config;
-}
-
-export function companionBindingPatch(
-  config: AssistantConfig | undefined, patch: Partial<AssistantBindings>,
-): SettingsPatch["assistant"] {
-  return config?.companionBindings ? { companionBindings: patch } : patch;
-}
 
 export interface AudioDevice {
   id: string;
@@ -945,9 +932,9 @@ export type GameKeyKind = "open-chat" | "channel" | "send" | "console";
 
 export interface KeyUse {
   /** 稳定 id：命令就是命令名（kotone.call、voice-input.talk）；自己加的 custom.<条目 id>（第 3 期以前的快捷指令是 quick-message-3，
-   * 改键、查冲突时还认）、提醒助手 legacy-reminder、Esc escape、找不到的 binding.<序号>；游戏的键是 game.<配置 id>.<哪个键> */
+   * 改键、查冲突时还认）、Esc escape、找不到的 binding.<序号>；游戏的键是 game.<配置 id>.<哪个键> */
   id: string;
-  /** 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、自己加的、Esc、游戏的键没有 */
+  /** 绑的命令（`kotone.call`、`voice-input.talk`）；自己加的、Esc、游戏的键没有 */
   command?: string;
   /** 自己加的要做什么：跟她说一句（快捷指令）、运行自动化、调工具、打开页面 */
   action?: "say" | "automation" | "tool" | "page";
