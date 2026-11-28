@@ -1,6 +1,5 @@
-//! 助手识别边界：把用户的一句话交给“Kotone 陪玩”（一次大模型调用，从提醒 / 帮忙打字 /
-//! 回答中选一种，见 docs/product-evolution-game-tools.md §10）或转交外部 Agent。
-//! 模型只能返回这三种受限动作，不能执行任意工具或修改配置。
+//! 助手识别边界：呼叫（语音）和文字入口收到的一句话交给她（内置的琴音）或转交外部 Agent（[`AssistantRoute`]）。
+//! 以前默认交给“Kotone 陪玩”（一次大模型调用，从提醒 / 帮忙打字 / 回答中选一种），ADR 053 退掉了。
 
 use std::{future::Future, pin::Pin};
 
@@ -33,8 +32,7 @@ impl From<AssistantInteractionMode> for InteractionMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssistantRoute {
-    /// Kotone 陪玩（默认）：截图 + OCR + 聊天跟踪 + profile 说明，一次大模型调用，
-    /// 从“创建提醒 / 帮忙打字 / 直接回答”中选一种。
+    /// 她（内置的琴音，默认）。名字是旧的单次陪玩时起的（那条流程 ADR 053 退掉了），不改。
     ///
     /// 配置里仍写作旧值 `reminders`（旧版本能读；它们把它当作提醒规划），`companion` 只作为
     /// 读入别名。配置兼容原则：旧字段只写旧版本认识的值，新能力用新字段。
@@ -77,9 +75,9 @@ pub struct AssistantConfig {
     pub danmaku_top_offset_px: u32,
     pub danmaku_color: String,
     pub danmaku_emote: String,
-    /// 请求去向：陪玩（默认）或转交 Agent。
+    /// 请求去向：她（默认）或转交外部 Agent。
     pub route: AssistantRoute,
-    /// 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接能力自检结果。
+    /// 她：快捷指令（旧写法，热键表的镜像）、替你打字后是否自动发送、最近一次测试连接的结果。
     pub companion: CompanionConfig,
     /// 选中的在线语音合成模型（统一模型清单 TTS 类别的在线条目，如 `openai-compat-tts`）。
     /// 空 = 用旧字段 `speech_engine`（系统语音 / Kokoro）。在线引擎不写进 `speech_engine`，
@@ -318,13 +316,13 @@ pub const MAX_QUICK_MESSAGES: usize = 8;
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct QuickMessage {
-    /// 稳定 ID（工具 `companion.ask` 的 `quickMessageId`）。
+    /// 稳定 ID（热键表里那一条的 id）。
     pub id: String,
     /// 设置页显示的名字；空 = 用 text。
     pub label: String,
     /// 交给 AI 的一句话（`automation_id` 为空时必填）。
     pub text: String,
-    /// 绑定的热键；空 = 未绑定（仍可由工具触发）。
+    /// 绑定的热键；空 = 未绑定（旧版本允许；以前还能由工具 `companion.ask` 触发，ADR 053 退掉了）。
     pub hotkey: String,
     /// 要直接运行的已保存自动化；空 = 这条是交给 AI 的一句话。
     #[serde(skip_serializing_if = "String::is_empty")]

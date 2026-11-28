@@ -104,15 +104,6 @@ struct CategoryArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CompanionAskArgs {
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    quick_message_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AutomationRunArgs {
     /// 临时程序（与 `id` 二选一）。
     #[serde(default)]
@@ -209,15 +200,6 @@ async fn blocking(work: impl FnOnce() -> Result<Value, String> + Send + 'static)
 struct AutomationStopArgs {
     #[serde(default)]
     id: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CompanionTypeArgs {
-    text: String,
-    /// 缺省 = 跟随设置 `assistant.companion.autoSend`（与热键入口一致）。
-    #[serde(default)]
-    send: Option<bool>,
 }
 
 fn category_of(tool: &str, value: Option<&str>) -> Result<ModelCategory, HostError> {
@@ -328,7 +310,7 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
 }
 
 /// 执行一个工具服务委托给宿主的工具。`deadline` 是工具服务按 `timeoutMs` 算的期限：往游戏里按键的工具
-/// （`game_chat.send`、`companion.type`）据此在期限前返回真实结果，不会“报超时其实发了”（ADR 041）。
+/// （`game_chat.send`）据此在期限前返回真实结果，不会“报超时其实发了”（ADR 041）。
 pub async fn invoke_until(
     app: &AppHandle,
     tool: &str,
@@ -826,81 +808,10 @@ pub async fn invoke_until(
             let _: NoArgs = parse(tool, args)?;
             Ok(crate::companion::status(app))
         }
-        c::TOOL_COMPANION_ASK => {
-            let CompanionAskArgs {
-                text,
-                quick_message_id,
-            } = parse(tool, args)?;
-            let text = match (text, quick_message_id) {
-                (Some(text), None) if !text.trim().is_empty() => text,
-                (None, Some(id)) => {
-                    crate::companion::quick_message_text(app, &id).ok_or_else(|| {
-                        HostError::InvalidArguments(format!(
-                            "没有快捷指令 {id}（见 companion.status）"
-                        ))
-                    })?
-                }
-                _ => {
-                    return Err(HostError::InvalidArguments(
-                        "companion.ask 需要 text 或 quickMessageId 之一".into(),
-                    ))
-                }
-            };
-            if crate::companion::is_busy(app) {
-                return Err(HostError::Busy("上一条陪玩请求还在处理".into()));
-            }
-            // 与热键入口相同的前置条件：没有通过自检的连接时直接拒绝，不受理。
-            crate::companion::connection_ready(
-                app,
-                &app.state::<SharedState>().settings.read().unwrap().clone(),
-            )
-            .map_err(HostError::Failed)?;
-            let job_id = kotone_tools::ids::new_id("cjob");
-            let task_app = app.clone();
-            let job = job_id.clone();
-            tauri::async_runtime::spawn(async move {
-                let started = Instant::now();
-                match crate::companion::run(&task_app, text, crate::companion::Source::Tool).await {
-                    Ok(mut receipt) => {
-                        receipt["jobId"] = json!(job);
-                        receipt["durationMs"] = json!(started.elapsed().as_millis() as u64);
-                        tool_service::publish(&task_app, "companion.finished", receipt);
-                    }
-                    Err(message) => tool_service::publish(
-                        &task_app,
-                        "companion.failed",
-                        json!({"jobId": job, "message": message, "durationMs": started.elapsed().as_millis() as u64}),
-                    ),
-                }
-            });
-            Ok(json!({"status": "started", "jobId": job_id}))
-        }
         c::TOOL_COMPANION_READ_CHAT => {
             let _: NoArgs = parse(tool, args)?;
-            let snapshot =
-                crate::companion::read_chat(app, "", crate::companion::Source::Tool).await?;
+            let snapshot = crate::companion::read_chat(app).await?;
             Ok(snapshot.to_json())
-        }
-        c::TOOL_COMPANION_TYPE => {
-            let CompanionTypeArgs { text, send } = parse(tool, args)?;
-            let send = send.unwrap_or_else(|| {
-                app.state::<SharedState>()
-                    .settings
-                    .read()
-                    .unwrap()
-                    .assistant
-                    .companion
-                    .auto_send
-            });
-            // 旧工具：就是“往游戏聊天里发一句”（开聊天框键、发送键），经同一个入口（ADR 041 D1），只收一行
-            Ok(crate::game_chat::type_into_chat(
-                app,
-                &text,
-                send,
-                kotone_core::send_to_game::Speaker::Agent,
-                deadline,
-            )
-            .await?)
         }
         c::TOOL_COMPANION_CHECK => {
             let _: NoArgs = parse(tool, args)?;

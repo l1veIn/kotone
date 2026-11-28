@@ -44,7 +44,7 @@ PORT = 9336
 ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(WORK, "webview"),
            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={PORT}")
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 RESULTS = []
 QUICK = "英雄联盟现在是哪个版本？一句话"
 REQUEST = "帮我写一个自动化：每隔 5 秒按一下 Q 键，按 F8 停下。写好直接保存，名字叫“自动按Q”，先不要运行。"

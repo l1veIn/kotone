@@ -8,7 +8,7 @@
 //!   调用经工具服务交给桌面，发起方记成 `tool-service`。两条路在桌面端走同一个实现。
 //!
 //! 现在只有 `game_chat.send`：往游戏聊天里发话归本体，它就是“发到游戏”的入口（ADR 041 D1，
-//! `kotone_core::send_to_game`），语音输入插件、自动化、旧工具 `companion.type` 都经同一个入口（ADR 039 D2）。
+//! `kotone_core::send_to_game`），语音输入插件、自动化都经同一个入口（ADR 039 D2）。
 //! 别的本体工具还是 `catalog.rs` 里的条目和工具服务的目录，以后照这里挪。
 
 use kotone_core::send_to_game::{
@@ -102,7 +102,7 @@ mod tests {
         assert_eq!(send.side_effects, ["input"]);
         assert!(send.needs.is_empty() && send.page.is_none());
         assert_eq!(send.parameters["required"], json!(["text"]));
-        assert!(owns("game_chat.send") && !owns("game_chat") && !owns("companion.type"));
+        assert!(owns("game_chat.send") && !owns("game_chat") && !owns("companion.read_chat"));
         let spec = &service_specs()[0];
         assert_eq!(spec["name"], "game_chat.send");
         assert_eq!(spec["sideEffects"], json!(["input"]));

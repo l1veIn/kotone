@@ -5,6 +5,7 @@
 - 细化：[ADR 015](015-agent-scope-and-stack.md)（完成度与技术栈；各开发步骤的范围以它为准）
 - 不变：[ADR 013](013-automation-domain-model.md)（自动化的定义 / 触发 / 执行记录与调度语义）
 - 参考：[游戏陪玩 Agent 现状调研](../research/2026-11-16-game-agent-landscape.md)
+- 2026-11-28 修订（[ADR 053](053-retire-old-companion-flow.md)）：§4 游戏内入口的开关 `agent.inGame`（关掉时呼叫和快捷指令走旧的单次陪玩）去掉了，旧的单次陪玩（`kotone-ai::companion`）和工具 `companion.ask` / `companion.type` 一起退掉；呼叫、唤醒、快捷指令都交给她（`assistant.route = agent` 时照旧转交外部 Agent）
 
 ## 问题
 
@@ -40,7 +41,7 @@ Kotone 是**游戏场景的 Agent 运行框架**：类比 Claude Code 之于写�
 ### 4. 两种入口
 
 - **聊天窗口**：经典 AI 聊天界面，多轮对话；消息流里显示工具调用与结果、需要确认的操作给按钮、有停止按钮。适合设计自动化这类需要来回商量的事（Agent 可以截图、找位置、试运行、保存）。
-- **游戏内**：陪玩热键说一句话 = 给 Agent 发一条消息；结果用语音 / 弹幕播出。要快：只给常用工具、限制步数，截图与识别文字在请求时直接附上。快捷指令保留两种：“一句话”= 发给 Agent；“运行自动化”= 直接执行，不经过 AI。（2026-11-25 起两种都是「设置 → 热键」里自己加的热键，存在热键表 `hotkeys.bindings`，运行自动化就是绑 `automation.run`；以后还能调工具、打开页面，见 [ADR 040](040-hotkeys-belong-to-core.md) 第 3 期。）
+- **游戏内**：陪玩热键说一句话 = 给 Agent 发一条消息；结果用语音 / 弹幕播出。要快：只给常用工具、限制步数，截图与识别文字在请求时直接附上。快捷指令保留两种：“一句话”= 发给 Agent；“运行自动化”= 直接执行，不经过 AI。实现时加过一个开关 `agent.inGame`（默认开，关掉时回到旧的单次陪玩），2026-11-28 由 [ADR 053](053-retire-old-companion-flow.md) 去掉：游戏内入口只交给她。（2026-11-25 起两种都是「设置 → 热键」里自己加的热键，存在热键表 `hotkeys.bindings`，运行自动化就是绑 `automation.run`；以后还能调工具、打开页面，见 [ADR 040](040-hotkeys-belong-to-core.md) 第 3 期。）
 
 ### 5. 权限（参照现有 Agent 运行框架）
 

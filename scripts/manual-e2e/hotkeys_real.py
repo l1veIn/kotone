@@ -17,7 +17,7 @@ SAFETY — this script PRESSES KEYS and once lets Kotone TYPE into a test window
     copy of target/debug/kotone.exe in target/hotkeys-real/bin/. ~/.kotone is not read; at the end the script checks
     that ~/.kotone/config.json did not change. No microphone: speech recognition is the built-in `mock-stream`
     engine (fixed text “对面打野在下路”) recording VB-CABLE's “CABLE Output” (silence). No AI key, no credentials.
-    Her input tools (game_chat.send, game.act, automation.run, companion.type) are denied.
+    Her input tools (game_chat.send, game.act, automation.run) are denied.
   * Clean-up (always): runtime.stop, app.quit, close the test window.
 ========================================================================================================================
 
@@ -94,7 +94,7 @@ TEST_TITLE = "KotoneScriptTarget"
 BANNER = "会按 F19-F22，还会往测试窗口里打两条字，测试期间别碰键盘鼠标（约 2 分钟）"
 SAFE_FOREGROUND = {"powershell.exe", "pwsh.exe", "windowsterminal.exe", "openconsole.exe", "conhost.exe", "cmd.exe",
                    "warp.exe", "code.exe", "claude.exe", "wezterm-gui.exe", "alacritty.exe", "mintty.exe"}
-RULES = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+RULES = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 
 VK = {"F19": 0x82, "F20": 0x83, "F21": 0x84, "F22": 0x85}
 TALK, TALK_NEW, CHANNEL, RESEND = "F22", "F21", "F20", "F19"

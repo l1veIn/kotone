@@ -4,6 +4,8 @@
 
 2026-11-28 修订（[ADR 052](052-retire-reminder-assistant.md)）：D10 了结——0.1.x 的提醒助手退掉了，它的键（`legacy-reminder`）一起去掉：热键表里没有这一行、不登记、没有按住的分派；升级用户的呼叫键不再存在 `assistant.companionBindings.hotkey`，所有人都是 `assistant.hotkey`（热键表 `kotone.call` 的镜像）。下文实施记录里提到提醒助手热键、`companionBindings` 的是当时的样子。
 
+2026-11-28 修订（[ADR 053](053-retire-old-companion-flow.md)）：旧的单次陪玩和工具 `companion.ask` 退掉了。快捷指令“跟她说一句”（`companion::say`）只交给她，`assistant.route = agent` 时原文转交外部 Agent（`user.request`，来源 `assistant-text`；以前这时走旧的单次陪玩）；没绑键的快捷指令不再能由工具触发。下文实施记录里的 `companion.ask {quickMessageId}` 是当时的样子。
+
 ## 背景
 
 玩家（2026-11-25）：

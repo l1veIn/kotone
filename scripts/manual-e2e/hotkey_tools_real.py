@@ -225,8 +225,7 @@ def write_config():
         "hotkeyBackend": "register",  # RegisterHotKey reacts to SendInput (part B)
         "assistant": {"speechVolume": 0, "wake": {"enabled": False}},
         # history.clear denied: a hotkey bound to it can't run. No "always allow" rules: third-party tools ask.
-        "agent": {"permissions": {"mode": "default", "rules": {"history.clear": "deny", "game.act": "deny",
-                                                              "companion.type": "deny"}},
+        "agent": {"permissions": {"mode": "default", "rules": {"history.clear": "deny", "game.act": "deny"}},
                   "progressSpeech": False},
     }
     with open(os.path.join(HOME, "config.json"), "w", encoding="utf-8") as f:

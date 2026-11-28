@@ -52,10 +52,6 @@ pub struct AgentConfig {
     /// 不交给 AI 的已保存自动化（默认全部交给，最多 30 个；ADR 014“已确认”）。
     #[serde(default)]
     pub hidden_automations: Vec<String>,
-    /// 陪玩热键与快捷指令里的“一句话”交给琴音 Agent（ADR 014 §4，默认开）。
-    /// 关闭时仍用旧的单次陪玩；`assistant.route = agent`（转交外部 Agent）时不看这一项。
-    #[serde(default = "default_true")]
-    pub in_game: bool,
     /// 游戏内交给琴音后，1.5 秒还没出声就先说一句“好，我看看”（ADR 017 §5，默认开）。
     #[serde(default = "default_true")]
     pub progress_speech: bool,
@@ -219,7 +215,6 @@ impl Default for AgentConfig {
         Self {
             permissions: Policy::default(),
             hidden_automations: Vec::new(),
-            in_game: true,
             progress_speech: true,
             identity: IdentityConfig::default(),
             subagents: SubagentsConfig::default(),
@@ -249,7 +244,9 @@ mod tests {
         assert_eq!(config.permissions.rules["app.quit"], Rule::Deny);
         let empty: AgentConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, AgentConfig::default());
-        assert!(empty.in_game, "in-game entry goes to the agent by default");
+        // 以前的 `inGame`（关掉时呼叫走旧的单次陪玩，ADR 053 退掉了）：旧配置里还有这一项也照样读得进来
+        let old: AgentConfig = serde_json::from_str(r#"{"inGame": false}"#).unwrap();
+        assert_eq!(old, AgentConfig::default());
         let json = serde_json::to_value(AgentConfig::default()).unwrap();
         assert_eq!(json["permissions"]["mode"], "default");
     }

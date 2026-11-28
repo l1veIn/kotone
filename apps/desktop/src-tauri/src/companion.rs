@@ -1,28 +1,23 @@
-//! Kotone 陪玩（docs/product-evolution-game-tools.md §10）。
+//! 她看游戏聊天、她用的连接（`companion` 就是她：设置里的 `assistant.companion`、发到游戏的 `Speaker::Companion`）。
 //!
-//! 陪玩热键（按住说话，经编排器识别后进入 [`handle_assistant`]）与快捷消息热键（[`quick`]，
-//! 不经过语音识别）共用同一条流程，工具 `companion.*` 也调用这里：
+//! - 就绪检查：她用的 API 连接（[`connection_ready`]）、文字识别模型（[`ocr_backend`]），设置页和工具
+//!   `companion.status` 看 [`status`]；
+//! - 读聊天（工具 `companion.read_chat`、语音回合开口时的截图 [`crate::speech_screen`]）：截前台窗口（GDI 前台
+//!   可见客户区；profile 记有聊天框区域时只识别那块）→ 选定的 OCR 模型识别、每行带截图坐标 → 写进聊天跟踪，
+//!   标出这次新出现的消息。只读，不调模型；
+//! - 快捷指令里的“一句话”（[`say`]）交给她，失败的提示（[`tell`]）用默认方式播出；
+//! - 测试连接（[`self_check`] / [`check_connection`]）。
 //!
-//! 1. 截前台窗口（GDI 前台可见客户区）；profile 记有聊天框区域时只识别那块；
-//! 2. 用统一模型清单里选定的 OCR 模型识别，每行带截图坐标；
-//! 3. 写入本流程自己的聊天跟踪，附上最近的跟踪记录与 profile 说明；
-//! 4. 一次大模型调用（`kotone_ai::companion`），从提醒 / 帮忙打字 / 回答中选一种；
-//! 5. 执行：提醒交给调度器，打字经本体的“发到游戏”入口打进聊天框（`game_chat.rs`，ADR 041；默认按发送键，`autoSend` 关掉时不按），
-//!    回答走与提醒相同的语音 / 弹幕交付路径。模型回报的聊天框位置记进 profile。
-//!
-//! 必须选好 AI 连接并保存密钥；没有时不降级，只提示用户先去配置。失败都如实告诉用户
-//! （热键入口用语音 / 弹幕播出，工具入口返回错误），不把失败说成“没看清”。
+//! 以前这里还有一条旧的单次陪玩流程（截图 + 识别 + 一次大模型调用，从提醒 / 帮忙打字 / 回答里选一种，
+//! 工具 `companion.ask` / `companion.type`）；呼叫早就都交给她了，ADR 053 把它退掉。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use kotone_ai::companion::{self as planner, CompanionAction, CompanionInput, OcrLine};
-use kotone_core::assistant::{AssistantPlan, CompanionCheck};
+use kotone_core::assistant::CompanionCheck;
 use kotone_core::cancel::CancellationToken;
 use kotone_core::ocr::{OcrBackend, OcrBackendKind, OcrCancel, OcrInput, OcrParams};
 use kotone_core::profile::{self, ChatRegion, GameProfile};
-use kotone_core::reminders::ReminderIntent;
-use kotone_core::send_to_game::Speaker;
 use kotone_core::settings::Settings;
 use kotone_core::tools::WindowObserver;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
@@ -38,35 +33,15 @@ use crate::SharedState;
 const MAX_CAPTURE_PIXELS: u64 = 3840 * 2160;
 const OCR_DEADLINE: Duration = Duration::from_secs(20);
 
+/// 读聊天的跟踪（每个窗口一个会话，记住已经见过的消息）。
 pub struct CompanionRuntime {
     tracker: Tracker,
-    /// 同一时间只处理一条陪玩请求。
-    busy: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Default for CompanionRuntime {
     fn default() -> Self {
         Self {
             tracker: Tracker::new(TrackLimits::default()),
-            busy: Arc::new(tokio::sync::Mutex::new(())),
-        }
-    }
-}
-
-/// 请求来源（写进提示词与回执）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
-    Voice,
-    QuickMessage,
-    Tool,
-}
-
-impl Source {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Voice => "voice",
-            Self::QuickMessage => "quick-message",
-            Self::Tool => "tool",
         }
     }
 }
@@ -167,12 +142,40 @@ pub fn status(app: &AppHandle) -> Value {
     })
 }
 
-// ---------- 读聊天（流程前半段） ----------
+// ---------- 读聊天 ----------
 
-/// 截图 + OCR + 跟踪的结果（工具 `companion.read_chat` 的返回，也是规划的输入）。
+/// OCR 识别出的一行（截图像素坐标；没有几何时为 None）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrLine {
+    pub text: String,
+    pub bbox: Option<[f64; 4]>,
+    pub confidence: Option<f32>,
+}
+
+/// 聊天跟踪里的一条消息。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackedMessage {
+    pub id: String,
+    pub text: String,
+    /// 这次读才第一次看到。
+    pub new: bool,
+    /// 第一次看到距今多少毫秒。
+    pub first_seen_ago_ms: u64,
+}
+
+/// 截图 + OCR + 跟踪的结果（工具 `companion.read_chat` 的返回，语音回合开口时的截图也用它）。
 pub struct ChatSnapshot {
-    pub input: CompanionInput,
-    pub window_size: (u32, u32),
+    pub window_title: String,
+    pub process_name: Option<String>,
+    /// 整张截图尺寸（客户区物理像素）。
+    pub image_size: (u32, u32),
+    /// 本次实际识别的区域（截图像素）；None = 整张。
+    pub ocr_region: Option<[f64; 4]>,
+    pub ocr_model: String,
+    pub ocr_lines: Vec<OcrLine>,
+    pub tracked: Vec<TrackedMessage>,
+    pub profile_name: String,
+    pub profile_notes: String,
     pub phases: Vec<(&'static str, u64)>,
     pub ocr_backend: String,
     pub data_egress: String,
@@ -182,16 +185,16 @@ pub struct ChatSnapshot {
 impl ChatSnapshot {
     pub fn to_json(&self) -> Value {
         json!({
-            "window": {"title": self.input.window_title, "process": self.input.process_name, "width": self.window_size.0, "height": self.window_size.1},
+            "window": {"title": self.window_title, "process": self.process_name, "width": self.image_size.0, "height": self.image_size.1},
             "ocr": {
-                "model": self.input.ocr_model,
+                "model": self.ocr_model,
                 "backend": self.ocr_backend,
                 "dataEgress": self.data_egress,
-                "region": self.input.ocr_region,
-                "lines": self.input.ocr_lines.iter().map(|l| json!({"text": l.text, "box": l.bbox, "confidence": l.confidence})).collect::<Vec<_>>(),
+                "region": self.ocr_region,
+                "lines": self.ocr_lines.iter().map(|l| json!({"text": l.text, "box": l.bbox, "confidence": l.confidence})).collect::<Vec<_>>(),
             },
-            "chatTracking": self.input.tracked.iter().map(|m| json!({"messageId": m.id, "text": m.text, "newThisRead": m.new, "firstSeenMsAgo": m.first_seen_ago_ms})).collect::<Vec<_>>(),
-            "profile": {"name": self.input.profile_name, "notes": self.input.profile_notes},
+            "chatTracking": self.tracked.iter().map(|m| json!({"messageId": m.id, "text": m.text, "newThisRead": m.new, "firstSeenMsAgo": m.first_seen_ago_ms})).collect::<Vec<_>>(),
+            "profile": {"name": self.profile_name, "notes": self.profile_notes},
             "warnings": self.warnings,
             "timing": self.phases.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
         })
@@ -263,27 +266,18 @@ pub(crate) fn ready_ocr_backend(
     Ok((ocr_model, backend))
 }
 
-/// 截前台窗口、识别、写入跟踪。`request` 只是带进结果的玩家原话。
-pub async fn read_chat(
-    app: &AppHandle,
-    request: &str,
-    source: Source,
-) -> Result<ChatSnapshot, String> {
+/// 截前台窗口、识别、写入跟踪。
+pub async fn read_chat(app: &AppHandle) -> Result<ChatSnapshot, String> {
     let s = settings(app);
     ready_ocr_backend(app, &s)?;
     let frame = tauri::async_runtime::spawn_blocking(capture_frame)
         .await
         .map_err(|e| format!("截图线程异常：{e}"))??;
-    read_frame(app, request, source, frame).await
+    read_frame(app, frame).await
 }
 
 /// 识别一张已经截好的前台窗口、写入聊天跟踪。
-pub async fn read_frame(
-    app: &AppHandle,
-    request: &str,
-    source: Source,
-    frame: Frame,
-) -> Result<ChatSnapshot, String> {
+pub async fn read_frame(app: &AppHandle, frame: Frame) -> Result<ChatSnapshot, String> {
     let s = settings(app);
     let (ocr_model, backend) = ready_ocr_backend(app, &s)?;
     let info = backend.info();
@@ -459,7 +453,7 @@ pub async fn read_frame(
                 .map(|visible| {
                     visible
                         .iter()
-                        .map(|m| planner::TrackedMessage {
+                        .map(|m| TrackedMessage {
                             id: m["messageId"].as_str().unwrap_or("").to_string(),
                             text: m["text"].as_str().unwrap_or("").to_string(),
                             new: m["firstSeenFrameId"].as_str() == Some(frame_id.as_str()),
@@ -475,22 +469,15 @@ pub async fn read_frame(
             }
         };
     Ok(ChatSnapshot {
-        input: CompanionInput {
-            request: request.to_string(),
-            source: source.as_str().into(),
-            window_title: window.title.clone(),
-            process_name: window.process_name.clone(),
-            image_size: (full.width(), full.height()),
-            ocr_region,
-            ocr_model,
-            ocr_lines: lines,
-            tracked,
-            profile_name: profile.display_name.clone(),
-            profile_notes: profile.companion_notes.clone(),
-            default_delivery: s.assistant.default_delivery.clone(),
-            auto_send: s.assistant.companion.auto_send,
-        },
-        window_size: (full.width(), full.height()),
+        window_title: window.title.clone(),
+        process_name: window.process_name.clone(),
+        image_size: (full.width(), full.height()),
+        ocr_region,
+        ocr_model,
+        ocr_lines: lines,
+        tracked,
+        profile_name: profile.display_name.clone(),
+        profile_notes: profile.companion_notes.clone(),
         phases,
         ocr_backend: backend.id().to_string(),
         data_egress: info.data_egress,
@@ -498,101 +485,9 @@ pub async fn read_frame(
     })
 }
 
-// ---------- 执行 ----------
-// 帮忙打字经本体的“发到游戏”入口（`game_chat.rs`，ADR 041）：和语音输入、`game_chat.send` 共用一把输入锁。
+// ---------- 快捷指令、提示 ----------
 
-/// 把模型回报的聊天框位置换算成比例记进当前 profile（与已记录的差别很小时不写）。
-fn learn_chat_region(
-    settings: &Settings,
-    region: [f64; 4],
-    size: (u32, u32),
-) -> Option<ChatRegion> {
-    let (w, h) = (f64::from(size.0), f64::from(size.1));
-    if w < 1.0 || h < 1.0 {
-        return None;
-    }
-    // 留一点边距，避免下一条消息的行刚好落在边界外。
-    let pad_x = region[2] * 0.05;
-    let pad_y = region[3] * 0.1;
-    let x0 = ((region[0] - pad_x) / w).clamp(0.0, 1.0);
-    let y0 = ((region[1] - pad_y) / h).clamp(0.0, 1.0);
-    let x1 = ((region[0] + region[2] + pad_x) / w).clamp(0.0, 1.0);
-    let y1 = ((region[1] + region[3] + pad_y) / h).clamp(0.0, 1.0);
-    let next = ChatRegion {
-        x: x0,
-        y: y0,
-        width: x1 - x0,
-        height: y1 - y0,
-    };
-    next.validate().ok()?;
-    let mut profile = active_profile(settings);
-    if let Some(old) = profile.chat_region {
-        let close = (old.x - next.x).abs() < 0.02
-            && (old.y - next.y).abs() < 0.02
-            && (old.width - next.width).abs() < 0.02
-            && (old.height - next.height).abs() < 0.02;
-        if close {
-            return None;
-        }
-    }
-    profile.chat_region = Some(next);
-    match profile::save(&profile) {
-        Ok(()) => Some(next),
-        Err(error) => {
-            kotone_core::log::log(&format!("companion: 记录聊天框位置失败：{error}"));
-            None
-        }
-    }
-}
-
-/// 一次完整陪玩的结果。
-pub struct Outcome {
-    pub action: CompanionAction,
-    pub message: String,
-    pub snapshot: ChatSnapshot,
-    pub learned_region: Option<ChatRegion>,
-    pub plan_ms: u64,
-}
-
-impl Outcome {
-    fn summary(&self) -> String {
-        match &self.action {
-            CompanionAction::Reminders(r) => format!("已设置 {} 个提醒", r.len()),
-            CompanionAction::Type { text } => format!("已打进聊天框：{text}"),
-            CompanionAction::Answer { text, .. } => text.clone(),
-            CompanionAction::Clarify { message } => message.clone(),
-        }
-    }
-}
-
-/// 截图、识别、规划（不执行动作）。
-async fn plan(
-    app: &AppHandle,
-    text: &str,
-    source: Source,
-    cancel: &CancellationToken,
-) -> Result<Outcome, String> {
-    let s = settings(app);
-    let connection = connection_ready(app, &s)?;
-    let snapshot = read_chat(app, text, source).await?;
-    let started = Instant::now();
-    let plan = planner::plan(&connection, &snapshot.input, cancel).await?;
-    let plan_ms = started.elapsed().as_millis() as u64;
-    let learned_region = plan
-        .chat_region
-        .and_then(|region| learn_chat_region(&s, region, snapshot.window_size));
-    let mut outcome = Outcome {
-        action: plan.action,
-        message: String::new(),
-        snapshot,
-        learned_region,
-        plan_ms,
-    };
-    outcome.message = outcome.summary();
-    Ok(outcome)
-}
-
-/// 告诉用户一段话（失败提示、追问）：用助手的默认方式，后台进行，不阻塞调用方。
+/// 告诉用户一段话（失败提示）：用默认方式，后台进行，不阻塞调用方。
 pub(crate) fn tell(app: &AppHandle, text: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -602,185 +497,25 @@ pub(crate) fn tell(app: &AppHandle, text: String) {
     });
 }
 
-/// 是否有一条陪玩请求正在处理（工具入口用来提前给出“忙”的答复）。
-pub fn is_busy(app: &AppHandle) -> bool {
-    app.state::<CompanionRuntime>().busy.try_lock().is_err()
-}
-
-fn acquire(app: &AppHandle) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
-    app.state::<CompanionRuntime>()
-        .busy
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| "上一条陪玩请求还在处理，请稍等".to_string())
-}
-
-/// 陪玩热键（编排器识别完语音后）：规划并执行打字 / 回答；提醒交回编排器提交。
-pub async fn handle_assistant(
-    app: &AppHandle,
-    text: String,
-    source: Source,
-    cancel: CancellationToken,
-) -> Result<AssistantPlan, String> {
-    let result = async {
-        let _busy = acquire(app)?;
-        let outcome = plan(app, &text, source, &cancel).await?;
-        if cancel.is_cancelled() {
-            return Err("陪玩请求已取消".to_string());
-        }
-        log_outcome(&outcome);
-        match &outcome.action {
-            CompanionAction::Reminders(reminders) => Ok(AssistantPlan {
-                message: outcome.message.clone(),
-                reminders: reminders.clone(),
-            }),
-            CompanionAction::Type { text } => {
-                let auto_send = settings(app).assistant.companion.auto_send;
-                crate::game_chat::type_into_chat(app, text, auto_send, Speaker::Companion, None)
-                    .await?;
-                Ok(AssistantPlan {
-                    message: outcome.message.clone(),
-                    reminders: vec![],
-                })
-            }
-            CompanionAction::Answer { text, delivery } => {
-                let (app2, text2, delivery2) = (app.clone(), text.clone(), delivery.clone());
-                tauri::async_runtime::spawn(async move {
-                    if let Err(error) =
-                        crate::assistant::deliver_text(&app2, text2, delivery2).await
-                    {
-                        kotone_core::log::log(&format!("companion: 回答未能播出：{error}"));
-                    }
-                });
-                Ok(AssistantPlan {
-                    message: outcome.message.clone(),
-                    reminders: vec![],
-                })
-            }
-            CompanionAction::Clarify { message } => {
-                tell(app, message.clone());
-                Ok(AssistantPlan {
-                    message: message.clone(),
-                    reminders: vec![],
-                })
-            }
-        }
-    }
-    .await;
-    if let Err(error) = &result {
-        if !cancel.is_cancelled() {
-            tell(app, error.clone());
-        }
-    }
-    result
-}
-
-fn log_outcome(outcome: &Outcome) {
-    // 只记录动作类型、行数与耗时，不记录聊天内容或回答原文。
-    kotone_core::log::log(&format!(
-        "companion: action={} lines={} ocr={} timing={:?} plan={}ms region_learned={}",
-        outcome.action.kind(),
-        outcome.snapshot.input.ocr_lines.len(),
-        outcome.snapshot.input.ocr_model,
-        outcome.snapshot.phases,
-        outcome.plan_ms,
-        outcome.learned_region.is_some()
-    ));
-}
-
-/// 完整执行一次（快捷消息热键与工具 `companion.ask`）：提醒自己提交、打字、回答都等到完成，
-/// 返回如实的回执。
-pub async fn run(app: &AppHandle, text: String, source: Source) -> Result<Value, String> {
-    let _busy = acquire(app)?;
-    let cancel = CancellationToken::default();
-    let outcome = plan(app, &text, source, &cancel).await?;
-    log_outcome(&outcome);
-    let delivery = match &outcome.action {
-        CompanionAction::Reminders(reminders) => {
-            let scheduler = app
-                .state::<crate::assistant::AssistantRuntime>()
-                .scheduler
-                .as_ref()
-                .map_err(Clone::clone)?
-                .clone();
-            let session = format!(
-                "companion-{}-{}",
-                source.as_str(),
-                kotone_core::eval::new_session_id()
-            );
-            let scheduled = scheduler.schedule_batch(&session, now_ms(), reminders)?;
-            json!({"scheduled": scheduled})
-        }
-        CompanionAction::Type { text } => {
-            let auto_send = settings(app).assistant.companion.auto_send;
-            crate::game_chat::type_into_chat(app, text, auto_send, Speaker::Companion, None).await?
-        }
-        CompanionAction::Answer { text, delivery } => {
-            let used = crate::assistant::deliver_text(app, text.clone(), delivery.clone()).await?;
-            json!({"delivered": used})
-        }
-        CompanionAction::Clarify { message } => {
-            let used = crate::assistant::deliver_text(app, message.clone(), Vec::new()).await?;
-            json!({"delivered": used})
-        }
-    };
-    let (text_out, reminders): (String, Vec<ReminderIntent>) = match &outcome.action {
-        CompanionAction::Reminders(r) => (outcome.message.clone(), r.clone()),
-        CompanionAction::Type { text } | CompanionAction::Answer { text, .. } => {
-            (text.clone(), vec![])
-        }
-        CompanionAction::Clarify { message } => (message.clone(), vec![]),
-    };
-    let mut timing: serde_json::Map<String, Value> = outcome
-        .snapshot
-        .phases
-        .iter()
-        .map(|(k, v)| (k.to_string(), json!(v)))
-        .collect();
-    timing.insert("planMs".into(), json!(outcome.plan_ms));
-    Ok(json!({
-        "action": outcome.action.kind(),
-        "text": text_out,
-        "reminders": reminders.iter().map(|r| json!({"delaySeconds": r.delay_seconds, "text": r.text, "delivery": r.delivery})).collect::<Vec<_>>(),
-        "result": delivery,
-        "ocr": {"model": outcome.snapshot.input.ocr_model, "backend": outcome.snapshot.ocr_backend, "dataEgress": outcome.snapshot.data_egress, "lines": outcome.snapshot.input.ocr_lines.len(), "region": outcome.snapshot.input.ocr_region},
-        "chatRegionLearned": outcome.learned_region,
-        "warnings": outcome.snapshot.warnings,
-        "timing": timing,
-    }))
-}
-
 /// 快捷指令（自己加的热键“跟她说一句”，ADR 040 第 3 期）：等于替玩家说了这句话（不经过语音识别），交给她；
-/// 按下热键的那一路在 [`crate::hotkey_run`]。失败如实播出。
+/// 按下热键的那一路在 [`crate::hotkey_run`]。`assistant.route = agent`（转交外部 Agent）时和呼叫一样原文转交。
+/// 失败如实播出。
 pub fn say(app: &AppHandle, text: String) {
-    let s = settings(app);
-    if s.agent.in_game && s.assistant.route != kotone_core::assistant::AssistantRoute::Agent {
-        // “一句话”交给琴音 Agent（ADR 014 §4）；结果在后台播出。
-        if let Err(error) = crate::agent::submit_from_assistant(app, text, "quick-command") {
-            tell(app, format!("快捷指令没能交出去：{error}"));
-            return;
+    let route = settings(app).assistant.route;
+    if route == kotone_core::assistant::AssistantRoute::Agent {
+        if let Err(error) = crate::tool_service::submit_user_request(app, &text, "assistant-text") {
+            tell(app, format!("快捷指令没能转交 Agent：{error}"));
         }
-        // 快捷指令 = 替你说一句：选了通话就接通，她答完你可以直接接着说（ADR 033、术语表“通话”）；
-        // 说一句就走、录音笔不接通，她答完照常安静（问了一句才再听）
-        crate::call::start(app);
         return;
     }
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = run(&app, text, Source::QuickMessage).await {
-            kotone_core::log::log(&format!("companion: quick message failed: {error}"));
-            tell(&app, error);
-        }
-    });
-}
-
-/// 按 ID 找快捷指令跟她说的话（工具 `companion.ask {quickMessageId}`）。快捷指令在热键表里（第 3 期），
-/// 不止旧字段那 8 条。
-pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
-    kotone_core::hotkey_custom::quick_messages(&settings(app).hotkeys)
-        .into_iter()
-        .find(|m| m.id == id && !m.runs_automation())
-        .map(|m| m.text)
+    // “一句话”交给她（ADR 014 §4）；结果在后台播出。
+    if let Err(error) = crate::agent::submit_from_assistant(app, text, "quick-command") {
+        tell(app, format!("快捷指令没能交出去：{error}"));
+        return;
+    }
+    // 快捷指令 = 替你说一句：选了通话就接通，她答完你可以直接接着说（ADR 033、术语表“通话”）；
+    // 说一句就走、录音笔不接通，她答完照常安静（问了一句才再听）
+    crate::call::start(app);
 }
 
 // ---------- 测试连接 ----------
@@ -811,7 +546,8 @@ pub async fn check_connection(app: &AppHandle, id: &str) -> Result<CompanionChec
     {
         return Err("这条连接还没有保存 Key".into());
     }
-    let result = planner::self_check(&connection, &CancellationToken::default()).await?;
+    let result =
+        kotone_ai::connection_check::self_check(&connection, &CancellationToken::default()).await?;
     let check = CompanionCheck {
         connection_id: id,
         base_url: connection.base_url.clone(),

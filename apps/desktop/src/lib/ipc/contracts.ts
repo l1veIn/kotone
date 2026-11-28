@@ -350,8 +350,6 @@ export interface AgentConfig {
   permissions: { mode: "default" | "allow-all" | "read-only"; rules: Record<string, "allow" | "ask" | "deny"> };
   /** 不交给 AI 的已保存自动化 id。 */
   hiddenAutomations: string[];
-  /** 呼叫键与快捷指令交给琴音（默认开；关闭时用旧的单次陪玩）。 */
-  inGame: boolean;
   /** 游戏内交给琴音后 1.5 秒还没出声，先说一句“好，我看看”（默认开）。 */
   progressSpeech?: boolean;
   /** 名字与头像（空 = “琴音”与内置形象）。头像是工作区里的文件名，用 workspaceSetAvatar 上传。 */

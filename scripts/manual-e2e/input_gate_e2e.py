@@ -2,8 +2,9 @@
 
 Everything is isolated: KOTONE_HOME=target/gate-e2e/home, the test window target_window.ps1 -Chat, no game, no player
 config. The isolated home gets a game profile "e2e-chat" for the test window's process (powershell.exe) with League of
-Legends' chat keys: since ADR 041 phase 1 companion.type goes through the send-to-game entry, which only types into a
-game it recognises in front. The "player" is this script: SendInput WITHOUT Kotone's tag (dwExtraInfo 0), which the hook treats exactly like
+Legends' chat keys: the send goes through game_chat.send (the send-to-game entry, ADR 041), which only types into a
+game it recognises in front (until ADR 053 this script used the old tool companion.type, same entry, now removed).
+The "player" is this script: SendInput WITHOUT Kotone's tag (dwExtraInfo 0), which the hook treats exactly like
 a physical key. The test window logs every key with its Shift state and dwExtraInfo (Kotone's keys carry 4B544E49), and
 this script rebuilds what a chat box would have received: Enter opens it (Shift+Enter = "all" channel), characters go
 in, Enter sends it.
@@ -185,13 +186,14 @@ def disturb_letters(stop):
 
 
 def send_with(disturbance):
-    """Run one companion.type send while `disturbance(stop)` runs; return the parsed events of this round."""
+    """Run one game_chat.send (one line, default channel = team) while `disturbance(stop)` runs; return the parsed
+    events of this round."""
     start = len(log_lines())
     stop = threading.Event()
     worker = threading.Thread(target=disturbance, args=(stop,), daemon=True)
     worker.start()
     time.sleep(0.15)
-    env = call("companion.type", {"text": TEXT, "send": True})
+    env = call("game_chat.send", {"text": TEXT, "send": True})
     time.sleep(0.3)
     stop.set()
     worker.join(5)
@@ -213,8 +215,8 @@ PROFILE_ID = "e2e-chat"
 
 def write_test_window_profile():
     """A game profile for the test window's process (powershell.exe), with League of Legends' chat keys (team = Enter,
-    all = Shift+Enter, send = Enter, same delays). Since ADR 041 phase 1 companion.type goes through the send-to-game
-    entry, which picks the profile of the game in front and refuses a foreground that is not a game; before that it
+    all = Shift+Enter, send = Enter, same delays). Since ADR 041 phase 1 sending (then companion.type, now
+    game_chat.send) goes through the send-to-game entry, which picks the profile of the game in front and refuses a foreground that is not a game; before that it
     typed into whatever was in front with the selected profile (League of Legends by default). This profile keeps the
     keys exactly as they were and lets the entry accept the test window."""
     os.makedirs(os.path.join(HOME, "profiles"), exist_ok=True)

@@ -153,14 +153,7 @@ async fn recognize(app: &AppHandle, shot: &Shot) -> Value {
         .get_or_init(|| async {
             let frame = shot.frame.lock().unwrap().take();
             let mut value = match frame {
-                Some(Ok(frame)) => match crate::companion::read_frame(
-                    app,
-                    "",
-                    crate::companion::Source::Voice,
-                    frame,
-                )
-                .await
-                {
+                Some(Ok(frame)) => match crate::companion::read_frame(app, frame).await {
                     Ok(snapshot) => snapshot_json(&snapshot),
                     Err(e) => {
                         json!({"window": window_json(shot), "error": format!("没能识别画面：{e}")})
@@ -183,7 +176,7 @@ fn window_json(shot: &Shot) -> Value {
 
 /// 与以前语音回合先读屏附上的格式一样：窗口、识别出的文字（带位置）、聊天跟踪。
 fn snapshot_json(snapshot: &crate::companion::ChatSnapshot) -> Value {
-    let input = &snapshot.input;
+    let input = snapshot;
     let lines: Vec<Value> = input
         .ocr_lines
         .iter()

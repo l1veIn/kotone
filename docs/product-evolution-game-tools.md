@@ -289,7 +289,7 @@ Agent 直接控制：
           -> Agent翻译/摘要 -> tts.speak 或 overlay.push
 ```
 
-Kotone 自己的陪玩流程（[§10](#10-kotone-陪玩2026-11-15-定稿)；不需要任何 Agent，也是 `companion.ask` 工具背后的同一实现）：
+Kotone 自己的陪玩流程（[§10](#10-kotone-陪玩2026-11-15-定稿)；不需要任何 Agent，也是 `companion.ask` 工具背后的同一实现。2026-11-28 已由 ADR 053 退掉，下图是历史）：
 
 ```text
 陪玩热键（说话）/ 快捷消息热键（预设的一句话）
@@ -346,6 +346,8 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 ## 10. Kotone 陪玩（2026-11-15 定稿）
 
 > 2026-11-16：本节“陪玩 = 一次 AI 决策、三种动作”的设计由 [ADR 014](adr/014-game-agent-harness.md) 取代——陪玩改为有聊天界面、能多轮调用全部工具的内置 Agent，原有三种动作变成它的工具。下文保留作为历史记录。
+>
+> 2026-11-28：这条流程的代码也退掉了（[ADR 053](adr/053-retire-old-companion-flow.md)）：`kotone-ai::companion` 的规划、`agent.inGame` 开关、工具 `companion.ask` / `companion.type` 都没有了；`companion.status`、`companion.read_chat`、`companion.check` 留着（看游戏聊天、测试连接）。
 
 状态：已实现（分支 `claude/companion`，实现与验证见[实现记录](research/2026-11-15-companion-implementation.md)；真实游戏里的整条链路尚未验证）。来源：[交接文档 §4](research/2026-11-15-companion-handoff.md#4-已定设计提醒助手升级为kotone-陪玩)。本节取代 §1 原来“场景一由外部 Agent 驱动”的写法：截图、OCR、聊天跟踪先成为 Kotone 自己的功能，再整体开放给 Agent。
 
@@ -389,7 +391,7 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 
 ### 10.4 开放给 Agent
 
-同一条流程包装成工具，外部 Agent 调用的结果与用户自己按热键一致：
+同一条流程包装成工具，外部 Agent 调用的结果与用户自己按热键一致（2026-11-28，ADR 053：`companion.ask`、`companion.type` 已删，其余三个留着）：
 
 | 工具 | 作用 |
 | --- | --- |

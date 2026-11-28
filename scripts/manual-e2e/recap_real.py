@@ -36,7 +36,7 @@ SAID = [
 
 # 真机测试不让琴音按键：会往前台窗口打字、点鼠标的工具一律禁止（2026-11-18 voice_chat_real 里她选了打字，
 # 字和回车进了桌面）。
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 
 
 def call(tool, args=None, timeout_ms=30_000):

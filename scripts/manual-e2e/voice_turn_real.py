@@ -49,7 +49,7 @@ PORT = 9335
 ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(WORK, "webview"),
            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={PORT}")
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 # 前台是这些程序就不测（会出声；玩家可能正在对局）。
 GAMES = ("league of legends", "leagueclient", "riotclient", "valorant", "genshinimpact", "yuanshen", "starrail",
          "zenlesszonezero", "dota2", "cs2", "wow", "overwatch", "pubg", "naraka", "eldenring", "steam")

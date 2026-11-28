@@ -34,7 +34,7 @@ EXE = os.path.join(REPO, "target", "debug", "kotone.exe")
 ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(WORK, "webview"),
            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9333")
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 ASR_TEXT = "帮我看看队友说了什么"
 
 

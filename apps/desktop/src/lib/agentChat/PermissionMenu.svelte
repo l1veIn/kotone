@@ -24,7 +24,7 @@
     busy = true;
     try {
       const saved = await agentSetPermissions({ ...permissions, mode: id });
-      settingsStore.update((s) => s && { ...s, agent: { hiddenAutomations: [], inGame: true, ...s.agent, permissions: saved } });
+      settingsStore.update((s) => s && { ...s, agent: { hiddenAutomations: [], ...s.agent, permissions: saved } });
       toast(true, m.chat_permission_mode({ mode: modes.find((item) => item.id === id)?.name ?? "" }));
       onchanged?.();
     } catch (error) {

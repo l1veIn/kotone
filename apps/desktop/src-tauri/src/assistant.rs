@@ -199,10 +199,10 @@ pub fn prepare_model_migration(
 }
 
 /// 助手入口的请求去向：
-/// - 默认交给内置琴音 Agent（`agent.inGame`，ADR 014 §4）：立即返回，结果在后台播出；
-/// - `agent.inGame = false` 时用旧的单次陪玩（截图 + OCR + 一次大模型调用，提醒 / 打字 /
-///   回答三选一）；
+/// - 默认交给她（内置琴音 Agent，ADR 014 §4）：立即返回，结果在后台播出；
 /// - `assistant.route = agent` 时原文转交外部 Agent（经工具服务发布 `user.request`）。
+///
+/// 以前 `agent.inGame` 关掉时走旧的单次陪玩（截图 + OCR + 一次大模型调用），ADR 053 退掉了。
 ///
 /// 呼叫（语音）与文字入口都经过这里，因此两者行为一致。0.1.x 升级后还没启用她（只用语音输入）时不处理
 /// （0.1.x 的提醒助手退掉了，ADR 052）。
@@ -228,11 +228,10 @@ impl AssistantHandler for RoutingHandler {
         request: AssistantRequest,
         cancel: CancellationToken,
     ) -> kotone_core::assistant::AssistantFuture<'_> {
-        let (route, in_game, voice_input_only) = {
+        let (route, voice_input_only) = {
             let settings = self.settings.read().unwrap();
             (
                 settings.assistant.route,
-                settings.agent.in_game,
                 settings.ui.legacy_upgrade.voice_input_only(),
             )
         };
@@ -241,7 +240,7 @@ impl AssistantHandler for RoutingHandler {
                 Err("先添加 DeepSeek Key，才能和琴音说话".into())
             });
         }
-        if route != kotone_core::assistant::AssistantRoute::Agent && in_game {
+        if route != kotone_core::assistant::AssistantRoute::Agent {
             return Box::pin(async move {
                 if cancel.is_cancelled() {
                     return Err("助手指令已取消".into());
@@ -259,15 +258,6 @@ impl AssistantHandler for RoutingHandler {
                     message,
                     reminders: vec![],
                 })
-            });
-        }
-        if route != kotone_core::assistant::AssistantRoute::Agent {
-            let source = match request_source(&request.session_id) {
-                "tool" => crate::companion::Source::Tool,
-                _ => crate::companion::Source::Voice,
-            };
-            return Box::pin(async move {
-                crate::companion::handle_assistant(&self.app, request.text, source, cancel).await
             });
         }
         Box::pin(async move {

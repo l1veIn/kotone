@@ -2,11 +2,11 @@
 //!
 //! 来源有这几种，合成一张表：
 //! - **工具服务**：`system.capabilities` 里的工具，与外部 Agent 同一份实现；
-//!   给外部 Agent 的通道类工具（`agent.*`、`event.read`、`assistant.submit`）和旧陪玩流程
-//!   （`companion.ask` / `companion.check`，会再调一次模型）不交给内置 Agent；
+//!   给外部 Agent 的通道类工具（`agent.*`、`event.read`、`assistant.submit`）和测试连接
+//!   （`companion.check`，付费请求）不交给内置 Agent；
 //! - **内置动作**：说话（`speak`）、弹幕（`danmaku`，后台用）、提醒（`reminder.create`）和查找工具（`tools.find`）；
 //! - **本体用 ToolSpec 登记的工具**（[`crate::body`]，ADR 039 D2）：发到游戏聊天（`game_chat.send`，
-//!   替代 `companion.type`，会写进执行记录），不看插件开关，经 [`crate::port::BuiltinHost::body_tool`] 执行；
+//!   旧工具 `companion.type` 已退掉，ADR 053），不看插件开关，经 [`crate::port::BuiltinHost::body_tool`] 执行；
 //! - **插件**（ADR 038）：开着的插件给她的工具（`visibility` 含 `model`、要的数据开关都开着），
 //!   由桌面端按开关算好（[`kotone_plugin_api::Offer`]），经 [`crate::port::BuiltinHost::plugin`] 执行；
 //! - **已保存的自动化**：每个一个工具 `saved.<id>`（最多 [`MAX_SAVED_TOOLS`] 个）。
@@ -152,10 +152,8 @@ pub const EXCLUDED: &[&str] = &[
     "agent.request.claim",
     "agent.reply",
     "assistant.submit",
-    // 旧的单次陪玩流程（会再调一次模型）；打字由 game_chat.send 代替
-    "companion.ask",
+    // 测试连接（付费请求、写设置）：给设置页和外部 Agent 用
     "companion.check",
-    "companion.type",
     // 由 tools.find 代替；PNG 正文会塞满上下文
     "system.capabilities",
     "artifact.get",

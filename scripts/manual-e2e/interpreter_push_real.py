@@ -24,7 +24,7 @@ sys.path.insert(0, HERE)
 import interpreter_e2e as base  # noqa: E402
 import real_deepseek  # noqa: E402
 
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 
 
 def main():

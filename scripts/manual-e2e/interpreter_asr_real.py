@@ -53,7 +53,7 @@ ENGLISH = os.path.join(WORK, "english.wav")
 CHINESE = os.path.join(REPO, "crates", "kotone-stt", "tests", "fixtures", "zh-game-3s.wav")
 TRIGGER = os.path.join(WORK, "speak.trigger")
 STOP = os.path.join(WORK, "speak.stop")
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 GAMES = ("league of legends", "leagueclient", "riotclient", "valorant", "genshinimpact", "yuanshen", "starrail",
          "zenlesszonezero", "dota2", "cs2", "wow", "overwatch", "pubg", "tslgame", "naraka", "eldenring")
 LOCK = os.path.join(REPO, "target", "tmp", "real.lock")

@@ -16,7 +16,7 @@ SAFETY — this script TYPES. Read before running.
     only read: models.dir points at ~/.kotone/models (the installed streaming x-asr model); at the end the script
     checks that ~/.kotone/config.json, ~/.kotone/history/history.jsonl and the model files did not change.
   * No AI key: voice input needs none; her game_chat.send runs against a local mock model inside this script.
-    Her other input tools (game.act, automation.run, companion.type) are denied.
+    Her other input tools (game.act, automation.run) are denied.
   * Clean-up (always): runtime.stop, delete the mock connection (+ leftover test credential), app.quit, close the test
     window, stop the mock server.
 ========================================================================================================================
@@ -44,7 +44,7 @@ Checks (PASS / FAIL / SKIP lines, total at the end):
   5. the floating window's states over `kotone://state` (CDP): listening → transcribing → processing → (preview →)
      sending → success → idle; the floating window appeared and went away (diagnostics overlay_show / overlay_hide);
   6. her game_chat.send (same typer): `tools call game_chat.send` (outside agents); her own path through a typed
-     message and the mock model; the tool service's companion.type. Since ADR 041 phase 1 all of these (and voice
+     message and the mock model (the old tool companion.type is gone since ADR 053). Since ADR 041 phase 1 all of these (and voice
      input) go through the send-to-game entry, which refuses to type for her / outside agents unless a game it knows
      is in front or the selected profile is "generic" (any window): this test selects "generic", so they type into
      the test window as before. It deliberately adds NO profile for the test window's process (powershell.exe): the
@@ -102,12 +102,11 @@ BANNER = "会往测试窗口里打字，测试期间别碰键盘鼠标（约 3 �
 SAFE_FOREGROUND = {"powershell.exe", "pwsh.exe", "windowsterminal.exe", "openconsole.exe", "conhost.exe", "cmd.exe",
                    "warp.exe", "code.exe", "claude.exe", "wezterm-gui.exe", "alacritty.exe", "mintty.exe"}
 # Her input tools: only the one under test is allowed.
-RULES = {"game_chat.send": "allow", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+RULES = {"game_chat.send": "allow", "game.act": "deny", "automation.run": "deny"}
 GC_ASK = "跟队友说一句下路小心（E2E）"
 GC_TEXT = "E2E 琴音代发：下路小心"
 GC_TOOL_TEXT = "E2E 外部调用：下路小心"
 GC_OFF_TEXT = "E2E 语音输入关着：下路小心"
-CT_TEXT = "E2E companion.type 下路小心"
 CONSOLE_PROFILE = {
     "id": "e2e-console", "displayName": "测试：控制台通道（没有游戏）",
     "processNames": ["kotone-e2e-no-such-game.exe"], "windowTitlePatterns": [],
@@ -664,7 +663,7 @@ def write_config():
         "hotkeyBackend": "register",
         "hotkey": {"key": KEY, "mode": "toggle"},
         "interactionMode": "push-to-talk",
-        # "generic" = any foreground window: the send-to-game entry (ADR 041) then lets game_chat.send / companion.type
+        # "generic" = any foreground window: the send-to-game entry (ADR 041) then lets game_chat.send
         # type into the test window; no profile for powershell.exe on purpose (see the docstring, step 6)
         "activeProfileId": "generic",
         # nothing else registered system-wide through RegisterHotKey while the test runs
@@ -883,14 +882,6 @@ def main():
               (result or {}).get("content", "")[:200])
         check("6b: the test window got exactly her text", s["messages"] == [("team", GC_TEXT)] and not s["still_open"],
               f"{s['messages']}")
-
-        focus("6c")
-        m = marks()
-        typed = call_raw("companion.type", {"text": CT_TEXT, "send": True})
-        time.sleep(1.0)
-        s = collect(m, None)
-        check("6c: tool service companion.type (same typer) typed into the test window",
-              typed.get("ok") and s["messages"] == [("team", CT_TEXT)], f"{s['messages']} {typed.get('error')}")
 
         # 7. console channel
         print("\n== 7. console channel ==")

@@ -140,7 +140,7 @@ pub const FIELDS: &[Field] = &[
     f("assistant.followUpSeconds", "她问了一句以后再听几秒", "琴音 → 唤醒", "秒，0–30，缺省 8。说一句就走和录音笔里，她这次最后一句以问号结尾时，答完再听这么久，你直接回答就行；0 = 问了也不再听。通话里一直在听，不看这一项。", NONE, NOW),
     f("assistant.callIdleSeconds", "通话多久没人说话挂断", "琴音 → 唤醒", "秒，0–600，缺省 30。只在 assistant.callMode 是 call（通话）时有用：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话（旧的写法），按说一句就走。", NONE, NOW),
     f("assistant.echoCancellation", "开着音箱也能打断她（回声消除）", "琴音 → 唤醒", "true（缺省）时通话里消掉音箱放出来的声音（她的声音、游戏声），玩家直接开口就能打断她；false 时她说话时不听，要打断就按呼叫键。戴耳机开着也没坏处。", NONE, NOW),
-    f("assistant.route", "呼叫交给谁", "琴音 → 唤醒", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
+    f("assistant.route", "呼叫交给谁", "琴音 → 唤醒", "", &[("reminders", "她（内置的琴音）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "琴音 → 交互 → 声音与弹幕", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
     f("assistant.speechEngine", "本地语音合成", "琴音 → 交互 → 声音与弹幕", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
     f("assistant.ttsModelId", "她的声音用哪家", "琴音 → 交互 → 声音与弹幕", "空 = 自动（默认）：跟着她用的模型走——她的 API 连接是 DeepSeek / MiniMax / 阿里云百炼、那家有 Key 时用那家的声音，否则用本地的 assistant.speechEngine。在线声音按字数计费，怎么计费见 speech.status。Key 不写在这里：DeepSeek、MiniMax、百炼的声音自动用同一家 API 连接的 Key，其余请玩家在声音与弹幕页填。声音、模型写 modelConfigs.<ID>.voice / model。一般用 models.activate {category: tts}。", &[("", "自动（默认）"), ("local", "本地（assistant.speechEngine）"), ("deepseek-tts", "DeepSeek（在线）"), ("minimax-tts", "MiniMax（在线）"), ("dashscope-tts", "阿里云百炼（在线）"), ("siliconflow-tts", "硅基流动（在线）"), ("volcano-tts", "火山引擎（在线）"), ("openai-compat-tts", "自定义（OpenAI 兼容接口，在线；地址、模型、声音名要自己填）")], NOW),
@@ -156,7 +156,6 @@ pub const FIELDS: &[Field] = &[
     f("assistant.danmakuEmote", "弹幕琴音表情", "琴音 → 交互 → 声音与弹幕", "", &[("none", "不显示"), ("hello", "打招呼"), ("cheering", "加油"), ("pointing", "指"), ("amazed", "惊讶")], NOW),
     f("assistant.companion.autoSend", "替你打字后直接发送", "琴音 → 唤醒 → 快捷指令", "false 时只把字打进聊天框，由你按回车。", NONE, NOW),
     f("assistant.companion.quickMessages", "快捷指令", "设置 → 热键", "旧写法（热键表 hotkeys.bindings 前 8 条“跟她说一句 / 运行自动化”的镜像）：数组，每条 {id, label, text, hotkey} 或 {id, label, hotkey, automationId, args}，最多 8 条。整组替换，会按 id 改进热键表（加、删、改）；第 9 条以后请直接写 hotkeys.bindings。", NONE, NOW),
-    f("agent.inGame", "通话交给她", "琴音 → 权限", "true：通话（呼叫键、唤醒词、快捷指令）交给她，多步、能用全部工具；false：旧的单次陪玩。", NONE, NOW),
     f(
         "agent.progressSpeech",
         "执行中先接一句",
@@ -824,7 +823,7 @@ mod tests {
     fn agent_cannot_touch_its_own_permissions() {
         use serde_json::json;
         assert!(agent_protected_violation(&json!({"overlay": {"style": "card"}})).is_none());
-        assert!(agent_protected_violation(&json!({"agent": {"inGame": false}})).is_none());
+        assert!(agent_protected_violation(&json!({"agent": {"progressSpeech": false}})).is_none());
         assert!(agent_protected_violation(
             &json!({"agent": {"permissions": {"mode": "allow-all"}}})
         )

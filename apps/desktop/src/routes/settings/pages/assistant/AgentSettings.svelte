@@ -1,7 +1,7 @@
 <script lang="ts">
-  // 「琴音 → 权限」：游戏内入口、权限模式与按工具的规则（config.json `agent` 段）。
+  // 「琴音 → 权限」：权限模式与按工具的规则（config.json `agent` 段）。
   // 工具清单来自后端 agent_tools（含分组、默认规则与说明）；权限要整体替换（agent_set_permissions），
-  // inGame 用普通设置补丁。
+  // 其余开关用普通设置补丁。
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
   import { onMount } from "svelte";
@@ -33,7 +33,6 @@
   let toolsError = $state("");
   let saving = $state(false);
   let loadError = $state("");
-  const inGame = $derived($settingsStore?.agent?.inGame ?? true);
   const progressSpeech = $derived($settingsStore?.agent?.progressSpeech ?? true);
   const matchRecap = $derived($settingsStore?.agent?.matchRecap ?? true);
   const safetyCheck = $derived($settingsStore?.agent?.safetyCheck ?? true);
@@ -86,7 +85,7 @@
     try {
       permissions = await agentSetPermissions(next);
       const saved = permissions;
-      settingsStore.update((s) => s && { ...s, agent: { hiddenAutomations: [], inGame: true, ...s.agent, permissions: saved } });
+      settingsStore.update((s) => s && { ...s, agent: { hiddenAutomations: [], ...s.agent, permissions: saved } });
       toast(true, message);
     } catch (error) {
       toast(false, m.companion_save_failed({ error: errText(error) }));
@@ -111,11 +110,6 @@
 
 <div class="space-y-6" data-testid="agent-settings">
   <SettingsSection title={m.companion_agent_section_title()} description={m.companion_agent_section_desc()}>
-    <SettingsRow label={m.companion_agent_in_game_label({ name: $companionName })} description={m.companion_agent_in_game_desc()}>
-      {#snippet control()}
-        <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? m.companion_agent_in_game_on({ name: $companionName }) : m.companion_agent_in_game_off())} aria-label={m.companion_agent_in_game_label({ name: $companionName })} />
-      {/snippet}
-    </SettingsRow>
     <SettingsRow label={m.companion_agent_progress_speech_label()} description={m.companion_agent_progress_speech_desc()}>
       {#snippet control()}
         <Switch data-testid="agent-progress-speech" bind:checked={() => progressSpeech, (checked) => void patchSettings({ agent: { progressSpeech: checked } }, checked ? m.companion_agent_progress_speech_on() : m.companion_agent_progress_speech_off())} aria-label={m.companion_agent_progress_speech_label()} />

@@ -40,7 +40,7 @@ ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(
            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={PORT}", KOTONE_BROWSER_MUTE="1",
            KOTONE_BROWSER_TRACE="1", PYTHONUNBUFFERED="1")
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny"}
 RESULTS = []
 TABLE = []
 

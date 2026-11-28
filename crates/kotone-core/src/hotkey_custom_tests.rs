@@ -58,7 +58,7 @@ fn patch(current: &Settings, patch: Value) -> Settings {
     next
 }
 
-/// 三条快捷指令：一句话带键、运行自动化带入参、一句话没绑键（旧版本允许，仍可由 `companion.ask` 触发）。
+/// 三条快捷指令：一句话带键、运行自动化带入参、一句话没绑键（旧版本允许）。
 fn three_quick() -> Value {
     json!([
         {"id": "q1", "label": "看队友", "text": "帮我看看队友说了什么", "hotkey": "F7"},

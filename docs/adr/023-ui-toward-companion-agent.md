@@ -2,6 +2,7 @@
 
 - 状态：Accepted（2026-11-18）
 - 相关：[ADR 016](016-ui-foundation-shadcn.md)（设置窗口的组件与外观）、[ADR 022](022-sessions-memory-soul.md)（会话、记忆、SOUL）
+- 2026-11-28：下文提到的“旧的单次陪玩”已由 [ADR 053](053-retire-old-companion-flow.md) 退掉（连同「琴音 → 权限」里“通话交给她”的开关）
 
 ## 问题
 

@@ -291,8 +291,7 @@ fn catalog_offers_core_tools_and_hides_external_channels() {
         "agent.reply",
         "event.read",
         "assistant.submit",
-        "companion.ask",
-        "companion.type",
+        "companion.check",
         "system.capabilities",
     ] {
         assert!(!all.contains(&hidden), "{hidden} must not reach the agent");

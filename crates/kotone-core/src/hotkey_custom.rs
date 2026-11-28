@@ -353,7 +353,7 @@ fn canonical(message: &QuickMessage) -> Option<QuickMessage> {
     quick_message_of(&binding_of(message))
 }
 
-/// 全部能写成快捷指令的条目（`companion.status` 的 `quickMessages`、`companion.ask {quickMessageId}` 用，不止 8 条）。
+/// 全部能写成快捷指令的条目（`companion.status` 的 `quickMessages` 用，不止 8 条）。
 /// 同一个 id 只算第一条。
 pub fn quick_messages(hotkeys: &HotkeysConfig) -> Vec<QuickMessage> {
     let mut seen = HashSet::new();

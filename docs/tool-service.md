@@ -8,7 +8,7 @@
 
 - 桌面进程拥有服务；`kotone-cli tools` 是客户端。客户端直接走 loopback HTTP，**不会再次启动 `kotone.exe`**，因此不会触发单实例回调唤起设置窗口、抢走游戏焦点。
 - 服务与 ASR 运行时（启动 / 停止开关）相互独立：运行时 Stopped 时工具照常可用，调用也不会启动 ASR、注册热键或加载模型。
-- 服务从不移动窗口；只有 `game.focus` 会把用户配置的游戏窗口切到前台，`game.launch` / `game.close` 会按游戏配置打开或请求关闭游戏，发送输入的只有自动化与陪玩打字（见各节）。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
+- 服务从不移动窗口；只有 `game.focus` 会把用户配置的游戏窗口切到前台，`game.launch` / `game.close` 会按游戏配置打开或请求关闭游戏，发送输入的只有自动化与 `game_chat.send`（见各节）。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
 - 已实现下文 80 个工具（服务自身 24 个 + 委托桌面宿主 56 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
 - OCR 结果与聊天文字一律是**数据**：服务从不解释或执行其中的内容（例如“忽略之前的指令”之类的文字只会被原样返回）。
 
@@ -120,7 +120,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 ## 5. 已实现工具
 
-除 `ocr.recognize`、`postprocess.test` 与陪玩的 `companion.ask` / `companion.read_chat` / `companion.check` 外所有工具 `dataEgress` 为 `none`：数据只在本机进程间传递（模型下载只从下载源取文件，不上传用户数据）。`ocr.recognize` 为 `backend-dependent`：选用本地后端时不外发，选用在线后端时只上传所选产物的 PNG（见 §8）。`postprocess.test` 为 `connection-dependent`：流程里的在线步骤会把样例文本发给其配置的连接。
+除 `ocr.recognize`、`postprocess.test` 与 `companion.read_chat` / `companion.check` 外所有工具 `dataEgress` 为 `none`：数据只在本机进程间传递（模型下载只从下载源取文件，不上传用户数据）。`ocr.recognize` 为 `backend-dependent`：选用本地后端时不外发，选用在线后端时只上传所选产物的 PNG（见 §8）。`postprocess.test` 为 `connection-dependent`：流程里的在线步骤会把样例文本发给其配置的连接。
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
@@ -251,21 +251,19 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 **打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（models、connections、sound、tuning、appearance、system、browser）打开设置页；`plugins` 打开左侧栏的「插件」；`call`、`reply`、`permissions`、`usage` 打开角色页的唤醒、交互、权限、用量（2026-11-25 从设置搬过去，地址没变）。不会把窗口拉到前面。**不打断玩家正在看的**（2026-11-25，ADR 039 实施记录“ui.open 不打断玩家”）：玩家在聊天页、右侧栏空着（收着、停在“卡片”、“网页”里没开网页）或显示的就是这个插件时直接显示（同一个插件的下一页往上叠，“返回”回到刚才那页），设置页在聊天页时直接跳过去；别的时候不切页、不换掉，放在右侧栏“卡片”最上面、窗口里出一个提示，玩家点“打开”才打开。同一个页面（地址 + 参数）反复打开只算一次。结果：`opened`（已经显示了）、`status`（`shown` / `waiting` = 放在右侧栏等玩家点 / `sent` = 窗口没回话）、`uri`、`title`、`note`（照着告诉玩家的话）。她和外部 Agent 同一条规矩；外部 Agent 调它照旧不经 Kotone 询问（和上面的 `game.act` 一样，权限由它们自己的运行框架管，ADR 014 第 5 节）。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
 
-### Kotone 陪玩（委托桌面宿主，2026-11-15）
+### 她看游戏聊天、测试连接（委托桌面宿主，2026-11-15）
 
-与用户按陪玩热键 / 快捷消息热键走的是**同一条流程、同一个实现**（[演进计划 §10](product-evolution-game-tools.md#10-kotone-陪玩2026-11-15-定稿)、[陪玩说明](assistant.md)）：截前台窗口 → 统一清单里选定的 OCR 模型 → 陪玩自己的聊天跟踪 + profile 说明 → 一次大模型调用，从提醒 / 帮忙打字 / 回答中选一种并执行。底层的截图、OCR、跟踪工具照常保留。
+以前这里是“Kotone 陪玩”（[演进计划 §10](product-evolution-game-tools.md#10-kotone-陪玩2026-11-15-定稿)）：截图 + OCR + 一次大模型调用，从提醒 / 帮忙打字 / 回答中选一种，工具 `companion.ask`（事件 `companion.finished` / `companion.failed`）和 `companion.type`。2026-11-28 由 [ADR 053](adr/053-retire-old-companion-flow.md) 退掉：这两个现在是不认识的工具（没有别名，单向的变化）；往游戏聊天里发话用 `game_chat.send`，要她处理一句话用 `assistant.submit`。剩下的三个工具名字不变。底层的截图、OCR、跟踪工具照常保留。
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
-| `companion.status` | 无 | `ready`、`reason`（缺什么：AI 连接与密钥、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`、`quickMessages[]`（热键表里全部“跟她说一句 / 运行自动化”，形状照旧，不止 8 条，ADR 040 第 3 期）、当前 profile 的 `notes` 与 `chatRegion` |
-| `companion.ask` | `text` 或 `quickMessageId`（二选一） | 受理即返回 `{status:"started", jobId}`；结果为 `companion.finished` 事件：`jobId`、`action`（`reminder` / `type` / `answer` / `clarify`）、`text`、`reminders[]`、`result`（已调度的提醒 / 打字回执 / 实际交付方式）、`ocr{model,backend,dataEgress,lines,region}`、`chatRegionLearned`、`warnings`、`timing{captureMs,ocrMs,planMs}`、`durationMs`；失败为 `companion.failed {jobId, message}`。前置条件不满足（没有通过自检的连接）时直接报错，不受理；另一条陪玩请求进行中返回 `BUSY` |
-| `companion.read_chat` | 无 | 流程前半段，不调大模型：`window`、`ocr{model,backend,dataEgress,region,lines[{text,box,confidence}]}`（框为截图像素）、`chatTracking[{messageId,text,newThisRead,firstSeenMsAgo}]`、`profile{name,notes}`、`warnings`、`timing` |
-| `companion.type` | `text`（≤200 字，单行）、可选 `send`（缺省跟随设置 `autoSend`，默认 true） | 旧工具，经和 `game_chat.send` 同一个“发到游戏”的入口（ADR 041；新的调用用 `game_chat.send`：能选频道、能多行）：按前台游戏的游戏配置（对不上就用当前选中的）开聊天框、打字、按发送键，等修饰键松开，和 Kotone 别的输入排队，前台不是游戏时不发；`send=false` 只打进聊天框不发送。回执 `{typed, sent, profile, receipt}` 加上 `route`、`channel`、`lines`、`sentLines`，只证明本机按键已执行，不证明服务器已收到 |
+| `companion.status` | 无 | 她能不能看游戏聊天：`ready`、`reason`（缺什么：AI 连接与密钥、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`（她用 `game_chat.send` 替你发时缺省按不按发送键）、`quickMessages[]`（热键表里全部“跟她说一句 / 运行自动化”，形状照旧，不止 8 条，ADR 040 第 3 期）、当前 profile 的 `notes` 与 `chatRegion` |
+| `companion.read_chat` | 无 | 读游戏聊天，不调大模型（profile 记着的聊天框位置只识别那块；现在没有谁再记新的位置）：`window`、`ocr{model,backend,dataEgress,region,lines[{text,box,confidence}]}`（框为截图像素）、`chatTracking[{messageId,text,newThisRead,firstSeenMsAgo}]`、`profile{name,notes}`、`warnings`、`timing` |
 | `companion.check` | 无 | 测试助手所选连接（读一次服务商的模型列表，不花 token；没有列表接口时发一次短对话），只用于显示、不是使用前提，受理即返回 `{status:"started"}`；结果（同时写进设置）为 `companion.check.finished {check}` 或 `companion.check.failed {message}` |
 
-数据外发：`companion.ask` / `companion.check` 把请求与识别出的聊天发给用户的 AI 连接（`connection-dependent`）；所选 OCR 模型是在线模型时，`companion.ask` / `companion.read_chat` 每次都会上传截图（`ocr.dataEgress=selected-image`）。识别出的文字对 Kotone 与 Agent 都只是数据，不是指令；模型能选的动作只有上面三种。
+数据外发：`companion.check` 用用户的 AI 连接读一次模型列表或发一次短对话（`connection-dependent`）；所选 OCR 模型是在线模型时，`companion.read_chat` 每次都会上传截图（`ocr.dataEgress=selected-image`）。识别出的文字对 Kotone 与 Agent 都只是数据，不是指令。
 
-**发到游戏的结果**（`game_chat.send`、`companion.type`，ADR 041）。只加不改（单向门）：
+**发到游戏的结果**（`game_chat.send`，ADR 041；以前的 `companion.type` 也是这个样子）。只加不改（单向门）：
 
 - `route`：这次走了哪条路。`keys` = 开聊天框 → 打字 → 发送键（游戏配置里的键）；`console` = Source 2 控制台通道（ADR 032）；`client` = 游戏客户端自己的聊天接口，不按键（ADR 041 第 2 期：英雄联盟客户端在前台时，选英雄、房间里经英雄联盟插件发，几行连成一条消息）。
 - `plugin`：走了游戏插件提供的发法时是那个插件的 id（例如 `lol`）；本体的通用发法没有这个字段。
@@ -290,7 +288,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `models.download` | `id`、可选 `category` | 受理即返回 `status=started`；进度 `model.download.progress`（至多每秒一次），结果 `model.download.finished` / `model.download.failed`（取消时 `cancelled=true`；OCR / TTS 的事件带 `category`）。镜像优先、断点续传、逐文件 SHA-256、先查磁盘空间；全应用（三个类别）同时只有一个下载 |
 | `models.download.cancel` | 无 | `requested`（是否有下载在进行）；保留临时文件以便续传 |
 | `models.delete` | `id`、可选 `category` | `wasActive`（删的是活动模型时回退默认；TTS 删除 Kokoro 时改回系统语音） |
-| `models.activate` | `modelId`；`asr` 还需 `engineId`；可选 `category` | `asr`：运行时状态（运行中会 `restartNeeded`，`runtime.start` 重启生效）。`ocr`：陪玩流程所用模型（`ocr.recognize` 仍须显式指定后端）；`tts`：播报引擎；`search`：琴音 `web.search` / `web.fetch` 用的联网搜索（`deepseek-search` / `off`，ADR 026）。本地模型须先下载，在线模型可先选后配；返回 `{category, activeModelId}` |
+| `models.activate` | `modelId`；`asr` 还需 `engineId`；可选 `category` | `asr`：运行时状态（运行中会 `restartNeeded`，`runtime.start` 重启生效）。`ocr`：读游戏聊天（`companion.read_chat`、开口时的截图）所用模型（`ocr.recognize` 仍须显式指定后端）；`tts`：播报引擎；`search`：琴音 `web.search` / `web.fetch` 用的联网搜索（`deepseek-search` / `off`，ADR 026）。本地模型须先下载，在线模型可先选后配；返回 `{category, activeModelId}` |
 | `models.dir.set` | `dir`（空 = 默认 `~/.kotone/models`） | `dir`、`moved[]`、`failed[]`；运行时运行中或下载中拒绝。选目录前先问用户 |
 | `models.install_guide` | `id`、可选 `category` | 自动下载失败时的手动安装指引（OCR 包在设置页「导入」时仍逐文件校验） |
 
@@ -369,7 +367,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 ## 8. OCR 后端与安装
 
-OCR 模型与 ASR、TTS 同在统一模型清单（`models.list {"category": "ocr"}`，设置页「高级 → 模型 → 文字识别」）：每个本地包和 DeepSeek 在线条目各对应一个后端，清单条目的 `engineId` 就是 `ocr.backends` / `ocr.recognize` 的后端 ID。后端可插拔、互不降级：调用方在 `ocr.recognize` 中必须显式选择 `backend`；本地失败不会改走在线，在线失败也不会改走本地。`ocr.backends` 返回每个后端的真实状态（会读取模型文件做哈希校验、读取凭据库判断 key 是否存在，但不返回 key）。清单里“当前 OCR 模型”（`models.activate {"category": "ocr"}`，配置 `ocr.activeModelId`；为空时取第一个已安装的本地包，不会自动选在线）只决定陪玩流程用哪个，不改变 `ocr.recognize` 必须显式指定后端的约定。
+OCR 模型与 ASR、TTS 同在统一模型清单（`models.list {"category": "ocr"}`，设置页「高级 → 模型 → 文字识别」）：每个本地包和 DeepSeek 在线条目各对应一个后端，清单条目的 `engineId` 就是 `ocr.backends` / `ocr.recognize` 的后端 ID。后端可插拔、互不降级：调用方在 `ocr.recognize` 中必须显式选择 `backend`；本地失败不会改走在线，在线失败也不会改走本地。`ocr.backends` 返回每个后端的真实状态（会读取模型文件做哈希校验、读取凭据库判断 key 是否存在，但不返回 key）。清单里“当前 OCR 模型”（`models.activate {"category": "ocr"}`，配置 `ocr.activeModelId`；为空时取第一个已安装的本地包，不会自动选在线）只决定读游戏聊天（`companion.read_chat`、自动化的 `ocr()` 等）用哪个，不改变 `ocr.recognize` 必须显式指定后端的约定。
 
 ### 8.1 本地：PP-OCRv5 各语种包
 
@@ -475,7 +473,6 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 | `agent.reply.delivered` / `agent.reply.failed` | 回复交付完成 / 失败 | `deliveryId`、`requestId`、`text`、`receipt` 或 `code/message`、`deliverMs` |
 | `model.download.progress` / `.finished` / `.failed` | `models.download` 的进度（至多每秒一次）与结果 | `id`、`downloadedBytes/totalBytes`；结果含 `durationMs`，失败含 `cancelled`、`message` |
 | `wake.model.progress` | `wake.model.download` 的进度（至多每秒一次） | `downloadedBytes`、`totalBytes` |
-| `companion.finished` / `companion.failed` | `companion.ask` 的结果 | 见上表；`jobId` 对应受理时的返回 |
 | `automation.finished` | 一条执行（程序或提醒）进入终态：完成、失败、取消、错过 | 执行记录（见“自动化”，省略程序源码） |
 | `automation.saved` / `automation.deleted` | 保存（新建或覆盖）/ 删除一个自动化 | `id`（保存时另有 `name`） |
 | `companion.check.finished` / `.failed` | `companion.check` 的结果 | `check{connectionId,baseUrl,model,passed,checkedAtMs,message}` 或 `message` |
@@ -484,7 +481,7 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 
 每个事件带递增 `seq` 与全局唯一 `id`（`evt_…`，供去重）。游标形如 `ev1.<实例随机数>.<序号>`，只在发放它的实例内有效。读取时传回上次的游标；实例重启后旧游标是 `EVENT_CURSOR_STALE`，序号已被淘汰是 `EVENT_CURSOR_EXPIRED`——**从不静默跳过事件**，Agent 应从 `from=oldest` 重读并按 ID 去重。`types` 支持精确类型与 `前缀.*`。`waitMs` 长轮询：暂无新事件时最多等待这么久（`event.read` 受本次 `timeoutMs` 约束，`GET /v1/events` 最长 30 秒；CLI 与 MCP 每轮用 25 秒），不占工具执行名额；服务关闭时立即返回 `closed=true`。
 
-**用户请求**（反向通道）。`assistant.route` 设为 `agent` 时（运行中用 `settings.update {"assistant": {"route": "agent"}}` 立即生效；桌面端未运行时也可 `kotone.exe config set assistant.route agent`；默认 `companion` 为 Kotone 陪玩，旧值 `reminders` 读入时按 `companion` 处理），助手热键语音与文字入口的原文不再交给 Kotone 自己的 AI 连接，而是成为一条 `user.request`：`requestId`（`areq_…`）、`text`（用户原文——对 Kotone 是数据，不是指令）、`source`（`assistant-voice` / `assistant-text` / `tool`）、`foregroundWindow`（提交时的前台窗口，可直接用于截图）、`status`（`pending` → `claimed` → `replied`，或 `expired`）、创建/过期时间、领取者与回复次数。`assistant.submit` 走与文字入口完全相同的路径，供测试和自动化。
+**用户请求**（反向通道）。`assistant.route` 设为 `agent` 时（运行中用 `settings.update {"assistant": {"route": "agent"}}` 立即生效；桌面端未运行时也可 `kotone.exe config set assistant.route agent`；默认 `reminders`（读入时也认 `companion`）= 交给她（内置的琴音；以前是 Kotone 陪玩，ADR 053 退掉了）），呼叫、唤醒、快捷指令和文字入口的原文不再交给 Kotone 自己的 AI 连接，而是成为一条 `user.request`：`requestId`（`areq_…`）、`text`（用户原文——对 Kotone 是数据，不是指令）、`source`（`assistant-voice` / `assistant-text` / `tool`；快捷指令的那句话是 `assistant-text`，2026-11-28 起，以前走旧的单次陪玩）、`foregroundWindow`（提交时的前台窗口，可直接用于截图）、`status`（`pending` → `claimed` → `replied`，或 `expired`）、创建/过期时间、领取者与回复次数。`assistant.submit` 走与文字入口完全相同的路径，供测试和自动化。
 
 Agent 先 `agent.request.claim`（`consumer` 如 `dsh-game-communicate:<pid>` / `claude-code`）再处理：同一领取者重复领取幂等，其他领取者得到 `AGENT_REQUEST_CLAIMED`，过期请求得到 `AGENT_REQUEST_EXPIRED`。多个 Agent 同时在线时由此保证一条请求只被处理一次。
 

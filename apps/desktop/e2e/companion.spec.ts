@@ -18,7 +18,7 @@ async function chooseConnection(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("composer-model")).not.toHaveText("选模型");
 }
 
-// 陪玩只要选好有 Key 的 API 连接（不再要求能力自检；测试连接只是给用户手动确认）。
+// 看游戏聊天只要选好有 Key 的 API 连接（不再要求能力自检；测试连接只是给用户手动确认）。
 test("choosing a connection is enough: no self-check gate", async ({ page }) => {
   await page.goto("/?mockCompanionCheck=fail#/settings?onboarding=never");
   await addConnection(page);
@@ -53,5 +53,5 @@ test("quick commands moved to 设置 → 热键, and online OCR shows the upload
   await openVoiceInput(page);
   await openSettingsTab(page, "call");
   await expect(page.getByTestId("companion-upload-warning")).toContainText("上传");
-  await expect(page.getByTestId("companion-status")).toHaveText("陪玩已就绪。");
+  await expect(page.getByTestId("companion-status")).toHaveText("看游戏聊天已就绪。");
 });

@@ -273,7 +273,7 @@ pub fn run() {
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
             // 发到游戏的唯一入口和那一把输入锁（ADR 041 D4）：语音输入（经编排器）、game_chat.send、
-            // companion.type、旧陪玩流程、自动化的 chat()、game.act、按键程序共用这一份。
+            // 自动化的 chat()、game.act、按键程序共用这一份。
             let game_chat = kotone_core::send_to_game::GameChat::new(
                 injector.clone(),
                 focus.clone(),

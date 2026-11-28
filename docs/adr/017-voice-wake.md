@@ -3,6 +3,7 @@
 - 状态：Accepted（2026-11-17）。用户授权按推荐方案实施；第一版已实现，见文末“实施记录”
 - 细化：[ADR 014](014-game-agent-harness.md)（游戏内入口、同一段对话）、[ADR 006](006-session-lifecycle-interaction-modes.md)（交互模式里一直留着的“A3 全时免按，Phase 3”）、[ADR 007](007-vad-one-shot-mode.md)（VAD 静音判停）、[ADR 010](010-sound-feedback.md)（提示音）
 - 不变：游戏语音输入（发到游戏聊天）的所有模式与热键；`assistant.interactionMode` 的取值范围
+- 2026-11-28 修订（[ADR 053](053-retire-old-companion-flow.md)）：下文“前提”里的 `agent.inGame` 去掉了（旧的单次陪玩退掉，唤醒以后都交给她）
 - 2026-11-27 修订（[ADR 048](048-her-voice-in-one-place.md)）：下文 TTS 一行的在线引擎现在是 DeepSeek、MiniMax、阿里云百炼、硅基流动、火山和自定义（OpenAI 兼容接口，原来叫“OpenAI 兼容”）
 
 ## 问题
@@ -170,7 +171,7 @@ Kotone 的推荐：**由宿主按规则播，不让模型生成**。模型生成
   - 唤醒后的指令和现在的陪玩热键一样，按用户选的 ASR、AI、TTS 走，在线服务的数据边界不变。
   - 文档和 PRIVACY.md 要写明：开启后 Windows 任务栏会**一直显示“麦克风使用中”**。
 - **默认关**。在「琴音陪玩 → 设置」里开启，开启时说清楚“常开麦克风、本地检测、建议戴耳机”。托盘菜单加一个开关。
-- **前提**：语音运行时已启动、`agent.inGame` 开着、有可用的 AI 连接（与陪玩热键相同）。
+- **前提**：语音运行时已启动、`agent.inGame` 开着、有可用的 AI 连接（与陪玩热键相同）。（2026-11-28，ADR 053：`agent.inGame` 没有了，只剩运行时和连接两条。）
 - **新字段**（遵守 `docs/development.md` 的配置兼容规则：旧字段只写旧版认识的值，新能力用新字段）：
 
 ```jsonc

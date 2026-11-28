@@ -40,7 +40,7 @@ ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
 ENV.pop("KOTONE_BETTERGI_DIR", None)
 GAMES = ["yuanshen.exe", "genshinimpact.exe", "league of legends.exe", "cs2.exe", "dota2.exe", "valorant", "zenlesszonezero.exe"]
-NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "companion.type": "deny"}
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny"}
 RESULTS = []
 
 

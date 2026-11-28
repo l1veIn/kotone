@@ -372,7 +372,7 @@ test("not ready shows the reason and opens the model menu next to the chat box",
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
 });
 
-test("agent settings replace permissions as a whole and save the in-game switch", async ({ page }) => {
+test("agent settings replace permissions as a whole", async ({ page }) => {
   await openChat(page);
   // 权限在角色页（原「设置」的陪玩组，交接第十一节第 8 条）
   await openSettingsTab(page, "permissions");
@@ -401,10 +401,8 @@ test("agent settings replace permissions as a whole and save the in-game switch"
     { permissions: { mode: "read-only", rules: {} } },
     { permissions: { mode: "read-only", rules: { "shell.run": "deny" } } },
   ]);
-  await settings.getByTestId("agent-in-game").click();
-  await expect(settings.getByTestId("agent-in-game")).toHaveAttribute("aria-checked", "false");
-  const saved = await page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings());
-  expect(saved.agent?.inGame).toBe(false);
+  // 以前这里还有“通话交给她”的开关（关掉走旧的单次陪玩），ADR 053 退掉了
+  await expect(settings.getByTestId("agent-in-game")).toHaveCount(0);
 });
 
 test("composer bar: usage inside; her model, permission and call sit next to send", async ({ page }) => {

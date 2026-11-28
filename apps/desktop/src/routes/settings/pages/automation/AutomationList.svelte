@@ -182,7 +182,7 @@
     offering = item.id;
     try {
       const hiddenAutomations = await agentSetAutomationHidden(item.id, !offered);
-      settingsStore.update((s) => s && { ...s, agent: { permissions: { mode: "default", rules: {} }, inGame: true, ...s.agent, hiddenAutomations } });
+      settingsStore.update((s) => s && { ...s, agent: { permissions: { mode: "default", rules: {} }, ...s.agent, hiddenAutomations } });
       toast(true, offered ? m.auto_list_offered({ name: item.name, companion: $companionName }) : m.auto_list_not_offered({ name: item.name, companion: $companionName }));
     } catch (error) { toast(false, m.auto_list_save_failed({ error: errText(error) })); }
     finally { offering = ""; }

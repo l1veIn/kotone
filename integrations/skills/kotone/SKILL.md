@@ -59,14 +59,13 @@ Everything the onboarding wizard and settings window can do is a tool, using the
 
 ## Kotone's built-in agent (琴音) and the companion tools
 
-The assistant hotkey, the quick-command sentences and the 琴音 chat window go to the built-in agent (`agent.inGame`, on by default; off falls back to the older one-shot companion). It uses the user's AI connection that passed the self-check, the same tools as you, and its own allow / ask / deny rules (`agent.permissions`). Do not fight it for the same task: if the user is talking to 琴音, let it work.
+The call key, the wake word, the quick-command sentences and the 琴音 chat window go to the built-in agent (unless the user set `assistant.route` to `agent`: then they reach you as `user.request`; quick commands arrive with source `assistant-text`). It uses the user's AI connection, the same tools as you, and its own allow / ask / deny rules (`agent.permissions`). Do not fight it for the same task: if the user is talking to 琴音, let it work.
 
 The companion tools are still yours to use:
 
-- `companion.status` — ready or not, and why (needs an AI connection that passed the self-check, and an OCR model). `companion.check` runs the self-check (two paid requests; result as `companion.check.finished` / `.failed`).
+- `companion.status` — whether the game chat can be read, and why not (needs an AI connection with a saved key, and an OCR model). `companion.check` tests the connection (reads the provider's model list for free; one short chat request when there is no list; result as `companion.check.finished` / `.failed`).
 - `companion.read_chat` — capture the foreground window + OCR + chat tracking (no LLM): OCR lines with boxes, tracked messages flagged `newThisRead`, profile notes. Use it to read teammates' chat yourself.
-- `companion.type {"text": "…"}` — type into the foreground game's chat box with the active profile's keys and send it; without `send` it follows the user's auto-send setting (on by default), `"send": false` only types it. Only when the user asked you to say something for them. The receipt only proves the keys were pressed.
-- `companion.ask {"text": "队友说了什么"}` — the older one-shot flow (one LLM call picks a reminder / typing / an answer); result as `companion.finished` / `companion.failed`.
+- `game_chat.send {"text": "…"}` — send to the foreground game's chat with its profile's keys (optional `channel` `team` / `all`, several lines allowed); without `send` it follows the user's auto-send setting (on by default), `"send": false` only types it. Only when the user asked you to say something for them. The receipt only proves the keys were pressed. (`companion.type` and the older one-shot `companion.ask` were removed; they are unknown tools now.)
 
 Game knowledge lives in the profile's `companionNotes` (e.g. "[队伍] 前缀是队友"), editable with `profiles.save`; the chat-box region is `chatRegion`. Models: `models.list {"category": "ocr"}` / `{"category": "tts"}`; `models.download` / `models.activate` take the same `category`. An online OCR model uploads every screenshot — tell the user before selecting it.
 

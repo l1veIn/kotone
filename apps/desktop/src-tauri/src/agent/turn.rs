@@ -955,7 +955,7 @@ pub(super) async fn turn(
     stop
 }
 
-/// 陪玩热键 / 快捷指令 / 工具入口交给琴音（`agent.inGame`）。立即返回，结果在后台播出。
+/// 呼叫 / 快捷指令 / 工具入口（`assistant.submit`）交给她。立即返回，结果在后台播出。
 pub fn submit_from_assistant(
     app: &AppHandle,
     text: String,

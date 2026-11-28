@@ -2,8 +2,8 @@
 //! `kotone_core::send_to_game`；这里只做桌面端的事：
 //!
 //! - 全进程只有一份的入口和那一把输入锁（`SharedState.game_chat`，`lib.rs` 建，语音输入经编排器用同一份）；
-//! - 本体工具 `game_chat.send`（她：发起方 `agent:<对话 id>`；外部 Agent：`tool-service`）、旧工具
-//!   `companion.type`、旧陪玩流程的“帮忙打字”都从这里进入口；
+//! - 本体工具 `game_chat.send`（她：发起方 `agent:<对话 id>`；外部 Agent：`tool-service`）从这里进入口
+//!   （旧工具 `companion.type` 和旧陪玩流程的“帮忙打字”以前也走这里，ADR 053 退掉了）；
 //! - 在阻塞线程里跑入口，看门狗只防系统调用被安全软件挂住；
 //! - 不写执行记录：替玩家发的字不是自动化，她发了什么在那段聊天里看（2026-11-27 玩家，ADR 014 §3 的修订）；
 //! - 把内置插件登记的发法（清单 `[[send_to_game]]`，ADR 041 D3）包成入口的 [`ChatProvider`]（[`providers`]）：
@@ -252,28 +252,6 @@ fn result_json(outcome: &ChatOutcome, send: bool) -> Value {
     value["profile"] = json!(outcome.game);
     value["receipt"] = json!(receipt(outcome, send));
     value
-}
-
-/// 旧工具 `companion.type`、旧陪玩流程：只收一行，结果同 [`result_json`]，不写执行记录。
-pub async fn type_into_chat(
-    app: &AppHandle,
-    text: &str,
-    send: bool,
-    speaker: Speaker,
-    deadline: Option<Instant>,
-) -> Result<Value, String> {
-    let text = text.trim();
-    if text.contains(['\r', '\n']) {
-        // 旧接口只收一行；多行用 game_chat.send
-        return Err("要打的字含有换行：多行请用 game_chat.send".into());
-    }
-    let mut request = ChatRequest::new(text, speaker);
-    request.send = send;
-    request.deadline = deadline.map(service_deadline);
-    let outcome = send_logged(app, "companion.type", request)
-        .await
-        .map_err(|failure| failure.to_string())?;
-    Ok(result_json(&outcome, send))
 }
 
 /// 发，并把结果记进日志（不记文字）。`from` 是发起方（`agent:<对话 id>`、`tool-service`、`hotkey`、`plugin:<id>`……）。

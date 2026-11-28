@@ -2,7 +2,7 @@
 //! results; transport and credential transactions have one implementation.
 
 pub mod agent;
-pub mod companion;
+pub mod connection_check;
 pub mod connections;
 pub mod model_listing;
 pub mod secrets;

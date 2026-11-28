@@ -117,7 +117,7 @@ const mock: MockStore = {
     ocr: { activeModelId: "" },
     search: { activeModelId: "" },
     browser: { enabled: true, extensions: [] },
-    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
+    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
     plugins: {},
     // 热键表（ADR 040 D8）：预览是老用户，旧字段里的键都在表里（含以前默认的 Shift+CapsLock 频道切换）
     hotkeys: {
