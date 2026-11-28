@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::config::ServerSpec;
+use crate::icon;
 use crate::manifest::{self, Effective};
 use crate::tools::{self, short_text};
 
@@ -105,6 +106,10 @@ struct State {
     trusted: bool,
     /// 这次连接填进去的 Key（`${input:名字}` 的值）：出错的话里出现了就换成 `***`（[`Server::scrub`]）。
     secrets: Vec<String>,
+    /// 本机存着的头像（ADR 049 D7）：`(下载的地址, data: 地址)`。
+    icon: Option<(String, String)>,
+    /// 这次运行里已经试过下载的地址（下不来不反复试；下次启动再试一次）。
+    icon_tried: Option<String>,
 }
 
 pub struct Server {
@@ -178,6 +183,8 @@ impl Server {
                 retry_after: None,
                 trusted: false,
                 secrets: Vec::new(),
+                icon: None,
+                icon_tried: None,
             }),
             client: tokio::sync::Mutex::new(None),
             manifest_changed: tokio::sync::watch::channel(0).0,
@@ -290,16 +297,72 @@ impl Server {
             .find(|uri| page_slug(uri) == slug)
     }
 
+    /// 头像（ADR 049 D7 第 2 条）：服务器只给了 `https://` 的图标时，本机存着就读进来；没存过（刚加的、启动时发现
+    /// 还没存）就在后台下载一次存到插件自己的目录。下不来就算了（界面用首字块），这次运行里不再试同一个地址。
+    pub fn ensure_icon(self: &Arc<Self>, host: &Arc<dyn Host>) {
+        let Some(src) = self.icon_to_fetch() else {
+            return;
+        };
+        let Some(dir) = self.dir.clone() else {
+            return;
+        };
+        let server = Arc::downgrade(self);
+        host.spawn(Box::pin(async move {
+            let Ok(fetched) = kotone_mcp::fetch_icon(&src).await else {
+                return;
+            };
+            if let (Ok(data), Some(server)) = (icon::save(&dir, &src, &fetched), server.upgrade()) {
+                server.state.lock().unwrap().icon = Some((src, data));
+            }
+        }));
+    }
+
+    /// 要下载的头像地址（[`Server::ensure_icon`]）：本机存着的先读进来；不用下、读到了、这次已经试过的回 None。
+    fn icon_to_fetch(&self) -> Option<String> {
+        let dir = self.dir.as_deref()?;
+        let src = {
+            let mut state = self.state.lock().unwrap();
+            let icons = state
+                .known
+                .server
+                .as_ref()
+                .map(|s| s.icons.as_slice())
+                .unwrap_or(&[]);
+            let Some(src) = icon::wanted(icons) else {
+                state.icon = None;
+                return None;
+            };
+            if state.icon.as_ref().is_some_and(|(s, _)| *s == src)
+                || state.icon_tried.as_deref() == Some(src.as_str())
+            {
+                return None;
+            }
+            state.icon_tried = Some(src.clone());
+            src
+        };
+        if let Some(data) = icon::load(dir, &src) {
+            self.state.lock().unwrap().icon = Some((src, data));
+            return None;
+        }
+        Some(src)
+    }
+
     /// 给界面的样子（插件卡片）：连接状态、错误、服务器说的自己（剥掉看不见的字符、限长）、页面、工具数。
     pub fn describe(&self) -> Value {
         let state = self.state.lock().unwrap();
         let server = state.known.server.as_ref().map(|about| {
+            // 本机存着的头像（服务器只给了 https:// 的，加的时候下载的）放在最前面：界面用第一张 data: 的
+            let local = state.icon.as_ref().map(|(_, data)| json!({"src": data}));
+            let icons: Vec<Value> = local
+                .into_iter()
+                .chain(about.icons.iter().filter(|i| icon_ok(i)).cloned())
+                .collect();
             json!({
                 "name": short_text(&about.name, 60),
                 "title": about.title.as_deref().map(|t| short_text(t, 60)),
                 "version": short_text(&about.version, 30),
                 "description": about.description.as_deref().map(|d| short_text(d, 300)),
-                "icons": about.icons.iter().filter(|i| icon_ok(i)).cloned().collect::<Vec<_>>(),
+                "icons": icons,
                 "websiteUrl": about.website_url.as_deref().filter(|u| u.starts_with("https://") || u.starts_with("http://")),
             })
         });
@@ -441,6 +504,8 @@ impl Server {
             self.manifest_changed
                 .send_modify(|n| *n = n.wrapping_add(1));
         }
+        // 刚加的插件第一次连上才知道它的图标：只给了 https:// 的下载一次存到本机（ADR 049 D7）
+        self.ensure_icon(host);
         {
             let mut state = self.state.lock().unwrap();
             state.status = Status::Connected;
@@ -741,6 +806,67 @@ mod tests {
         assert!(icon_ok(&json!({"src": "data:image/png;base64,AAAA"})));
         assert!(!icon_ok(&json!({"src": "javascript:alert(1)"})));
         assert!(!icon_ok(&json!({"src": "file:///c:/x.png"})));
+    }
+
+    /// 头像（ADR 049 D7）：只给了 https:// 图标的，本机存着就读进来、放在 `icons` 最前面（界面用第一张 data: 的），
+    /// 不再下载；没存过的要下一次，同一次运行里只试一次。
+    #[test]
+    fn stored_icons_are_used_and_fetched_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::new(
+            "x",
+            Err("坏了".into()),
+            Some(dir.path().to_path_buf()),
+            "test",
+        );
+        let src = "https://x.example.com/icon.png";
+        server.state.lock().unwrap().known.server = Some(About {
+            name: "x".into(),
+            icons: vec![json!({"src": src})],
+            ..About::default()
+        });
+        assert_eq!(server.icon_to_fetch().as_deref(), Some(src), "没存过：要下");
+        assert_eq!(server.icon_to_fetch(), None, "这次运行里试过了：不再试");
+        assert_eq!(server.describe()["server"]["icons"], json!([{"src": src}]));
+
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        let data = icon::save(
+            dir.path(),
+            src,
+            &kotone_mcp::Icon {
+                bytes: png,
+                mime: "image/png",
+            },
+        )
+        .unwrap();
+        // 下次启动：本机有了，直接读
+        let again = Server::new(
+            "x",
+            Err("坏了".into()),
+            Some(dir.path().to_path_buf()),
+            "test",
+        );
+        again.state.lock().unwrap().known = server.known();
+        assert_eq!(again.icon_to_fetch(), None, "本机存着：不下载");
+        let icons = again.describe()["server"]["icons"].clone();
+        assert_eq!(icons[0]["src"], json!(data));
+        assert_eq!(icons[1]["src"], src);
+
+        // 服务器改成直接给 data: 的：不用本机那张
+        again
+            .state
+            .lock()
+            .unwrap()
+            .known
+            .server
+            .as_mut()
+            .unwrap()
+            .icons = vec![json!({"src": "data:image/png;base64,AAAA"})];
+        assert_eq!(again.icon_to_fetch(), None);
+        assert_eq!(
+            again.describe()["server"]["icons"],
+            json!([{"src": "data:image/png;base64,AAAA"}])
+        );
     }
 
     /// 出错的话里的 Key 换掉（会进卡片、经“没连上”发给模型）；太短的不换。

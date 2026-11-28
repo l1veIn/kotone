@@ -254,7 +254,10 @@ export function isRemote(plugin: PluginInfo | undefined | null): plugin is Remot
   return !!remoteOf(plugin);
 }
 
-/** 卡片上的图标：服务器声明的（只用 `data:image/`：主窗口不去连别人的网址拿图，也不让它知道你在看）；没有 = null（首字块）。 */
+/**
+ * 卡片上的图标：服务器声明的（只用 `data:image/`：主窗口不去连别人的网址拿图，也不让它知道你在看）；没有 = null（首字块）。
+ * 服务器只给了 `https://` 的，后端在加的时候下载一次存到本机，也当 `data:` 的放在最前面给过来（ADR 049 D7）。
+ */
 export function remoteIcon(plugin: PluginInfo | undefined | null): string | null {
   const icons = remoteOf(plugin)?.server?.icons ?? [];
   return icons.map((i) => i.src).find((src) => typeof src === "string" && src.startsWith("data:image/")) ?? null;

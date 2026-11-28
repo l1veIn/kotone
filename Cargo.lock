@@ -2916,6 +2916,7 @@ dependencies = [
 name = "kotone-remote-plugin"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "kotone-agent",
  "kotone-core",
  "kotone-mcp",

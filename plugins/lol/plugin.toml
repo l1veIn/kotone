@@ -389,3 +389,12 @@ rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回�
 玩家说了“发出去 / 发聊天框”才用 game_chat.send 发（选英雄、房间里也是它：客户端在前台时经客户端的聊天接口发，只有队伍频道）：\
 技能发 lol.spell 返回的 chat 那句，战绩一条一行；“把对面闪现 / 战绩 / 开黑发出去”用 lol.shout（一次调用、措辞固定、不发玩家名）。
 """
+
+# 参考（ADR 049 D7）：照着写的开源项目，只在「插件信息」里列出来；许可和改写了哪些在仓库的 THIRD_PARTY_NOTICES.md。
+[[references]]
+name = "LeagueAkari"
+url = "https://github.com/LeagueAkari/LeagueAkari"
+
+[[references]]
+name = "aramhex"
+url = "https://github.com/czgreat/aramhex"

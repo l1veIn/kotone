@@ -30,3 +30,16 @@ rule = """- 歌：放歌、暂停、切歌、这首歌叫什么、红心都用 m
 玩家要听某首歌就 play 带 query；“每日推荐”“我喜欢的”“私人 FM”“xx 歌单”用 from。\
 结果里跳过了的歌（要 VIP、没版权）照实说一句；返回 need_login 就照它的 note 请玩家点“登录网易云音乐”扫码（没登录过的在插件页面或聊天页点，登录过期的点聊天里“登录过期”卡片上的）。\n\
 """
+
+# 参考（ADR 049 D7）：照着写的开源项目，只在「插件信息」里列出来；许可和改写了哪些在仓库的 THIRD_PARTY_NOTICES.md。
+[[references]]
+name = "NeteaseCloudMusicApi Enhanced"
+url = "https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced"
+
+[[references]]
+name = "ncmapi-rs"
+url = "https://github.com/two-mountains/ncmapi-rs"
+
+[[references]]
+name = "YesPlayMusic"
+url = "https://github.com/qier222/YesPlayMusic"

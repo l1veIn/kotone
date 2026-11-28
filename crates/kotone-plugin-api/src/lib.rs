@@ -102,10 +102,21 @@ pub struct Manifest {
     /// 和数据开关的 `risk` 一起放进插件的“风险和许可”弹窗（宿主画：风险在前，这些在后），不在设置页上一条条摆出来。
     #[serde(default)]
     pub notices: Vec<NoticeSpec>,
+    /// 参考（ADR 049 D7 第 3 条，`[[references]]`：名字、链接）：这个插件照着哪些开源项目写的（改写了代码、照了做法）。
+    /// 只在「插件信息」里列出来，旁边链接到仓库的 `THIRD_PARTY_NOTICES.md`；只写那份文件里确实列着、和这个插件有关的。
+    /// 可选，没写就不显示（只加不改：发给界面时没写的不带这个字段）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<ReferenceSpec>,
 }
 
 fn yes() -> bool {
     true
+}
+
+/// `https://` 开头、后面有东西、不带空白的完整地址（许可说明和参考的链接）。
+fn full_https(link: &str) -> bool {
+    link.strip_prefix("https://")
+        .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
 }
 
 /// 插件里的一个数据开关。
@@ -138,6 +149,16 @@ pub struct NoticeSpec {
     /// 链接（`https://…`，界面上点了用系统浏览器打开）：仓库、许可证原文、答应过的 issue。
     #[serde(default)]
     pub links: Vec<String>,
+}
+
+/// 一条参考（`[[references]]`，ADR 049 D7）：照着写的开源项目的名字和链接。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all(serialize = "camelCase"))]
+pub struct ReferenceSpec {
+    /// 项目的名字（“LeagueAkari”）。
+    pub name: String,
+    /// 项目的地址（`https://…`，界面上点了用系统浏览器打开）。
+    pub url: String,
 }
 
 /// 一个页面。
@@ -252,7 +273,21 @@ impl Manifest {
         }
         self.check_pushes()?;
         self.check_notices()?;
+        self.check_references()?;
         self.check_events()
+    }
+
+    /// 参考（`[[references]]`）：有名字，地址是 `https://` 开头、不带空白的完整地址。
+    fn check_references(&self) -> Result<(), String> {
+        for reference in &self.references {
+            if reference.name.trim().is_empty() || !full_https(&reference.url) {
+                return Err(format!(
+                    "插件 {} 的参考 “{}” 要写 name，url 要是 https:// 开头的完整地址",
+                    self.id, reference.name
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 许可和出处（`[[notices]]`）：id 写法对、不重名，有标题和正文，链接都是 `https://` 开头、不带空白。
@@ -271,11 +306,7 @@ impl Manifest {
                     self.id, notice.id
                 ));
             }
-            let full = |link: &str| {
-                link.strip_prefix("https://")
-                    .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
-            };
-            if let Some(bad) = notice.links.iter().find(|link| !full(link)) {
+            if let Some(bad) = notice.links.iter().find(|link| !full_https(link)) {
                 return Err(format!(
                     "插件 {} 的许可说明 {} 的链接 “{bad}” 要是 https:// 开头的完整地址",
                     self.id, notice.id
@@ -1135,6 +1166,40 @@ description = \"发到队伍聊天\"
             format!("{ok}color = \"red\"\n"),
         ];
         for text in bad {
+            assert!(Manifest::parse(&text).is_err(), "{text}");
+        }
+    }
+
+    /// 参考（ADR 049 D7，`[[references]]`）：可选；读得进来、发给界面带名字和链接；没写的发给界面时不带这个字段。
+    #[test]
+    fn references_are_optional_and_checked() {
+        let reference = |name: &str, url: &str| {
+            format!("{SAMPLE}\n[[references]]\nname = \"{name}\"\nurl = \"{url}\"\n")
+        };
+        let m = Manifest::parse(&reference(
+            "LeagueAkari",
+            "https://github.com/LeagueAkari/LeagueAkari",
+        ))
+        .unwrap();
+        assert_eq!(m.references.len(), 1);
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["references"][0]["name"], "LeagueAkari");
+        assert_eq!(
+            v["references"][0]["url"],
+            "https://github.com/LeagueAkari/LeagueAkari"
+        );
+        let none = Manifest::parse(SAMPLE).unwrap();
+        assert!(none.references.is_empty());
+        assert!(serde_json::to_value(&none)
+            .unwrap()
+            .get("references")
+            .is_none());
+        for text in [
+            reference(" ", "https://github.com/x/y"),
+            reference("x", "http://github.com/x/y"),
+            reference("x", "https://"),
+            format!("{SAMPLE}\n[[references]]\nname = \"x\"\nurl = \"https://x.example\"\nlicense = \"MIT\"\n"),
+        ] {
             assert!(Manifest::parse(&text).is_err(), "{text}");
         }
     }

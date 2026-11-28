@@ -45,3 +45,12 @@ rule = """- speak 是说给玩家自己听的；要让**队友**在游戏语音�
 voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件）（安装的事交给后台），\
 提醒玩家在游戏里把麦克风选成 CABLE Output（只认 Windows 默认麦克风的游戏用 voice_chat.default_mic），最后 voice_chat.test 试一下。\n\
 """
+
+# 参考（ADR 049 D7）：照着写的开源项目，只在「插件信息」里列出来；许可和改写了哪些在仓库的 THIRD_PARTY_NOTICES.md。
+[[references]]
+name = "Soundux"
+url = "https://github.com/Soundux/Soundux"
+
+[[references]]
+name = "cpal"
+url = "https://github.com/RustAudio/cpal"

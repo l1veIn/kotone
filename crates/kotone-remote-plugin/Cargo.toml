@@ -16,6 +16,8 @@ serde_json.workspace = true
 tokio.workspace = true
 # 配置的指纹（信任跟着配置走：配置变了要重新信任）
 sha2 = "0.10"
+# 下载下来的头像给界面时转成 data: 地址（ADR 049 D7）
+base64 = "0.22"
 
 [dev-dependencies]
 # 进程内的 Streamable HTTP 测试服务器

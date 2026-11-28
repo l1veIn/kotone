@@ -86,6 +86,11 @@ const lol: PluginManifest = {
     { uri: "ui://kotone/lol/settings", title: lolZh.plugin_lol_tab_settings, needs: [] },
   ],
   agent: { overview: "", rule: "" },
+  // 参考（plugin.toml 的 [[references]]，ADR 049 D7）：和 plugin.toml 一样
+  references: [
+    { name: "LeagueAkari", url: "https://github.com/LeagueAkari/LeagueAkari" },
+    { name: "aramhex", url: "https://github.com/czgreat/aramhex" },
+  ],
   // 许可和出处（plugin.toml 的 [[notices]]，ADR 043 D8）：标题、正文用插件的文案，链接和 plugin.toml 一样
   notices: ([
     ["aramhex-data", ["https://github.com/czgreat/aramhex-data", "https://creativecommons.org/licenses/by-nc/4.0/"]],
@@ -160,6 +165,10 @@ const gameVoice: PluginManifest = {
     needs: [],
   }],
   events: [{ type: "game-voice.said", label: gameVoiceZh.plugin_game_voice_event_said, needs: [], data: { text: "text" } }],
+  references: [
+    { name: "Soundux", url: "https://github.com/Soundux/Soundux" },
+    { name: "cpal", url: "https://github.com/RustAudio/cpal" },
+  ],
 };
 
 // 放歌（ADR 034、038 第 4 步）：她的 music + 音乐页用的 music.*，默认开。推送一条（登录过期，ADR 043 D11）
@@ -186,6 +195,11 @@ const music: PluginManifest = {
     enabledByDefault: true,
     needs: [],
   }],
+  references: [
+    { name: "NeteaseCloudMusicApi Enhanced", url: "https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced" },
+    { name: "ncmapi-rs", url: "https://github.com/two-mountains/ncmapi-rs" },
+    { name: "YesPlayMusic", url: "https://github.com/qier222/YesPlayMusic" },
+  ],
 };
 
 // 同传（ADR 021、038）：页面的工具只给页面用，interpreter.show 给后台；默认开。推送一条（这局的同传：卡片 + 一行）、
@@ -314,12 +328,20 @@ export async function listPlugins(): Promise<PluginInfo[]> {
   const settings = await getSettings();
   // 第三方插件（MCP 方案第 2 期）接在内置的后面，和桌面端 plugins::list 一样
   const remote = await remotePlugins();
-  return MANIFESTS.map((manifest) => {
+  return MANIFESTS.map((manifest): PluginInfo => {
     const config = settings.plugins?.[manifest.id] ?? {};
     const enabled = config.enabled ?? manifest.enabledByDefault;
     const sources = Object.fromEntries(manifest.sources.map((s) => [s.id, enabled && (config.sources?.[s.id] ?? s.enabledByDefault)]));
     return {
       manifest: structuredClone(manifest),
+      // 「插件信息」里宿主统一填的（和桌面端 plugins::builtin_about 一样）
+      about: {
+        author: "Kotone",
+        repository: `https://github.com/l1veIn/kotone/tree/main/plugins/${manifest.id}`,
+        license: "MIT",
+        version: __APP_VERSION__,
+        notices: "https://github.com/l1veIn/kotone/blob/main/THIRD_PARTY_NOTICES.md",
+      },
       enabled,
       sources,
       tools: (TOOLS[manifest.id] ?? []).map((t) => ({

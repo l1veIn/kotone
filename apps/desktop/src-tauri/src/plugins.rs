@@ -892,8 +892,24 @@ fn resolve_page(
 
 /// 界面用的插件清单：清单、开关、工具（名字、给谁、页面）。内置的在前，第三方的在后（多一个 `remote`：
 /// 怎么连、要哪些 Key、信任没有、连接状态、服务器说的自己，`remote_plugins::describe`）。
+/// Kotone 的代码仓库（内置插件的「插件信息」里“代码仓库”指向这里的 `plugins/<id>`）。
+const REPOSITORY: &str = "https://github.com/l1veIn/kotone";
+
+/// 内置插件的「插件信息」里宿主统一填的（ADR 049 D7 第 3 条）：作者“Kotone”、代码仓库（`plugins/<id>`）、许可证 MIT、
+/// 版本（就是 Kotone 的版本），还有“参考”旁边链接的 `THIRD_PARTY_NOTICES.md`。不往每个 `plugin.toml` 里抄。
+pub(crate) fn builtin_about(id: &str, version: &str) -> Value {
+    json!({
+        "author": "Kotone",
+        "repository": format!("{REPOSITORY}/tree/main/plugins/{id}"),
+        "license": "MIT",
+        "version": version,
+        "notices": format!("{REPOSITORY}/blob/main/THIRD_PARTY_NOTICES.md"),
+    })
+}
+
 pub fn list(app: &AppHandle) -> Value {
     let settings = settings(app);
+    let version = app.package_info().version.to_string();
     let remote = crate::remote_plugins::plugins();
     let all: Vec<Arc<dyn Plugin>> = registry()
         .iter()
@@ -922,6 +938,8 @@ pub fn list(app: &AppHandle) -> Value {
                 });
                 if let Some(r) = remote.iter().find(|r| r.manifest().id == m.id) {
                     item["remote"] = crate::remote_plugins::describe(r);
+                } else {
+                    item["about"] = builtin_about(&m.id, &version);
                 }
                 item
             })
@@ -932,6 +950,45 @@ pub fn list(app: &AppHandle) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 内置插件的「插件信息」（ADR 049 D7）：作者 Kotone、仓库指向 l1veIn/kotone 里这个插件的目录、MIT、版本是 Kotone 的；
+    /// 每个内置插件都有 plugins/<id>（仓库链接点得开）。
+    #[test]
+    fn builtin_plugin_info_is_filled_by_the_host() {
+        let about = builtin_about("lol", "0.2.0");
+        assert_eq!(about["author"], "Kotone");
+        assert_eq!(
+            about["repository"],
+            "https://github.com/l1veIn/kotone/tree/main/plugins/lol"
+        );
+        assert_eq!(about["license"], "MIT");
+        assert_eq!(about["version"], "0.2.0");
+        assert_eq!(
+            about["notices"],
+            "https://github.com/l1veIn/kotone/blob/main/THIRD_PARTY_NOTICES.md"
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        assert!(root.join("LICENSE").is_file() && root.join("THIRD_PARTY_NOTICES.md").is_file());
+        assert!(std::fs::read_to_string(root.join("LICENSE"))
+            .unwrap()
+            .starts_with("MIT License"));
+        // “参考”只写 THIRD_PARTY_NOTICES.md 里确实列着的项目
+        let notices = std::fs::read_to_string(root.join("THIRD_PARTY_NOTICES.md")).unwrap();
+        for plugin in registry() {
+            let id = &plugin.manifest().id;
+            assert!(
+                root.join("plugins").join(id).join("plugin.toml").is_file(),
+                "plugins/{id} 不在仓库里"
+            );
+            for reference in &plugin.manifest().references {
+                assert!(
+                    notices.contains(&reference.url),
+                    "{id} 的参考 {} 不在 THIRD_PARTY_NOTICES.md 里",
+                    reference.url
+                );
+            }
+        }
+    }
 
     /// 同传、游戏语音报事件、按局分卡片时问“现在在玩哪个游戏”：前台的那个；都不在前台时只有一个在跑才算。
     #[test]

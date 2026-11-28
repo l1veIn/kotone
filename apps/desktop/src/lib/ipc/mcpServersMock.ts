@@ -26,6 +26,10 @@ interface MockServer {
   app?: boolean;
   title?: string;
   icon?: string;
+  /** 服务器说的版本、一句话说明、主页（握手时的 serverInfo；没写时版本 1.0.0，没有说明和主页）。 */
+  version?: string;
+  description?: string;
+  websiteUrl?: string;
   /** 它的 Kotone 清单（插件标准 0.1；没写 = 没有清单）。`manifest` 里没写的字段用默认值。 */
   kotoneManifest?: Partial<Omit<KotoneManifestInfo, "manifest">> & { manifest?: Partial<KotoneManifestInfo["manifest"]> };
   /** 换掉默认的两个工具（echo、add）。 */
@@ -387,7 +391,10 @@ export async function remotePlugins(): Promise<PluginInfo[]> {
       status: enabled ? s.status : "notConnected",
       error: s.error ?? null,
       trusted: s.trusted,
-      server: known ? { name: s.id, title: s.title ?? null, version: "1.0.0", description: null, icons: s.icon ? [{ src: s.icon }] : [] } : null,
+      server: known ? {
+        name: s.id, title: s.title ?? null, version: s.version ?? "1.0.0", description: s.description ?? null,
+        icons: s.icon ? [{ src: s.icon }] : [], websiteUrl: s.websiteUrl ?? null,
+      } : null,
       pages: s.app ? [{ uri: `ui://${s.id}/app`, title: "App", slug: "r0" }] : [],
       toolCount: tools.length,
       skippedTools: [],

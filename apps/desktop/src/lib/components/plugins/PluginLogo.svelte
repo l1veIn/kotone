@@ -1,6 +1,7 @@
 <script lang="ts">
   // 插件的 logo（ADR 039 D8，docs/design/lol-app.md 第五节）：一块自带底色的圆角方块，亮暗主题下都一样。
-  // 有 plugins/<id>/logo.svg 就用它；第三方插件用服务器自己声明的图标（`src`，MCP 的 `icons`，只给 data: 的）；
+  // 有 plugins/<id>/logo.svg 就用它；第三方插件用服务器自己声明的图标（`src`，MCP 的 `icons`，只给 data: 的；
+  // 服务器只给了 https:// 的，后端加的时候下载一次存到本机，也转成 data: 给过来，ADR 049 D7）；
   // 都没有就是首字块（名字第一个字 + 按 id 定的底色）。
   // 尺寸照设计：插件页卡片 40、App 顶上一条 20、自动卡片那一行 16、消息提示的角标 18。
   import { fallbackLogo, pluginLogo } from "$lib/pluginLogos";

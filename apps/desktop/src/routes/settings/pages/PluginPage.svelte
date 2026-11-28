@@ -7,16 +7,18 @@
   // 风险和许可（ADR 043 D8）：插件有风险提示或许可说明时，设置里栏上多一个小链接“风险和许可”，打开一个弹窗（PluginRiskDialog）；
   // 这一版还没看过、又看到它有风险的开关开着（默认就开着的，或者刚在这里打开的）时自己弹一次。只是提示，不动开关。
   // 第三方插件也有这个弹窗（“它是别人写的程序”和它清单里的 `risk`，ADR 047）；写了 `risk` 的第一次点开时弹一次。
+  // 名字旁边一个“ⓘ”打开「插件信息」（ADR 049 D7：只读，作者、仓库、版本、它能做什么、它会运行什么），App 和设置里都在。
   // App 的位置是通用的：现在放内置插件的页面（plugins/<id>/ui，登记在 lib/pluginUi.ts）；以后的第三方插件
   // （别的仓库的 MCP App）在这里用沙盒 iframe 显示它的 `ui://` 资源，宿主不给它套样式。
   import { onMount } from "svelte";
-  import { ChevronLeft, Settings2, ShieldAlert } from "@lucide/svelte";
+  import { ChevronLeft, Info, Settings2, ShieldAlert } from "@lucide/svelte";
   import { errText, settingsStore, toast } from "$lib/stores/ui";
   import { openTarget } from "$lib/stores/navigation";
   import { hasRiskNotes, listPlugins, pluginName, pluginsStore, riskUnseen, riskyOn, thirdPartyRisk } from "$lib/plugins";
   import { PLUGIN_UI } from "$lib/pluginUi";
   import PluginPushes from "$lib/components/plugins/PluginPushes.svelte";
   import PluginRiskDialog from "$lib/components/plugins/PluginRiskDialog.svelte";
+  import PluginInfoDialog from "$lib/components/plugins/PluginInfoDialog.svelte";
   import { m } from "$lib/paraglide/messages.js";
 
   let { id, open = null }: { id: string; open?: { params: Record<string, unknown>; n: number } | null } = $props();
@@ -48,6 +50,7 @@
   /** 有“风险和许可”要看（数据开关的风险提示、许可和出处；第三方插件总有）。 */
   const hasRisk = $derived(!!plugin && (hasRiskNotes(plugin.manifest) || thirdParty));
   let riskOpen = $state(false);
+  let infoOpen = $state(false);
   /** 这次打开插件页已经自己弹过一次（记“看过”没存上时也不再弹第二次）。 */
   let riskShown = false;
   // 第一次看到有风险的开关开着（默认开着的、刚打开的；设置读到了才算）：弹一次，弹窗自己记下看过
@@ -77,6 +80,11 @@
       <span class="truncate text-xs font-medium text-foreground">{m.shell_plugin_settings()}</span>
     {:else}
       <span class="truncate text-xs font-medium text-foreground" data-testid="plugin-app-name">{plugin ? pluginName(plugin.manifest) : id}</span>
+    {/if}
+    {#if plugin}
+      <button type="button" data-testid="plugin-info-button" title={m.system_plugins_info()} aria-label={m.system_plugins_info_aria({ name: pluginName(plugin.manifest) })}
+        class="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+        onclick={() => (infoOpen = true)}><Info class="size-3.5" /></button>
     {/if}
     <div class="ml-auto flex items-center gap-1">
       <!-- 风险和许可：在设置里（插件没有设置时一直在栏上） -->
@@ -118,3 +126,4 @@
 </div>
 
 {#if plugin && hasRisk}<PluginRiskDialog {plugin} bind:open={riskOpen} />{/if}
+{#if plugin}<PluginInfoDialog {plugin} bind:open={infoOpen} />{/if}

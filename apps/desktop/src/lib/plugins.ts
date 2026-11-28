@@ -73,6 +73,13 @@ export interface PluginManifest {
   pushes?: PluginPushSpec[];
   /** 许可和出处（`plugin.toml` 的 `[[notices]]`，ADR 043 D8；没有 = 没有）：和数据开关的风险一起放进“风险和许可”弹窗。 */
   notices?: PluginNoticeSpec[];
+  /** 参考（`plugin.toml` 的 `[[references]]`，ADR 049 D7；没写 = 没有）：照着写的开源项目，「插件信息」里列出来。 */
+  references?: PluginReferenceSpec[];
+}
+/** 一条参考：项目的名字和地址（`https://…`）。 */
+export interface PluginReferenceSpec {
+  name: string;
+  url: string;
 }
 /** 一条许可或出处：标题、一段话、链接（`https://…`）。 */
 export interface PluginNoticeSpec {
@@ -88,8 +95,21 @@ export interface PluginToolInfo {
   /** 插件和它要的数据开关都开着。 */
   available: boolean;
 }
+/**
+ * 内置插件的「插件信息」里宿主统一填的（后端 `plugins::builtin_about`，ADR 049 D7）：作者、代码仓库、许可证、
+ * 版本（= Kotone 的版本）、“参考”旁边链接的 THIRD_PARTY_NOTICES.md。第三方插件没有（它的在 `remote.server`）。
+ */
+export interface PluginAbout {
+  author: string;
+  repository: string;
+  license: string;
+  version: string;
+  notices: string;
+}
 export interface PluginInfo {
   manifest: PluginManifest;
+  /** 内置插件才有。 */
+  about?: PluginAbout;
   /** 后端列出来那一刻的开关（界面用 [`pluginEnabled`] / [`sourceEnabled`] 按设置现算）。 */
   enabled: boolean;
   sources: Record<string, boolean>;

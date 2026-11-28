@@ -142,6 +142,8 @@ impl RemotePlugin {
     fn sync(&self, host: Arc<dyn Host>) {
         self.server
             .set_trusted(trusted_in(&host.settings(), self.server.fingerprint()));
+        // 头像（ADR 049 D7）：启动时本机存着的读进来；记着的图标是 https:// 的、本机还没存就下载一次
+        self.server.ensure_icon(&host);
         // 观察项对一下设置（开关、确认、信任）：马上看一遍
         self.watcher.start(host.clone());
         let on = host.enabled();

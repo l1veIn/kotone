@@ -7,8 +7,10 @@
   // 加之前有信任提示）。点开和内置的进同一个位置（PluginPage.svelte：它的 MCP App，或一页工具列表）。
   // mcp.json 读不出来、里面有没加进来的项（名字和 Kotone 自带的撞了、不能当 id）时，第三方一组里说一句原因，
   // 能重新读、能把没加进来的那一项从 mcp.json 删掉（同名的内置插件不受影响）。
+  // 卡片右上角开关旁边一个“⋯”菜单（ADR 049 D7）：现在只有“插件信息”（只读的弹窗，PluginInfoDialog）；点卡片照旧进插件。
   import { onMount } from "svelte";
-  import { Plus } from "@lucide/svelte";
+  import { Ellipsis, Info, Plus } from "@lucide/svelte";
+  import * as Menu from "$lib/components/ui/dropdown-menu";
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
   import { companionName } from "$lib/stores/companion";
@@ -19,9 +21,18 @@
   import { isRemote, loadMcpStatus, mcpFileStatus, reloadServers, remoteIcon, remoteOf, remoteTitle, removeServer } from "$lib/mcpServers";
   import PluginLogo from "$lib/components/plugins/PluginLogo.svelte";
   import AddMcpServerDialog from "$lib/components/plugins/AddMcpServerDialog.svelte";
+  import PluginInfoDialog from "$lib/components/plugins/PluginInfoDialog.svelte";
   import { m } from "$lib/paraglide/messages.js";
 
   let adding = $state(false);
+  /** 「插件信息」开着的是哪个插件（按 id 找，清单重新读了也跟着变）。 */
+  let infoId = $state<string | null>(null);
+  let infoOpen = $state(false);
+  const infoPlugin = $derived(infoId ? $pluginsStore.find((p) => p.manifest.id === infoId) : undefined);
+  function showInfo(id: string) {
+    infoId = id;
+    infoOpen = true;
+  }
   const builtins = $derived($pluginsStore.filter((p) => !isRemote(p)));
   const remotes = $derived($pluginsStore.filter((p) => isRemote(p)));
   const fileError = $derived($mcpFileStatus?.fileError ?? null);
@@ -92,7 +103,20 @@
     <div class="pointer-events-none relative flex items-start justify-between gap-3">
       <!-- 插件自己的 logo（ADR 039 D8）：自带底色的方块，亮暗主题一样；关着的变灰。第三方的用服务器声明的图标 -->
       <PluginLogo id={manifest.id} {name} src={remote ? remoteIcon(plugin) : null} size={40} off={!on} testid={`plugins-card-${manifest.id}-logo`} />
-      <div class="pointer-events-auto relative z-10">
+      <div class="pointer-events-auto relative z-10 flex items-center gap-1">
+        <!-- “⋯”：插件信息（以后装的插件还有更新、卸载） -->
+        <Menu.DropdownMenu>
+          <Menu.DropdownMenuTrigger data-testid={`plugins-card-${manifest.id}-menu`} aria-label={m.system_plugins_more({ name })} title={m.system_plugins_more({ name })}
+            class="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-70 transition-[opacity,background-color,color]
+              hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100">
+            <Ellipsis class="size-4" />
+          </Menu.DropdownMenuTrigger>
+          <Menu.DropdownMenuContent align="end" class="w-40">
+            <Menu.DropdownMenuItem data-testid={`plugins-card-${manifest.id}-info`} onSelect={() => showInfo(manifest.id)} class="gap-2 text-[13px]">
+              <Info class="size-3.5" />{m.system_plugins_info()}
+            </Menu.DropdownMenuItem>
+          </Menu.DropdownMenuContent>
+        </Menu.DropdownMenu>
         <!-- 受控：显示的总是设置里的值，没存上时不会停在错误的位置 -->
         <Switch bind:checked={() => on, (next) => void toggle(manifest.id, next)}
           aria-label={m.system_plugins_enable({ name })} data-testid={`plugins-card-${manifest.id}-enabled`} />
@@ -163,3 +187,4 @@
 </div>
 
 <AddMcpServerDialog bind:open={adding} onAdded={() => (pollUntil = Date.now() + 60_000)} />
+{#if infoPlugin}<PluginInfoDialog plugin={infoPlugin} bind:open={infoOpen} />{/if}

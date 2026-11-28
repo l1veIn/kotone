@@ -18,6 +18,8 @@
 //! 对外的类型（[`Tool`]、[`ToolCallResult`]……）是协议原样的字段，不露 rmcp 的类型：rmcp 变得快，
 //! 换版本时只改这个 crate（原则 13：每个模块藏住一个可能会变的决定）。
 //!
+//! 另有 [`fetch_icon`]：下载 `serverInfo.icons` 里 `https://` 的头像（ADR 049 D7，只认 https、≤200 KB、不跳到别的主机）。
+//!
 //! 不做：OAuth、`.mcpb`、目录（第 6 期）；显示 MCP Apps（第 3 期，这里先把 `read_resource` 留好）。
 //!
 //! 照谁做：Goose（`aaif-goose/goose`，Apache-2.0）用 rmcp 当客户端的包法（每次请求带超时、
@@ -28,6 +30,7 @@ mod client;
 mod config;
 mod error;
 mod http_transport;
+mod icon;
 mod stdio;
 mod types;
 
@@ -39,4 +42,5 @@ pub use config::{
     Handshake, ServerConfig, Transport, DEFAULT_STARTUP_TIMEOUT, DEFAULT_TOOL_TIMEOUT,
 };
 pub use error::{status_text, McpError, Stage};
+pub use icon::{fetch_icon, sniff_icon, Icon, ICON_MAX_BYTES, ICON_TIMEOUT};
 pub use types::{Resource, ResourceContents, ServerInfo, Tool, ToolCallResult};
